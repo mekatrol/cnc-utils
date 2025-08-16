@@ -56,8 +56,10 @@ class SurfacerApp:
 
         def add_label_entry(label, var):
             nonlocal row
-            ttk.Label(frm, text=label).grid(row=row, column=0, sticky="w", padx=4, pady=2)
-            ttk.Entry(frm, textvariable=var, width=12).grid(row=row, column=1, sticky="w", padx=4, pady=2)
+            ttk.Label(frm, text=label).grid(
+                row=row, column=0, sticky="w", padx=4, pady=2)
+            ttk.Entry(frm, textvariable=var, width=12).grid(
+                row=row, column=1, sticky="w", padx=4, pady=2)
             row += 1
 
         add_label_entry("Width (mm)", self.width)
@@ -72,12 +74,24 @@ class SurfacerApp:
         add_label_entry("Start X (mm)", self.start_x)
         add_label_entry("Start Y (mm)", self.start_y)
 
+        self.lift_between_paths = tk.BooleanVar(value=True)
+
+        tk.Checkbutton(
+            frm,
+            text="Lift to safe Z between paths",
+            variable=self.lift_between_paths
+        ).grid(row=10, column=0, columnspan=2, sticky="w")
+
         btn_frame = ttk.Frame(frm)
         btn_frame.grid(row=row, column=0, columnspan=2, pady=8)
-        ttk.Button(btn_frame, text="Preview 3D", command=self.preview3d).grid(row=0, column=0, padx=4)
-        ttk.Button(btn_frame, text="Preview 2D", command=self.preview2d).grid(row=0, column=1, padx=4)
-        ttk.Button(btn_frame, text="Export G-code", command=self.export_gcode).grid(row=0, column=2, padx=4)
-        ttk.Button(btn_frame, text="Quit", command=root.quit).grid(row=0, column=3, padx=4)
+        ttk.Button(btn_frame, text="Preview 3D", command=self.preview3d).grid(
+            row=0, column=0, padx=4)
+        ttk.Button(btn_frame, text="Preview 2D", command=self.preview2d).grid(
+            row=0, column=1, padx=4)
+        ttk.Button(btn_frame, text="Export G-code",
+                   command=self.export_gcode).grid(row=0, column=2, padx=4)
+        ttk.Button(btn_frame, text="Quit", command=root.quit).grid(
+            row=0, column=3, padx=4)
 
         fig = Figure(figsize=(6, 6))
         self.ax = fig.add_subplot(111)
@@ -110,6 +124,7 @@ class SurfacerApp:
                     xs = [W, 0.0]
                 ys = [y, y]
                 toolpaths.append((xs, ys, depth))
+
         return toolpaths
 
     def _apply_equal_mm_scale(self):
@@ -153,22 +168,29 @@ class SurfacerApp:
         prev_depth = None
         for xs, ys, d in tps:
             depth = -abs(d)
-            if prev_end is not None:
-                # rapid move up to safe_z, then over, then plunge
-                self.ax.plot([prev_end[0], prev_end[0]],
-                             [prev_end[1], prev_end[1]],
-                             [prev_depth,  safe_z], "r--", alpha=0.5)
-                self.ax.plot([prev_end[0], xs[0]],
-                             [prev_end[1], ys[0]],
-                             [safe_z,      safe_z], "r--", alpha=0.5)
-                self.ax.plot([xs[0], xs[0]],
-                             [ys[0], ys[0]],
-                             [safe_z, depth], "r--", alpha=0.5)
+            if self.lift_between_paths.get():
+                if prev_end is not None:
+                    # rapid move up to safe_z, then over, then plunge
+                    self.ax.plot([prev_end[0], prev_end[0]],
+                                 [prev_end[1], prev_end[1]],
+                                 [prev_depth,  safe_z], "r--", alpha=0.5)
+                    self.ax.plot([prev_end[0], xs[0]],
+                                 [prev_end[1], ys[0]],
+                                 [safe_z,      safe_z], "r--", alpha=0.5)
+                    self.ax.plot([xs[0], xs[0]],
+                                 [ys[0], ys[0]],
+                                 [safe_z, depth], "r--", alpha=0.5)
+                else:
+                    # first plunge only
+                    self.ax.plot([xs[0], xs[0]],
+                                 [ys[0], ys[0]],
+                                 [safe_z, depth], "r--", alpha=0.5)
             else:
-                # first plunge only
-                self.ax.plot([xs[0], xs[0]],
-                             [ys[0], ys[0]],
-                             [safe_z, depth], "r--", alpha=0.5)
+                # just move in XY at current depth (no Z lift)
+                if prev_end is not None:
+                    self.ax.plot([prev_end[0], xs[0]],
+                                 [prev_end[1], ys[0]],
+                                 [prev_depth, prev_depth], "r--", alpha=0.5)
 
             # cutting move at depth
             self.ax.plot(xs, ys, [depth] * len(xs), "b-")
@@ -211,7 +233,8 @@ class SurfacerApp:
         prev_end = None
         for xs, ys, d in tps:
             if prev_end is not None:
-                self.ax.plot([prev_end[0], xs[0]], [prev_end[1], ys[0]], "r--", alpha=0.5)
+                self.ax.plot([prev_end[0], xs[0]], [
+                             prev_end[1], ys[0]], "r--", alpha=0.5)
             self.ax.plot(xs, ys, "b-")
             prev_end = (xs[-1], ys[-1])
 
@@ -249,21 +272,31 @@ class SurfacerApp:
             prev_end = None
             for xs, ys, depth in tps:
                 if prev_end is not None:
-                    fh.write(f"G0 Z{safe_z:.3f}\n")
+                    # retract only if enabled
+                    if self.lift_between_paths.get():
+                        fh.write(f"G0 Z{safe_z:.3f}\n")
                     fh.write(f"G0 X{startx+xs[0]:.3f} Y{starty+ys[0]:.3f}\n")
                 else:
                     fh.write(f"G0 X{startx+xs[0]:.3f} Y{starty+ys[0]:.3f}\n")
                 fh.write(f"G1 Z{-abs(depth):.3f} F{plunge_feed:.0f}\n")
                 for x, y in zip(xs, ys):
-                    fh.write(f"G1 X{startx+x:.3f} Y{starty+y:.3f} F{cut_feed:.0f}\n")
+                    fh.write(
+                        f"G1 X{startx+x:.3f} Y{starty+y:.3f} F{cut_feed:.0f}\n")
                 prev_end = (xs[-1], ys[-1])
             fh.write(f"G0 Z{safe_z:.3f}\nM2\n")
+
         messagebox.showinfo("Done", f"G-code exported to {fn}")
 
 
 def main():
     root = tk.Tk()
-    app = SurfacerApp(root)
+    try:
+        # Windows
+        root.state("zoomed")
+    except Exception:
+        # Linux
+        root.attributes("-zoomed", True)  
+    SurfacerApp(root)
     root.mainloop()
 
 
