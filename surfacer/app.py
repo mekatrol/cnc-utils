@@ -9,6 +9,7 @@ Dependencies:
 - matplotlib
 
 """
+
 from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -20,6 +21,7 @@ from matplotlib.figure import Figure
 
 matplotlib.use("TkAgg")
 
+
 def frange(start: float, stop: float, step: float) -> List[float]:
     vals = []
     v = start
@@ -28,6 +30,7 @@ def frange(start: float, stop: float, step: float) -> List[float]:
         vals.append(round(v, 10))
         v += step
     return vals
+
 
 class SurfacerApp:
     def __init__(self, root: tk.Tk):
@@ -39,21 +42,26 @@ class SurfacerApp:
 
         self.width = tk.DoubleVar(value=100.0)
         self.length = tk.DoubleVar(value=100.0)
-        self.bit_dia = tk.DoubleVar(value=6.0)
-        self.step_over = tk.DoubleVar(value=3.0)
-        self.step_down = tk.DoubleVar(value=1.0)
+        self.bit_dia = tk.DoubleVar(value=25.4)
+        self.step_over = tk.DoubleVar(value=25.4/2)
+        self.step_down = tk.DoubleVar(value=0.1)
         self.layers = tk.IntVar(value=1)
-        self.safe_z = tk.DoubleVar(value=5.0)
-        self.cut_feed = tk.DoubleVar(value=800.0)
+        self.safe_z = tk.DoubleVar(value=10.0)
+        self.cut_feed = tk.DoubleVar(value=1000.0)
         self.plunge_feed = tk.DoubleVar(value=300.0)
         self.start_x = tk.DoubleVar(value=0.0)
         self.start_y = tk.DoubleVar(value=0.0)
 
         row = 0
+
         def add_label_entry(label, var):
             nonlocal row
-            ttk.Label(frm, text=label).grid(row=row, column=0, sticky="w", padx=4, pady=2)
-            ttk.Entry(frm, textvariable=var, width=12).grid(row=row, column=1, sticky="w", padx=4, pady=2)
+            ttk.Label(frm, text=label).grid(
+                row=row, column=0, sticky="w", padx=4, pady=2
+            )
+            ttk.Entry(frm, textvariable=var, width=12).grid(
+                row=row, column=1, sticky="w", padx=4, pady=2
+            )
             row += 1
 
         add_label_entry("Width (mm)", self.width)
@@ -70,13 +78,19 @@ class SurfacerApp:
 
         btn_frame = ttk.Frame(frm)
         btn_frame.grid(row=row, column=0, columnspan=2, pady=8)
-        ttk.Button(btn_frame, text="Preview Toolpath", command=self.preview).grid(row=0, column=0, padx=4)
-        ttk.Button(btn_frame, text="Export G-code", command=self.export_gcode).grid(row=0, column=1, padx=4)
-        ttk.Button(btn_frame, text="Quit", command=root.quit).grid(row=0, column=2, padx=4)
+        ttk.Button(btn_frame, text="Preview Toolpath", command=self.preview).grid(
+            row=0, column=0, padx=4
+        )
+        ttk.Button(btn_frame, text="Export G-code", command=self.export_gcode).grid(
+            row=0, column=1, padx=4
+        )
+        ttk.Button(btn_frame, text="Quit", command=root.quit).grid(
+            row=0, column=2, padx=4
+        )
 
         fig = Figure(figsize=(6, 6))
         self.ax = fig.add_subplot(111)
-        self.ax.set_aspect('equal')
+        self.ax.set_aspect("equal")
         self.canvas = FigureCanvasTkAgg(fig, master=root)
         self.canvas.get_tk_widget().grid(row=0, column=1, sticky="nsew")
 
@@ -118,20 +132,22 @@ class SurfacerApp:
         L = self.length.get()
         safe_z = self.safe_z.get()
 
-        self.ax.plot([0, W, W, 0, 0], [0, 0, L, L, 0], 'k-')
+        self.ax.plot([0, W, W, 0, 0], [0, 0, L, L, 0], "k-")
 
         prev_end = None
         for xs, ys, d in tps:
             if prev_end is not None:
-                self.ax.plot([prev_end[0], xs[0]], [prev_end[1], ys[0]], 'r--', alpha=0.5)
-            self.ax.plot(xs, ys, 'b-')
+                self.ax.plot(
+                    [prev_end[0], xs[0]], [prev_end[1], ys[0]], "r--", alpha=0.5
+                )
+            self.ax.plot(xs, ys, "b-")
             prev_end = (xs[-1], ys[-1])
 
-        self.ax.set_xlim(-W*0.05, W*1.05)
-        self.ax.set_ylim(-L*0.05, L*1.05)
-        self.ax.set_xlabel('X (mm)')
-        self.ax.set_ylabel('Y (mm)')
-        self.ax.set_title('Toolpath preview (blue=cut, red=rapid @ safe Z)')
+        self.ax.set_xlim(-W * 0.05, W * 1.05)
+        self.ax.set_ylim(-L * 0.05, L * 1.05)
+        self.ax.set_xlabel("X (mm)")
+        self.ax.set_ylabel("Y (mm)")
+        self.ax.set_title("Toolpath preview (blue=cut, red=rapid @ safe Z)")
         self.canvas.draw()
 
     def export_gcode(self):
@@ -147,11 +163,13 @@ class SurfacerApp:
         cut_feed = self.cut_feed.get()
         plunge_feed = self.plunge_feed.get()
 
-        fn = filedialog.asksaveasfilename(defaultextension='.gcode', filetypes=[('G-code', '*.gcode')])
+        fn = filedialog.asksaveasfilename(
+            defaultextension=".gcode", filetypes=[("G-code", "*.gcode")]
+        )
         if not fn:
             return
 
-        with open(fn, 'w') as fh:
+        with open(fn, "w") as fh:
             fh.write("(GRBL Surfacer)\nG21\nG90\nG94\n")
             fh.write(f"G0 Z{safe_z:.3f}\n")
 
@@ -169,10 +187,12 @@ class SurfacerApp:
             fh.write(f"G0 Z{safe_z:.3f}\nM2\n")
         messagebox.showinfo("Done", f"G-code exported to {fn}")
 
+
 def main():
     root = tk.Tk()
     app = SurfacerApp(root)
     root.mainloop()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
