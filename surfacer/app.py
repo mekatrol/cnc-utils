@@ -51,6 +51,8 @@ class SurfacerApp:
         self.plunge_feed = tk.DoubleVar(value=300.0)
         self.start_x = tk.DoubleVar(value=0.0)
         self.start_y = tk.DoubleVar(value=0.0)
+        self.lift_between_paths = tk.BooleanVar(value=True)
+        self.spindle_control = tk.BooleanVar(value=True)
 
         row = 0
 
@@ -60,6 +62,15 @@ class SurfacerApp:
                 row=row, column=0, sticky="w", padx=4, pady=2)
             ttk.Entry(frm, textvariable=var, width=12).grid(
                 row=row, column=1, sticky="w", padx=4, pady=2)
+            row += 1
+
+        def add_checkbox_entry(label, var):
+            nonlocal row
+            tk.Checkbutton(
+                frm,
+                text=label,
+                variable=var
+            ).grid(row=row, column=0, columnspan=1, sticky="w")
             row += 1
 
         add_label_entry("Width (mm)", self.width)
@@ -74,13 +85,10 @@ class SurfacerApp:
         add_label_entry("Start X (mm)", self.start_x)
         add_label_entry("Start Y (mm)", self.start_y)
 
-        self.lift_between_paths = tk.BooleanVar(value=True)
+        add_checkbox_entry("Lift Z between surface cuts",
+                           self.lift_between_paths)
 
-        tk.Checkbutton(
-            frm,
-            text="Lift to safe Z between paths",
-            variable=self.lift_between_paths
-        ).grid(row=10, column=0, columnspan=2, sticky="w")
+        add_checkbox_entry("Spindle control", self.spindle_control)
 
         btn_frame = ttk.Frame(frm)
         btn_frame.grid(row=row, column=0, columnspan=2, pady=8)
@@ -260,14 +268,27 @@ class SurfacerApp:
         plunge_feed = self.plunge_feed.get()
 
         fn = filedialog.asksaveasfilename(
+            initialfile="surface", title="Select file name to save",
             defaultextension=".gcode", filetypes=[("G-code", "*.gcode")]
         )
         if not fn:
             return
 
         with open(fn, "w") as fh:
+            def write_comment(comment):
+                fh.write(f"({comment})\n")
+
             fh.write("(GRBL Surfacer)\nG21\nG90\nG94\n")
+
+            write_comment("Move to safe Z")
             fh.write(f"G0 Z{safe_z:.3f}\n")
+
+            write_comment("Move to x=0, y=0")
+            fh.write(f"G0 X0.000 Y0.000\n")
+
+            if self.spindle_control.get():
+                write_comment("Start spindle")
+                fh.write(f"M3\n")
 
             prev_end = None
             for xs, ys, depth in tps:
@@ -283,7 +304,12 @@ class SurfacerApp:
                     fh.write(
                         f"G1 X{startx+x:.3f} Y{starty+y:.3f} F{cut_feed:.0f}\n")
                 prev_end = (xs[-1], ys[-1])
-            fh.write(f"G0 Z{safe_z:.3f}\nM2\n")
+
+            if self.spindle_control.get():
+                write_comment("Stop spindle")
+                fh.write(f"M5\n")
+
+            fh.write(f"(Move to safe Z)\nG0 Z{safe_z:.3f}\nM2\n")
 
         messagebox.showinfo("Done", f"G-code exported to {fn}")
 
@@ -295,7 +321,7 @@ def main():
         root.state("zoomed")
     except Exception:
         # Linux
-        root.attributes("-zoomed", True)  
+        root.attributes("-zoomed", True)
     SurfacerApp(root)
     root.mainloop()
 
