@@ -288,7 +288,7 @@ class SurfacerApp:
 
             if self.spindle_control.get():
                 write_comment("Start spindle")
-                fh.write(f"M3\n")
+                fh.write(f"M3 S1000\n")
 
             prev_end = None
             for xs, ys, depth in tps:
