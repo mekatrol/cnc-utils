@@ -31,7 +31,7 @@ import argparse
 import math
 import re
 import sys
-import json as _json
+import json
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import List, Tuple, Iterable, Optional, Sequence
@@ -451,7 +451,10 @@ def load_svg_as_integer_polylines(svg_path: str, scale: int = 10000, tol: float 
     polylines_int: List[PolylineI] = []
     for poly in polylines_float:
         pts_i = [IntPoint(_float_to_int(p.real, scale),
-                          _float_to_int(p.imag, scale)) for p in poly]
+                          # We need to flip Z on conversion:
+                          #  * SVG defines the origin at the top-left, with +y downward.
+                          #  * Matplotlib 3D (and most CAD/CAM coordinate systems) assume +y upward and +z upward.
+                          -_float_to_int(p.imag, scale)) for p in poly]
         polylines_int.append(PolylineI(pts=pts_i))
 
     return SVGGeometry(polylines=polylines_int, scale=scale)
@@ -531,7 +534,7 @@ def export_toolpath_json(geom: SVGGeometry, path: str) -> None:
         "scale": geom.scale,
         "polylines": [[[p.x, p.y] for p in pl.pts] for pl in geom.polylines],
     }
-    data = _json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+    data = json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
     if path == "-" or path == "stdout":
         print(data)
     else:
@@ -552,29 +555,18 @@ def export_toolpath_txt(geom: SVGGeometry, path: str) -> None:
         with open(path, "w", encoding="utf-8") as f:
             f.write(data)
 
-# -----------------------------
-# CLI
-# -----------------------------
-
-
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="CAM-oriented SVG -> integer polylines + 3D viewer")
-    ap.add_argument("svg", help="Input SVG file")
-    ap.add_argument("--scale", type=int, default=10000,
-                    help="Integer scaling factor (default: 10000)")
-    ap.add_argument("--tol", type=float, default=0.25,
-                    help="Flattening tolerance before scaling (default: 0.25)")
-    ap.add_argument("--no-view", action="store_true",
-                    help="Do not open the 3D viewer")
-    ap.add_argument("--export-json", metavar="PATH",
-                    help="Write integer toolpaths to JSON (use '-' for stdout)")
-    ap.add_argument("--export-txt", metavar="PATH",
-                    help="Write integer toolpaths to TXT (use '-' for stdout)")
+    ap.add_argument("--input", dest="svg", required=True, help="Input SVG file")
+    ap.add_argument("--scale", type=int, default=10000, help="Integer scaling factor (default: 10000)")
+    ap.add_argument("--tol", type=float, default=0.1, help="Flattening tolerance before scaling (default: 0.25)")
+    ap.add_argument("--no-view", action="store_true", help="Do not open the 3D viewer")
+    ap.add_argument("--export-json", metavar="PATH", help="Write integer toolpaths to JSON (use '-' for stdout)")
+    ap.add_argument("--export-txt", metavar="PATH", help="Write integer toolpaths to TXT (use '-' for stdout)")
     args = ap.parse_args(argv)
 
-    geom = load_svg_as_integer_polylines(
-        args.svg, scale=args.scale, tol=args.tol)
+    geom = load_svg_as_integer_polylines(args.svg, scale=args.scale, tol=args.tol)
     minx, miny, maxx, maxy = geom.bounds()
     print(f"Loaded polylines: {len(geom.polylines)}")
     print(

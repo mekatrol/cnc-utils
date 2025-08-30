@@ -1,0 +1,27 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: engraver.py",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/engraver.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}"
+      },
+      "args": [
+        "--input",
+        "samples/six.svg",
+        "--scale",
+        "10000",
+        "--tol",
+        "0.1",
+        "--export-json",
+        "output/six-toolpaths.json"
+      ],
+      "justMyCode": true
+    }
+  ]
+}
