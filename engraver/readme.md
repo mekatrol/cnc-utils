@@ -1,5 +1,9 @@
 ## Run sample
 
 ```bash
-python svg_cam_viewer.py your_file.svg --scale 10000 --tol 0.1
+# View file
+python engraver.py samples/six.svg --scale 10000 --tol 0.1
+
+# Export without viewing
+python engraver.py samples/six.svg --scale 10000 --tol 0.1 --export-json output/six-toolpaths.json --no-view
 ```

@@ -1,20 +1,24 @@
 
 """
-svg_cam_viewer.py
+engraver.py
 
 Minimal CAM-oriented SVG loader + 3D visualizer with integer scaling.
 - Loads common 2D SVG geometry (<path>, <polyline>, <polygon>, <line>, <rect>, <circle>, <ellipse>)
 - Flattens curves to polylines (adaptive tolerance)
 - Converts coordinates to scaled integers (default scale=10000) for robust integer geometry
 - Visualizes the 2D geometry in a 3D view (z=0) for rotation/inspection
+- Can export integer toolpaths as JSON or TXT (one polyline per line)
 - Provides simple Point/Vector integer primitives
 
 Dependencies:
   pip install svgpathtools matplotlib numpy
 
 Usage:
-  python svg_cam_viewer.py input.svg --scale 10000 --tol 0.1
+  python engraver.py input.svg --scale 10000 --tol 0.1
   # Rotate with mouse (matplotlib 3D), press 'r' to reset view, 'g' to toggle grid.
+  # Export:
+  #   --export-json out.json     # or '-' for stdout
+  #   --export-txt out.txt      # or '-' for stdout
 
 Notes:
   * Units are treated as pixels; CSS and mm/in conversions are not handled here.
@@ -27,6 +31,7 @@ import argparse
 import math
 import re
 import sys
+import json as _json
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import List, Tuple, Iterable, Optional, Sequence
@@ -348,9 +353,6 @@ def _iter_svg_geometry(root: ET.Element, tol: float) -> Iterable[List[complex]]:
         # ----- <polyline> / <polygon>
         elif tag in ("polyline", "polygon") and "points" in el.attrib:
             pts_txt = el.attrib["points"].strip()
-            pts: List[complex] = []
-            for pair in re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", pts_txt):
-                pass  # we'll parse with a smarter splitter below
             # Robust split for points="x1,y1 x2,y2 ..."
             nums = [float(n) for n in re.split(r"[ ,]+", pts_txt.strip()) if n]
             if len(nums) % 2 == 0:
@@ -519,6 +521,38 @@ def visualize_geometry_3d(geom: SVGGeometry, show_axes: bool = True):
     plt.show()
 
 # -----------------------------
+# Toolpath export
+# -----------------------------
+
+
+def export_toolpath_json(geom: SVGGeometry, path: str) -> None:
+    """Export as JSON: { "scale": int, "polylines": [ [[x,y], ...], ... ] }"""
+    obj = {
+        "scale": geom.scale,
+        "polylines": [[[p.x, p.y] for p in pl.pts] for pl in geom.polylines],
+    }
+    data = _json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+    if path == "-" or path == "stdout":
+        print(data)
+    else:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(data)
+
+
+def export_toolpath_txt(geom: SVGGeometry, path: str) -> None:
+    """Export text: one polyline per line, 'x1,y1 x2,y2 ...' (all integers)."""
+    lines = []
+    for pl in geom.polylines:
+        line = " ".join(f"{p.x},{p.y}" for p in pl.pts)
+        lines.append(line)
+    data = "\n".join(lines) + "\n"
+    if path == "-" or path == "stdout":
+        print(data, end="")
+    else:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(data)
+
+# -----------------------------
 # CLI
 # -----------------------------
 
@@ -533,6 +567,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="Flattening tolerance before scaling (default: 0.25)")
     ap.add_argument("--no-view", action="store_true",
                     help="Do not open the 3D viewer")
+    ap.add_argument("--export-json", metavar="PATH",
+                    help="Write integer toolpaths to JSON (use '-' for stdout)")
+    ap.add_argument("--export-txt", metavar="PATH",
+                    help="Write integer toolpaths to TXT (use '-' for stdout)")
     args = ap.parse_args(argv)
 
     geom = load_svg_as_integer_polylines(
@@ -543,6 +581,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"Bounds (int): min=({minx},{miny}) max=({maxx},{maxy})  scale={geom.scale}")
     total_pts = sum(len(pl.pts) for pl in geom.polylines)
     print(f"Total points: {total_pts}")
+
+    # Exports
+    if args.export_json:
+        export_toolpath_json(geom, args.export_json)
+    if args.export_txt:
+        export_toolpath_txt(geom, args.export_txt)
 
     if not args.no_view:
         visualize_geometry_3d(geom)
