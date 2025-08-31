@@ -139,18 +139,18 @@ class App(tk.Tk):
     def add_view(self, kind: str):
         if kind == "2D":
             frame = TopDownView(self.notebook, self)
-            self.notebook.add(frame, text="Top-down 2D")
-            self.notebook.select(frame)
-            self.after(50, frame.fit_to_view)
-            return frame
+            title = "Top-down 2D"
         elif kind == "3D":
             frame = View3D(self.notebook, self)
-            self.notebook.add(frame, text="3D Wireframe")
-            self.notebook.select(frame)
-            self.after(50, frame.fit_to_view)
-            return frame
+            title = "3D Wireframe"
         else:
             raise ValueError(f"Unknown view kind: {kind}")
+
+        self.notebook.add(frame, text=title)
+        self.notebook.select(frame)
+        self.notebook.update_idletasks()          # ensure geometry is computed
+        frame.after_idle(frame.fit_to_view)        # run when widget is idle/mapped
+        return frame
 
     def fit_current(self):
         cur = self.notebook.select()
