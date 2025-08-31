@@ -243,7 +243,7 @@ class SvgConverter:
             yield from walk(child, Affine2D.identity())
 
     @staticmethod
-    def load_svg_as_integer_polylines(svg_path: str, scale: int = 10000, tol: float = 0.25) -> GeometryInt:
+    def convert(svg_path: str, scale: int = 10000, tol: float = 0.25) -> GeometryInt:
         tree = ET.parse(svg_path)
         root = tree.getroot()
 

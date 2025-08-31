@@ -117,7 +117,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--export-txt", metavar="PATH", help="Write integer toolpaths to TXT (use '-' for stdout)")
     args = ap.parse_args(argv)
 
-    geom = SvgConverter.load_svg_as_integer_polylines(args.svg, scale=args.scale, tol=args.tol)
+    geom = SvgConverter.convert(args.svg, scale=args.scale, tol=args.tol)
     minx, miny, maxx, maxy = geom.bounds()
     print(f"Loaded polylines: {len(geom.polylines)}")
     print(
