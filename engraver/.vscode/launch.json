@@ -5,11 +5,11 @@
       "name": "Python: engraver.py",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/src/engraver.py",
+      "program": "${workspaceFolder}/src/ide.py",
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}",
       "env": {
-        "PYTHONPATH": "${workspaceFolder}"
+        "PYTHONPATH": "${workspaceFolder}/src"
       },
       "args": [
         "--input",

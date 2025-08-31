@@ -1,6 +1,7 @@
 import math
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional, Tuple
+from geometry.GeometryInt import GeometryInt
 
 
 @dataclass(frozen=True)
@@ -59,3 +60,11 @@ class GeometryUtils:
                 segment, tol, 0.5 * (t0 + t1), t1, depth + 1, max_depth)
             # Avoid duplicating the midpoint
             return left[:-1] + right
+
+    @staticmethod
+    def world_bounds(geom: Optional[GeometryInt]) -> Tuple[float, float, float, float]:
+        if not geom or not geom.polylines:
+            return 0.0, 0.0, 1.0, 1.0
+        minx, miny, maxx, maxy = geom.bounds()
+        s = geom.scale if geom.scale else 1
+        return minx / s, miny / s, maxx / s, maxy / s

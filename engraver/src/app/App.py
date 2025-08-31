@@ -1,0 +1,159 @@
+from __future__ import annotations
+import json
+from pathlib import Path
+from typing import List, Optional
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+
+from FileBrowser import FileBrowser
+from geometry.PointInt import PointInt
+from geometry.PolylineInt import PolylineInt
+from geometry.GeometryInt import GeometryInt
+from view.TopDownView import TopDownView
+from view.View3D import View3D
+
+
+class App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Polyline Viewer: Tk IDE-ish")
+        self.geometry("1200x800")
+        self.minsize(900, 600)
+        try:
+            self.tk.call("tk", "scaling", 1.2)  # slightly larger UI if supported
+        except Exception:
+            pass
+
+        style = ttk.Style(self)
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
+
+        # Shared state
+        self.model: Optional[GeometryInt] = None
+        self.source_label_var = tk.StringVar(value="No file loaded")
+
+        # Layout: PanedWindow with left browser and right notebook
+        paned = ttk.Panedwindow(self, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True)
+
+        left = ttk.Frame(paned, width=280)
+        right = ttk.Frame(paned)
+        paned.add(left, weight=0)
+        paned.add(right, weight=1)
+
+        # Left: file browser
+        self.browser = FileBrowser(left, self)
+        self.browser.pack(fill=tk.BOTH, expand=True)
+
+        # Right: toolbar + notebook
+        topbar = ttk.Frame(right)
+        topbar.pack(fill=tk.X)
+        ttk.Label(topbar, textvariable=self.source_label_var).pack(side=tk.LEFT, padx=8, pady=6)
+        ttk.Button(topbar, text="Open File", command=self.open_file_dialog).pack(side=tk.RIGHT, padx=6)
+        ttk.Button(topbar, text="New 3D Tab", command=lambda: self.add_view("3D")).pack(side=tk.RIGHT)
+        ttk.Button(topbar, text="New 2D Tab", command=lambda: self.add_view("2D")).pack(side=tk.RIGHT)
+
+        self.notebook = ttk.Notebook(right)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+
+        # Default tabs
+        self.add_view("2D")
+        self.add_view("3D")
+
+        # Load a tiny demo so it's not heartbreakingly empty
+        self.load_demo_geometry()
+
+    @staticmethod
+    def _as_point(pt) -> PointInt:
+        if isinstance(pt, dict) and "x" in pt and "y" in pt:
+            return PointInt(int(pt["x"]), int(pt["y"]))
+        if (
+            isinstance(pt, (list, tuple))
+            and len(pt) >= 2
+            and all(isinstance(v, (int, float)) for v in pt[:2])
+        ):
+            return PointInt(int(pt[0]), int(pt[1]))
+        raise ValueError(f"Unsupported point format: {pt!r}")
+
+    @staticmethod
+    def load_geometry_from_json(path: Path) -> GeometryInt:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        scale = int(data.get("scale", 1) or 1)
+
+        pls: List[PolylineInt] = []
+
+        # Case 1: standard "polylines": [{"pts": [...]}, ...]
+        if isinstance(data.get("polylines"), list):
+            for pl in data.get("polylines", []):
+                pts_raw = pl.get("pts", []) if isinstance(pl, dict) else []
+                pts = [App._as_point(p) for p in pts_raw]
+                if len(pts) >= 2:
+                    pls.append(PolylineInt(pts))
+
+        # Case 2: root-level "points": [ [ [x,y], ... ], [ ... ] ]
+        elif isinstance(data.get("points"), list):
+            for poly in data.get("points", []):
+                if isinstance(poly, list):
+                    pts = [App._as_point(p) for p in poly]
+                    if len(pts) >= 2:
+                        pls.append(PolylineInt(pts))
+
+        return GeometryInt(pls, scale)
+
+    # Geometry management
+    def set_geometry(self, geom: GeometryInt, source: str = ""):
+        self.model = geom
+        self.source_label_var.set(source or "(in-memory geometry)")
+        self.redraw_all()
+
+    def redraw_all(self):
+        for i in range(self.notebook.index("end")):
+            widget = self.notebook.nametowidget(self.notebook.tabs()[i])
+            if hasattr(widget, "redraw"):
+                widget.redraw()
+
+    def open_file_dialog(self):
+        path = filedialog.askopenfilename(
+            title="Open geometry JSON",
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            geom = App.load_geometry_from_json(Path(path))
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load {path}:\n{e}")
+            return
+        self.set_geometry(geom, source=str(path))
+
+    def add_view(self, kind: str):
+        if kind == "2D":
+            frame = TopDownView(self.notebook, self)
+            self.notebook.add(frame, text="Top-down 2D")
+            self.notebook.select(frame)
+            self.after(50, frame.fit_to_view)
+            return frame
+        elif kind == "3D":
+            frame = View3D(self.notebook, self)
+            self.notebook.add(frame, text="3D Wireframe")
+            self.notebook.select(frame)
+            self.after(50, frame.fit_to_view)
+            return frame
+        else:
+            raise ValueError(f"Unknown view kind: {kind}")
+
+    def fit_current(self):
+        cur = self.notebook.select()
+        if not cur:
+            return
+        widget = self.nametowidget(cur)
+        if hasattr(widget, "fit_to_view"):
+            widget.fit_to_view()
+
+    def load_demo_geometry(self):
+        # Simple rectangle + diagonal in 1000-scale units
+        pl1 = PolylineInt([PointInt(0, 0), PointInt(10000, 0), PointInt(10000, 6000), PointInt(0, 6000), PointInt(0, 0)])
+        pl2 = PolylineInt([PointInt(0, 0), PointInt(10000, 6000)])
+        geom = GeometryInt(polylines=[pl1, pl2], scale=1000)
+        self.set_geometry(geom, source="<demo>")
