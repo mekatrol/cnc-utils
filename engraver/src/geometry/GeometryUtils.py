@@ -1,7 +1,8 @@
 import math
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 from geometry.GeometryInt import GeometryInt
+from geometry.PointFloat import PointFloat
 
 
 @dataclass(frozen=True)
@@ -68,3 +69,31 @@ class GeometryUtils:
         minx, miny, maxx, maxy = geom.bounds()
         s = geom.scale if geom.scale else 1
         return minx / s, miny / s, maxx / s, maxy / s
+
+    """ Safely try and convert any type to a float, will return default value if cannot be converted """
+    @staticmethod
+    def safe_to_float(x: Any, default: float = 0.0) -> float:
+        if x is None:
+            return default
+        try:
+            return float(x)
+        except Exception:
+            return default
+
+    @staticmethod
+    def safe_to_point(pt: Any) -> Optional[PointFloat]:
+        if pt is None:
+            return None
+        try:
+            x, y = pt
+            return PointFloat(GeometryUtils.safe_to_float(x), GeometryUtils.safe_to_float(y))
+        except Exception:
+            return None
+
+    @staticmethod
+    def equal_with_tolerance(a: PointFloat, b: PointFloat, abs_tol: float) -> bool:
+        if a is None or b is None:
+            return False
+        d = abs(a - b)
+        m = max(abs(a), abs(b), 1.0)
+        return d <= max(abs_tol, 1e-6 * m)
