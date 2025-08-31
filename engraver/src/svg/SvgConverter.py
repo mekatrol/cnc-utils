@@ -12,19 +12,21 @@ class SvgConverter:
     """SVG -> integer-scaled polylines (GeometryInt)."""
 
     @staticmethod
-    def _walk_with_matrix(node: Any, parent: Optional[Matrix] = None) -> Iterable[Tuple[Any, Matrix]]:
-        """Yield (leaf, cumulative_matrix). Compose parent * current exactly once."""
-        P = Matrix() if parent is None else parent
-        t = getattr(node, "transform", None)
-        t = t if isinstance(t, Matrix) else Matrix()
-        M = P * t  # SVG uses parent * current
+    def _walk_with_matrix(node: Any, parent: Optional[Matrix] = None):
+        """Yield (leaf, parent_matrix_without_leaf)."""
+        parent_matrix = Matrix() if parent is None else parent
+        node_matrix = getattr(node, "transform", None)
+        node_matrix = node_matrix if isinstance(node_matrix, Matrix) else Matrix()
 
-        is_leaf = isinstance(node, (Path, Line, Rect, Circle, Ellipse, Polyline, Polygon))
-        if hasattr(node, "__iter__") and not is_leaf:
+        is_leaf = isinstance(node, (Path, Line, SimpleLine, Rect, Circle, Ellipse, Polyline, Polygon))
+        if is_leaf:
+            # important: do NOT fold the leaf's own transform here
+            yield node, parent_matrix
+            return
+
+        if hasattr(node, "__iter__"):
             for ch in node:
-                yield from SvgConverter._walk_with_matrix(ch, M)
-        else:
-            yield node, M
+                yield from SvgConverter._walk_with_matrix(ch, parent_matrix)
 
     @staticmethod
     def _apply_matrix_to_points(pts: List[PointFloat], M: Matrix) -> List[PointFloat]:
@@ -134,11 +136,14 @@ class SvgConverter:
 
     @staticmethod
     def svg_to_geometry_int(svg_path: str, scale: int = 10000, tol: float = 0.25) -> GeometryInt:
-        doc = SVG.parse(svg_path)  # do not call reify(); we apply parent*current ourselves
+        doc = SVG.parse(svg_path)
 
         polylines_float: List[List[PointFloat]] = []
 
         for elem, M in SvgConverter._walk_with_matrix(doc):
+            t = getattr(elem, "transform", Matrix()) if isinstance(getattr(elem, "transform", None), Matrix) else Matrix()
+            M = M * t
+
             if isinstance(elem, Path):
                 # Discretize in local coords, then transform sampled points.
                 for poly in SvgConverter._path_to_polylines(elem, chord_tol=tol):
@@ -147,34 +152,35 @@ class SvgConverter:
             elif isinstance(elem, Line):
                 a = GeoUtil.safe_to_point(getattr(elem, "start", None))
                 b = GeoUtil.safe_to_point(getattr(elem, "end", None))
-                if a is not None and b is not None:
+                if a and b:
                     polylines_float.append(SvgConverter._apply_matrix_to_points([a, b], M))
 
             elif isinstance(elem, SimpleLine):
-                x1 = GeoUtil.safe_to_point(getattr(elem, "x1", None))
-                y1 = GeoUtil.safe_to_point(getattr(elem, "y1", None))
-                x2 = GeoUtil.safe_to_point(getattr(elem, "x2", None))
-                y2 = GeoUtil.safe_to_point(getattr(elem, "y2", None))
-                if x1 is not None and y1 is not None and x2 is not None and y2 is not None:
-                    polylines_float.append(SvgConverter._apply_matrix_to_points([x1, y1, x2, y2], M))
+                x1 = GeoUtil.safe_to_float(getattr(elem, "x1", None))
+                y1 = GeoUtil.safe_to_float(getattr(elem, "y1", None))
+                x2 = GeoUtil.safe_to_float(getattr(elem, "x2", None))
+                y2 = GeoUtil.safe_to_float(getattr(elem, "y2", None))
+                if None not in (x1, y1, x2, y2):
+                    polylines_float.append(SvgConverter._apply_matrix_to_points(
+                        [PointFloat(x1, y1), PointFloat(x2, y2)], M))
 
             elif isinstance(elem, Rect):
                 x = GeoUtil.safe_to_float(getattr(elem, "x", None))
                 y = GeoUtil.safe_to_float(getattr(elem, "y", None))
                 w = GeoUtil.safe_to_float(getattr(elem, "width", None))
                 h = GeoUtil.safe_to_float(getattr(elem, "height", None))
-                rx = GeoUtil.safe_to_float(getattr(elem, "rx", None))
-                ry = GeoUtil.safe_to_float(getattr(elem, "ry", None))
-                pts = (SvgConverter._rounded_rect_poly(x, y, w, h, rx, ry, tol)
-                       if (rx or ry) else SvgConverter._rect_poly(x, y, w, h))
-                if pts:
+                rx = GeoUtil.safe_to_float(getattr(elem, "rx", None)) or 0.0
+                ry = GeoUtil.safe_to_float(getattr(elem, "ry", None)) or 0.0
+                if None not in (x, y, w, h) and w > 0 and h > 0:
+                    pts = (SvgConverter._rounded_rect_poly(x, y, w, h, rx, ry, tol)
+                           if (rx > 0 or ry > 0) else SvgConverter._rect_poly(x, y, w, h))
                     polylines_float.append(SvgConverter._apply_matrix_to_points(pts, M))
 
             elif isinstance(elem, Circle):
                 cx = GeoUtil.safe_to_float(SvgConverter._get_attr(elem, "cx", "center_x"))
                 cy = GeoUtil.safe_to_float(SvgConverter._get_attr(elem, "cy", "center_y"))
                 r = GeoUtil.safe_to_float(SvgConverter._get_attr(elem, "r", "radius", "rx", "ry"))
-                if r > 0:
+                if None not in (cx, cy, r) and r > 0:
                     pts = SvgConverter._circle_poly(cx, cy, r, tol)
                     polylines_float.append(SvgConverter._apply_matrix_to_points(pts, M))
 
@@ -183,25 +189,20 @@ class SvgConverter:
                 cy = GeoUtil.safe_to_float(SvgConverter._get_attr(elem, "cy", "center_y"))
                 rx = GeoUtil.safe_to_float(SvgConverter._get_attr(elem, "rx", "radius_x"))
                 ry = GeoUtil.safe_to_float(SvgConverter._get_attr(elem, "ry", "radius_y"))
-                if rx <= 0 and ry <= 0:
+                if (rx is None or ry is None):
                     r = GeoUtil.safe_to_float(SvgConverter._get_attr(elem, "r", "radius"))
-                    rx = ry = r
-                if rx > 0 and ry > 0:
+                    if r is not None:
+                        rx = ry = r
+                if None not in (cx, cy, rx, ry) and rx > 0 and ry > 0:
                     pts = SvgConverter._ellipse_poly(cx, cy, rx, ry, tol)
                     polylines_float.append(SvgConverter._apply_matrix_to_points(pts, M))
 
-            elif isinstance(elem, Polyline):
-                raw_pts = cast(Iterable[Any], getattr(elem, "points", ()))
-                pts = [p for p in (GeoUtil.safe_to_point(p) for p in raw_pts) if p is not None]
-                if len(pts) >= 2:
-                    polylines_float.append(SvgConverter._apply_matrix_to_points(pts, M))
-
             elif isinstance(elem, Polygon):
-                raw_pts = cast(Iterable[Any], getattr(elem, "points", ()))
-                pts = [p for p in (GeoUtil.safe_to_point(p) for p in raw_pts) if p is not None]
-                if len(pts) >= 2 and pts[0] != pts[-1]:
-                    pts.append(pts[0])
+                raw = cast(Iterable[Any], getattr(elem, "points", ()))
+                pts = [p for p in (GeoUtil.safe_to_point(p) for p in raw) if p]
                 if len(pts) >= 2:
+                    if pts[0] != pts[-1]:
+                        pts.append(pts[0])
                     polylines_float.append(SvgConverter._apply_matrix_to_points(pts, M))
 
         # Integerize (and flip Y)
