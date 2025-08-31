@@ -1,3 +1,4 @@
 svgpathtools 
 matplotlib 
 numpy
+svgelements

@@ -1,83 +1,16 @@
 import math
-import re
-import sys
-from typing import List, Iterable, Optional
-from svgpathtools import Path, CubicBezier, Arc, parse_path
+from typing import List, Optional
 from geometry.GeometryUtils import GeometryUtils
 from geometry.GeometryInt import GeometryInt
 from geometry.PolylineInt import PolylineInt
 from geometry.PointInt import PointInt
 import xml.etree.ElementTree as ET
-from svg.Affine2D import Affine2D
+from svgelements import SVG, Path as SEPath, Group, Matrix, Close
 
 
 # add near imports
 from dataclasses import dataclass, field
 from copy import deepcopy
-
-
-@dataclass
-class Style:
-    stroke: Optional[str] = None
-    stroke_width: Optional[float] = None
-    stroke_linejoin: str = "miter"   # miter | round | bevel
-    stroke_linecap: str = "butt"     # butt | round | square
-    fill: Optional[str] = None
-    display: Optional[str] = None
-    visibility: Optional[str] = None
-
-
-def _parse_style_attr(txt: str) -> dict:
-    out = {}
-    for decl in txt.split(";"):
-        if ":" in decl:
-            k, v = decl.split(":", 1)
-            out[k.strip().lower()] = v.strip()
-    return out
-
-
-def _merge_style(parent: Style, el: ET.Element) -> Style:
-    s = deepcopy(parent)
-    # presentation attributes
-    if "stroke" in el.attrib:
-        s.stroke = el.attrib["stroke"]
-    if "stroke-width" in el.attrib:
-        s.stroke_width = GeometryUtils.safe_float(el.attrib["stroke-width"])
-    if "stroke-linejoin" in el.attrib:
-        s.stroke_linejoin = el.attrib["stroke-linejoin"].lower()
-    if "stroke-linecap" in el.attrib:
-        s.stroke_linecap = el.attrib["stroke-linecap"].lower()
-    if "fill" in el.attrib:
-        s.fill = el.attrib["fill"]
-    if "display" in el.attrib:
-        s.display = el.attrib["display"].lower()
-    if "visibility" in el.attrib:
-        s.visibility = el.attrib["visibility"].lower()
-    # inline style=""
-    css = _parse_style_attr(el.attrib.get("style", ""))
-    if "stroke" in css:
-        s.stroke = css["stroke"]
-    if "stroke-width" in css:
-        s.stroke_width = GeometryUtils.safe_float(css["stroke-width"])
-    if "stroke-linejoin" in css:
-        s.stroke_linejoin = css["stroke-linejoin"].lower()
-    if "stroke-linecap" in css:
-        s.stroke_linecap = css["stroke-linecap"].lower()
-    if "fill" in css:
-        s.fill = css["fill"]
-    if "display" in css:
-        s.display = css["display"].lower()
-    if "visibility" in css:
-        s.visibility = css["visibility"].lower()
-    return s
-
-
-def _is_visible_style(s: Style) -> bool:
-    if s.display == "none":
-        return False
-    if s.visibility == "hidden":
-        return False
-    return True
 
 
 class SvgConverter:
@@ -90,273 +23,82 @@ class SvgConverter:
              Smaller = more segments when flattening curves.
     """
     @staticmethod
-    def convert(svg_path: str, scale: int = 10000, tol: float = 0.25) -> GeometryInt:
-        tree = ET.parse(svg_path)
-        root = tree.getroot()
-
-        polylines_float: List[List[complex]] = []
-        for poly in SvgConverter._iter_svg_geometry(root, tol=tol):
-            if len(poly) >= 2:
-                polylines_float.append(poly)
-
-        # Convert to integer space
-        polylines_int: List[PolylineInt] = []
-        for poly in polylines_float:
-            pts_i = [PointInt(
-                GeometryUtils.float_to_int(p.real, scale),
-                # We need to flip Z on conversion:
-                #  * SVG defines the origin at the top-left, with +y downward.
-                #  * Matplotlib 3D (and most CAD/CAM coordinate systems) assume +y upward and +z upward.
-                -GeometryUtils.float_to_int(p.imag, scale)) for p in poly]
-            polylines_int.append(PolylineInt(pts=pts_i))
-
-        return GeometryInt(polylines=polylines_int, scale=scale)
+    def _walk(node, M: Optional[Matrix] = None):
+        if M is None:
+            M = Matrix()
+        M = M * getattr(node, "transform", Matrix())
+        # Descend groups
+        if isinstance(node, Group):
+            for e in node:
+                yield from SvgConverter._walk(e, M)
+            return
+        # Anything path-like
+        path = None
+        if isinstance(node, SEPath):
+            path = node
+        elif hasattr(node, "as_path"):
+            path = node.as_path()
+        if path is not None:
+            # apply transform
+            path = path * M
+            yield path
 
     @staticmethod
-    def path_to_polylines(path: Path, tol: float = 0.25) -> List[List[complex]]:
-        """Convert an svgpathtools Path into a list of polylines (complex points)."""
+    def _cont(a: complex, b: complex, abs_tol: float) -> bool:
+        if a is None or b is None:
+            return False
+        d = abs(a - b)
+        m = max(abs(a), abs(b), 1.0)
+        return d <= max(abs_tol, 1e-9 * m)
+
+    @staticmethod
+    def _path_to_polylines_se(path: SEPath, chord_tol: float) -> List[List[complex]]:
         polylines: List[List[complex]] = []
         current: List[complex] = []
         last_end: Optional[complex] = None
+        abs_tol = max(1e-6, chord_tol)
 
         for seg in path:
-            # Convert arcs to cubic(s) first for robust flattening
-            segments: List = []
-            if isinstance(seg, Arc):
-                segments = list(seg.as_cubic_curves())
+            # handle Close explicitly
+            if isinstance(seg, Close):
+                pts = [seg.start, seg.end]
             else:
-                segments = [seg]
+                L = max(seg.length(error=1e-4), 0.0)
+                n = max(2, int(math.ceil(L / max(chord_tol, 1e-9))))
+                pts = [seg.point(i / (n - 1)) for i in range(n)]
 
-            for s in segments:
-                pts = GeometryUtils.flatten_segment(s, tol)
-                if not current:
-                    current.extend(pts)
-                else:
-                    # If the new segment continues from the last point, append; otherwise start a new polyline
-                    if last_end is not None and abs(pts[0] - last_end) < 1e-9:
-                        current.extend(pts[1:])
-                    else:
-                        if len(current) >= 2:
-                            polylines.append(current)
-                        current = pts
-                last_end = pts[-1]
+            if len(pts) < 2:
+                continue
+            if current and SvgConverter._cont(last_end, pts[0], abs_tol):
+                current.extend(pts[1:])
+            else:
+                if len(current) >= 2:
+                    polylines.append(current)
+                current = pts
+            last_end = pts[-1]
 
         if len(current) >= 2:
             polylines.append(current)
         return polylines
 
     @staticmethod
-    def _circle_to_polyline(cx: float, cy: float, r: float, segments: int = 64) -> List[complex]:
-        pts = []
-        for i in range(segments + 1):
-            th = 2 * math.pi * i / segments
-            pts.append(complex(cx + r * math.cos(th), cy + r * math.sin(th)))
-        return pts
+    def svg_to_geometry_int(svg_path: str, scale: int = 10000, tol: float = 0.25) -> GeometryInt:
+        """tol: max chord length in SVG units."""
+        svg = SVG.parse(svg_path)
+        polys_float: List[List[complex]] = []
+        for path in SvgConverter._walk(svg):
+            polys_float.extend(SvgConverter._path_to_polylines_se(path, chord_tol=tol))
 
-    @staticmethod
-    def _ellipse_to_polyline(cx: float, cy: float, rx: float, ry: float, segments: int = 96) -> List[complex]:
-        pts = []
-        for i in range(segments + 1):
-            th = 2 * math.pi * i / segments
-            pts.append(complex(cx + rx * math.cos(th), cy + ry * math.sin(th)))
-        return pts
+        polylines_int: List[PolylineInt] = []
+        for poly in polys_float:
+            pts_i = [
+                PointInt(
+                    GeometryUtils.float_to_int(p.real, scale),
+                    -GeometryUtils.float_to_int(p.imag, scale),
+                )
+                for p in poly
+            ]
+            if len(pts_i) >= 2:
+                polylines_int.append(PolylineInt(pts=pts_i))
 
-    @staticmethod
-    def _rect_to_polyline(x: float, y: float, w: float, h: float) -> List[complex]:
-        return [
-            complex(x, y),
-            complex(x + w, y),
-            complex(x + w, y + h),
-            complex(x, y + h),
-            complex(x, y),
-        ]
-
-    @staticmethod
-    def _apply_transform_to_polyline(poly: List[complex], T: Affine2D) -> List[complex]:
-        return [complex(*T.apply(p.real, p.imag)) for p in poly]
-
-    @staticmethod
-    def _extract_style_visibility(el: ET.Element) -> bool:
-        """Return False if element is explicitly hidden via display:none or visibility:hidden."""
-        style = el.attrib.get("style", "")
-        if "display:none" in style.replace(" ", "").lower():
-            return False
-        if "visibility:hidden" in style.replace(" ", "").lower():
-            return False
-        if el.attrib.get("display", "").lower() == "none":
-            return False
-        if el.attrib.get("visibility", "").lower() == "hidden":
-            return False
-        return True
-
-    @staticmethod
-    def _iter_svg_geometry_with_style(root: ET.Element, tol: float) -> Iterable[tuple[List[complex], Style]]:
-        def walk(el: ET.Element, ctm: Affine2D, inherited: Style):
-            # merge style
-            style = _merge_style(inherited, el)
-            # early visibility check
-            if not _is_visible_style(style):
-                return
-
-            # transform
-            T = ctm
-            if "transform" in el.attrib:
-                T = ctm @ Affine2D.from_svg_transform(el.attrib["transform"])
-
-            tag = el.tag.split("}", 1)[-1] if el.tag.startswith("{") else el.tag
-
-            if tag == "g":
-                for ch in list(el):
-                    yield from walk(ch, T, style)
-                return
-
-            if tag == "path" and "d" in el.attrib:
-                try:
-                    p = parse_path(el.attrib["d"])
-                except Exception as e:
-                    print(f"[WARN] Failed to parse <path>: {e}", file=sys.stderr)
-                    p = None
-                if p:
-                    for poly in SvgConverter.path_to_polylines(p, tol=tol):
-                        yield (SvgConverter._apply_transform_to_polyline(poly, T), style)
-
-            elif tag in ("polyline", "polygon") and "points" in el.attrib:
-                pts_txt = el.attrib["points"].strip()
-                nums = [float(n) for n in re.split(r"[\s,]+", pts_txt) if n]
-                if len(nums) % 2 == 0:
-                    pts = [complex(nums[i], nums[i+1]) for i in range(0, len(nums), 2)]
-                    if tag == "polygon" and (not pts or pts[0] != pts[-1]):
-                        pts.append(pts[0])
-                    if len(pts) >= 2:
-                        yield (SvgConverter._apply_transform_to_polyline(pts, T), style)
-
-            elif tag == "line":
-                x1 = GeometryUtils.safe_float(el.attrib.get("x1", "0"))
-                y1 = GeometryUtils.safe_float(el.attrib.get("y1", "0"))
-                x2 = GeometryUtils.safe_float(el.attrib.get("x2", "0"))
-                y2 = GeometryUtils.safe_float(el.attrib.get("y2", "0"))
-                pts = [complex(x1, y1), complex(x2, y2)]
-                yield (SvgConverter._apply_transform_to_polyline(pts, T), style)
-
-            elif tag == "rect":
-                x = GeometryUtils.safe_float(el.attrib.get("x", "0"))
-                y = GeometryUtils.safe_float(el.attrib.get("y", "0"))
-                w = GeometryUtils.safe_float(el.attrib.get("width", "0"))
-                h = GeometryUtils.safe_float(el.attrib.get("height", "0"))
-                if w > 0 and h > 0:
-                    pts = SvgConverter._rect_to_polyline(x, y, w, h)
-                    yield (SvgConverter._apply_transform_to_polyline(pts, T), style)
-
-            elif tag == "circle":
-                cx = GeometryUtils.safe_float(el.attrib.get("cx", "0"))
-                cy = GeometryUtils.safe_float(el.attrib.get("cy", "0"))
-                r = GeometryUtils.safe_float(el.attrib.get("r", "0"))
-                if r > 0:
-                    pts = SvgConverter._circle_to_polyline(cx, cy, r)
-                    yield (SvgConverter._apply_transform_to_polyline(pts, T), style)
-
-            elif tag == "ellipse":
-                cx = GeometryUtils.safe_float(el.attrib.get("cx", "0"))
-                cy = GeometryUtils.safe_float(el.attrib.get("cy", "0"))
-                rx = GeometryUtils.safe_float(el.attrib.get("rx", "0"))
-                ry = GeometryUtils.safe_float(el.attrib.get("ry", "0"))
-                if rx > 0 and ry > 0:
-                    pts = SvgConverter._ellipse_to_polyline(cx, cy, rx, ry)
-                    yield (SvgConverter._apply_transform_to_polyline(pts, T), style)
-
-        for child in list(root):
-            # start with defaults so group-level stroke-linejoin flows down
-            yield from walk(child, Affine2D.identity(), Style())
-
-    @staticmethod
-    def _iter_svg_geometry(root: ET.Element, tol: float) -> Iterable[List[complex]]:
-        # Backwards-compatible wrapper
-        for poly, _style in SvgConverter._iter_svg_geometry_with_style(root, tol):
-            yield poly
-
-        def walk(el: ET.Element, ctm: Affine2D):
-            if not SvgConverter._extract_style_visibility(el):
-                return
-
-            T = ctm
-            if "transform" in el.attrib:
-                T = ctm @ Affine2D.from_svg_transform(el.attrib["transform"])
-
-            tag = el.tag
-            if tag.startswith("{"):
-                tag = tag.split("}", 1)[1]
-
-            if tag == "g":
-                for ch in list(el):
-                    yield from walk(ch, T)
-                return
-
-            # ----- <path>
-            if tag == "path" and "d" in el.attrib:
-                try:
-                    p = parse_path(el.attrib["d"])
-                except Exception as e:
-                    print(f"[WARN] Failed to parse <path>: {e}", file=sys.stderr)
-                    p = None
-                if p:
-                    # Flatten entire path
-                    polylines = SvgConverter.path_to_polylines(p, tol=tol)
-                    for poly in polylines:
-                        yield SvgConverter._apply_transform_to_polyline(poly, T)
-
-            # ----- <polyline> / <polygon>
-            elif tag in ("polyline", "polygon") and "points" in el.attrib:
-                pts_txt = el.attrib["points"].strip()
-                # Robust split for points="x1,y1 x2,y2 ..."
-                nums = [float(n) for n in re.split(r"[\s,]+", pts_txt.strip()) if n]
-                if len(nums) % 2 == 0:
-                    pts = [complex(nums[i], nums[i + 1])
-                           for i in range(0, len(nums), 2)]
-                    if tag == "polygon" and (len(pts) == 0 or pts[0] != pts[-1]):
-                        pts.append(pts[0])
-                    if len(pts) >= 2:
-                        yield SvgConverter._apply_transform_to_polyline(pts, T)
-
-            # ----- <line>
-            elif tag == "line":
-                x1 = GeometryUtils.safe_float(el.attrib.get("x1", "0"))
-                y1 = GeometryUtils.safe_float(el.attrib.get("y1", "0"))
-                x2 = GeometryUtils.safe_float(el.attrib.get("x2", "0"))
-                y2 = GeometryUtils.safe_float(el.attrib.get("y2", "0"))
-                pts = [complex(x1, y1), complex(x2, y2)]
-                yield SvgConverter._apply_transform_to_polyline(pts, T)
-
-            # ----- <rect> (no rounded corners in this minimal version)
-            elif tag == "rect":
-                x = GeometryUtils.safe_float(el.attrib.get("x", "0"))
-                y = GeometryUtils.safe_float(el.attrib.get("y", "0"))
-                w = GeometryUtils.safe_float(el.attrib.get("width", "0"))
-                h = GeometryUtils.safe_float(el.attrib.get("height", "0"))
-                if w > 0 and h > 0:
-                    pts = SvgConverter._rect_to_polyline(x, y, w, h)
-                    yield SvgConverter._apply_transform_to_polyline(pts, T)
-
-            # ----- <circle>
-            elif tag == "circle":
-                cx = GeometryUtils.safe_float(el.attrib.get("cx", "0"))
-                cy = GeometryUtils.safe_float(el.attrib.get("cy", "0"))
-                r = GeometryUtils.safe_float(el.attrib.get("r", "0"))
-                if r > 0:
-                    pts = SvgConverter._circle_to_polyline(cx, cy, r)
-                    yield SvgConverter._apply_transform_to_polyline(pts, T)
-
-            # ----- <ellipse>
-            elif tag == "ellipse":
-                cx = GeometryUtils.safe_float(el.attrib.get("cx", "0"))
-                cy = GeometryUtils.safe_float(el.attrib.get("cy", "0"))
-                rx = GeometryUtils.safe_float(el.attrib.get("rx", "0"))
-                ry = GeometryUtils.safe_float(el.attrib.get("ry", "0"))
-                if rx > 0 and ry > 0:
-                    pts = SvgConverter._ellipse_to_polyline(cx, cy, rx, ry)
-                    yield SvgConverter._apply_transform_to_polyline(pts, T)
-
-            # Ignore others for now (images, text, etc.)
-
-        # Kick off traversal
-        for child in list(root):
-            yield from walk(child, Affine2D.identity())
+        return GeometryInt(polylines=polylines_int, scale=scale)

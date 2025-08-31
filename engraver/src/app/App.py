@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import math
 from pathlib import Path
 from typing import List, Optional
 import tkinter as tk
@@ -127,7 +128,7 @@ class App(tk.Tk):
             if ext == ".json":
                 geom = App.load_geometry_from_json(Path(path))
             elif ext == ".svg":
-                geom = SvgConverter.convert(path, scale=10000, tol=0.1)
+                geom = SvgConverter.svg_to_geometry_int(path, scale=10000, tol=0.25)
             else:
                 return
         except Exception as e:
