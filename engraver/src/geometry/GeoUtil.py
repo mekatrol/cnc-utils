@@ -6,7 +6,7 @@ from geometry.PointFloat import PointFloat
 
 
 @dataclass(frozen=True)
-class GeometryUtils:
+class GeoUtil:
     @staticmethod
     def float_to_int(x: float, scale: int) -> int:
         """Convert floating point to scaled integer."""
@@ -51,13 +51,13 @@ class GeometryUtils:
         pm = segment.point(0.5 * (t0 + t1))
 
         # Error as distance of midpoint to chord
-        err = GeometryUtils.point_line_dist(pm, p0, p2)
+        err = GeoUtil.point_line_dist(pm, p0, p2)
         if err <= tol or depth >= max_depth:
             return [p0, p2]
         else:
-            left = GeometryUtils.flatten_segment(
+            left = GeoUtil.flatten_segment(
                 segment, tol, t0, 0.5 * (t0 + t1), depth + 1, max_depth)
-            right = GeometryUtils.flatten_segment(
+            right = GeoUtil.flatten_segment(
                 segment, tol, 0.5 * (t0 + t1), t1, depth + 1, max_depth)
             # Avoid duplicating the midpoint
             return left[:-1] + right
@@ -86,7 +86,7 @@ class GeometryUtils:
             return None
         try:
             x, y = pt
-            return PointFloat(GeometryUtils.safe_to_float(x), GeometryUtils.safe_to_float(y))
+            return PointFloat(GeoUtil.safe_to_float(x), GeoUtil.safe_to_float(y))
         except Exception:
             return None
 

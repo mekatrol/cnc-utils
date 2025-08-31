@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 import math
 from typing import Tuple
-from geometry.GeometryUtils import GeometryUtils
+from src.geometry.GeoUtil import GeoUtil
 from view.colors import COLORS
 from view.BaseView import BaseView
 
@@ -51,7 +51,7 @@ class View3D(BaseView):
 
     def fit_to_view(self):
         # Compute bounding box in world units
-        minx, miny, maxx, maxy = GeometryUtils.world_bounds(self.app.model)
+        minx, miny, maxx, maxy = GeoUtil.world_bounds(self.app.model)
         dx = maxx - minx or 1.0
         dy = maxy - miny or 1.0
         size = max(dx, dy)
@@ -143,7 +143,7 @@ class View3D(BaseView):
         h = c.winfo_height()
 
         # Compute pivot at model center in world units (bbox center)
-        minx, miny, maxx, maxy = GeometryUtils.world_bounds(self.app.model)
+        minx, miny, maxx, maxy = GeoUtil.world_bounds(self.app.model)
         cx = (minx + maxx) * 0.5
         cy = (miny + maxy) * 0.5
 
@@ -175,7 +175,7 @@ class View3D(BaseView):
         c = self.canvas
         c.create_rectangle(0, 0, w, h, fill="#111", outline="")
 
-        minx, miny, maxx, maxy = GeometryUtils.world_bounds(self.app.model)
+        minx, miny, maxx, maxy = GeoUtil.world_bounds(self.app.model)
         dx = max(maxx - minx, 1.0)
         dy = max(maxy - miny, 1.0)
         size = max(dx, dy)

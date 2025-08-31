@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
-from geometry.GeometryUtils import GeometryUtils
+from src.geometry.GeoUtil import GeoUtil
 from view.colors import COLORS
 from view.BaseView import BaseView
 
@@ -35,7 +35,7 @@ class TopDownView(BaseView):
     def fit_to_view(self):
         w = self.canvas.winfo_width() or 1
         h = self.canvas.winfo_height() or 1
-        minx, miny, maxx, maxy = GeometryUtils.world_bounds(self.app.model)
+        minx, miny, maxx, maxy = GeoUtil.world_bounds(self.app.model)
         dx = maxx - minx or 1.0
         dy = maxy - miny or 1.0
         # Leave a little padding
