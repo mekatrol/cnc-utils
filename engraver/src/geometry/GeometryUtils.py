@@ -12,6 +12,11 @@ class GeometryUtils:
         return int(round(x * scale))
 
     @staticmethod
+    def int_float_to(x: int, scale: int) -> float:
+        """Convert scaled integer to floating point."""
+        return float(x) / float(scale)
+
+    @staticmethod
     def safe_float(s: str, default: float = 0.0) -> float:
         """Safely convert string to floating point, return default value if it fails."""
         try:
