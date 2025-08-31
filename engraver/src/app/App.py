@@ -9,6 +9,7 @@ from FileBrowser import FileBrowser
 from geometry.PointInt import PointInt
 from geometry.PolylineInt import PolylineInt
 from geometry.GeometryInt import GeometryInt
+from svg.SvgConverter import SvgConverter
 from view.TopDownView import TopDownView
 from view.View3D import View3D
 
@@ -116,12 +117,19 @@ class App(tk.Tk):
     def open_file_dialog(self):
         path = filedialog.askopenfilename(
             title="Open geometry JSON",
-            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")],
+            filetypes=[("JSON Files", "*.json"), ("SVG Files", "*.svg"), ("All Files", "*.*")],
         )
         if not path:
             return
+
         try:
-            geom = App.load_geometry_from_json(Path(path))
+            ext = Path(path).suffix.lower()
+            if ext == ".json":
+                geom = App.load_geometry_from_json(Path(path))
+            elif ext == ".svg":
+                geom = SvgConverter.convert(path, scale=10000, tol=0.1)
+            else:
+                return
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load {path}:\n{e}")
             return
