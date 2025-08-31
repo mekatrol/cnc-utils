@@ -117,7 +117,7 @@ class App(tk.Tk):
     def open_file_dialog(self):
         path = filedialog.askopenfilename(
             title="Open geometry JSON",
-            filetypes=[("JSON Files", "*.json"), ("SVG Files", "*.svg"), ("All Files", "*.*")],
+            filetypes=[("SVG Files", "*.svg"), ("JSON Files", "*.json"), ("All Files", "*.*")],
         )
         if not path:
             return
