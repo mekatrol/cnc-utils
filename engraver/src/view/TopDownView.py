@@ -1,6 +1,5 @@
-
-
 from geometry.GeometryUtils import GeometryUtils
+from view.colors import COLORS
 from view.BaseView import BaseView
 
 
@@ -95,7 +94,8 @@ class TopDownView(BaseView):
             self._draw_center_cross(w, h)
             return
         s = g.scale if g.scale else 1
-        for pl in g.polylines:
+
+        for i, pl in enumerate(g.polylines):
             if len(pl.pts) < 2:
                 continue
             coords = []
@@ -109,7 +109,8 @@ class TopDownView(BaseView):
                 last = (xs, ys)
             # Batch draw this polyline as many segments
             if coords:
-                c.create_line(*coords, fill="#8fd3ff", width=1.5)
+                color = COLORS[i % len(COLORS)]
+                c.create_line(*coords, fill=color, width=1.5)
 
     def _draw_grid(self, w: int, h: int):
         c = self.canvas
