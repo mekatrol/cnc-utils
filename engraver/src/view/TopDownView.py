@@ -1,6 +1,12 @@
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from geometry.GeometryUtils import GeometryUtils
 from view.colors import COLORS
 from view.BaseView import BaseView
+
+if TYPE_CHECKING:
+    # Import only for type checking; does not run at runtime
+    from app.App import App  # adjust module path
 
 
 class TopDownView(BaseView):

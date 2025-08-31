@@ -1,7 +1,14 @@
+from __future__ import annotations
+from typing import TYPE_CHECKING
 import math
 from typing import Tuple
 from geometry.GeometryUtils import GeometryUtils
+from view.colors import COLORS
 from view.BaseView import BaseView
+
+if TYPE_CHECKING:
+    # Import only for type checking; does not run at runtime
+    from app.App import App  # adjust module path
 
 
 class View3D(BaseView):
@@ -150,7 +157,7 @@ class View3D(BaseView):
         s = g.scale if g.scale else 1
 
         # Draw lines RELATIVE to pivot so rotations happen about model center
-        for pl in g.polylines:
+        for i, pl in enumerate(g.polylines):
             if len(pl.pts) < 2:
                 continue
             last_pt = None
@@ -159,7 +166,8 @@ class View3D(BaseView):
                 y_rel = p.y / s - cy
                 xs, ys, _ = self._project_point(x_rel, y_rel, 0.0, w, h)
                 if last_pt is not None:
-                    c.create_line(last_pt[0], last_pt[1], xs, ys, fill="#8fd3ff", width=1.5)
+                    color = COLORS[i % len(COLORS)]
+                    c.create_line(last_pt[0], last_pt[1], xs, ys, fill=color, width=1.5)
                 last_pt = (xs, ys)
 
     def _draw_grid_3d(self, w: int, h: int):

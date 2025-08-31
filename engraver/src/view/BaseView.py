@@ -1,5 +1,11 @@
+from __future__ import annotations
+from typing import TYPE_CHECKING
 import tkinter as tk
 from tkinter import ttk
+
+if TYPE_CHECKING:
+    # Import only for type checking; does not run at runtime
+    from app.App import App  # adjust module path
 
 
 class BaseView(ttk.Frame):
