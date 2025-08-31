@@ -42,7 +42,7 @@ class SvgConverter:
         return out
 
     @staticmethod
-    def _path_to_polylines_svgelements(path: Path, chord_tol: float) -> List[List[PointFloat]]:
+    def _path_to_polylines(path: Path, chord_tol: float) -> List[List[PointFloat]]:
         polylines: List[List[PointFloat]] = []
         current: List[PointFloat] = []
         last_end: Optional[PointFloat] = None
@@ -141,7 +141,7 @@ class SvgConverter:
         for elem, M in SvgConverter._walk_with_matrix(doc):
             if isinstance(elem, Path):
                 # Discretize in local coords, then transform sampled points.
-                for poly in SvgConverter._path_to_polylines_svgelements(elem, chord_tol=tol):
+                for poly in SvgConverter._path_to_polylines(elem, chord_tol=tol):
                     polylines_float.append(SvgConverter._apply_matrix_to_points(poly, M))
 
             elif isinstance(elem, Line):
