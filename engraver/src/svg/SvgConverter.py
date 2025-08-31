@@ -54,8 +54,7 @@ class SvgConverter:
             # Convert arcs to cubic(s) first for robust flattening
             segments: List = []
             if isinstance(seg, Arc):
-                segments = [CubicBezier(
-                    *c) if isinstance(c, CubicBezier) else c for c in seg.as_cubic_curves()]
+                segments = list(seg.as_cubic_curves())
             else:
                 segments = [seg]
 
@@ -143,7 +142,7 @@ class SvgConverter:
 
             if tag == "g":
                 for ch in list(el):
-                    walk(ch, T)
+                    yield from walk(ch, T)
                 return
 
             # ----- <path>
@@ -163,7 +162,7 @@ class SvgConverter:
             elif tag in ("polyline", "polygon") and "points" in el.attrib:
                 pts_txt = el.attrib["points"].strip()
                 # Robust split for points="x1,y1 x2,y2 ..."
-                nums = [float(n) for n in re.split(r"[ ,]+", pts_txt.strip()) if n]
+                nums = [float(n) for n in re.split(r"[\s,]+", pts_txt.strip()) if n]
                 if len(nums) % 2 == 0:
                     pts = [complex(nums[i], nums[i + 1])
                            for i in range(0, len(nums), 2)]
