@@ -3,7 +3,7 @@ import re
 import sys
 from typing import List, Iterable, Optional
 from svgpathtools import Path, CubicBezier, Arc, parse_path
-from geometry.Utils import Utils
+from geometry.GeometryUtils import GeometryUtils
 from geometry.GeometryInt import GeometryInt
 from geometry.PolylineInt import PolylineInt
 from geometry.PointInt import PointInt
@@ -34,35 +34,14 @@ class SvgConverter:
         polylines_int: List[PolylineInt] = []
         for poly in polylines_float:
             pts_i = [PointInt(
-                Utils.float_to_int(p.real, scale),
+                GeometryUtils.float_to_int(p.real, scale),
                 # We need to flip Z on conversion:
                 #  * SVG defines the origin at the top-left, with +y downward.
                 #  * Matplotlib 3D (and most CAD/CAM coordinate systems) assume +y upward and +z upward.
-                -Utils.float_to_int(p.imag, scale)) for p in poly]
+                -GeometryUtils.float_to_int(p.imag, scale)) for p in poly]
             polylines_int.append(PolylineInt(pts=pts_i))
 
         return GeometryInt(polylines=polylines_int, scale=scale)
-
-    @staticmethod
-    def _flatten_segment(segment, tol: float, t0: float = 0.0, t1: float = 1.0, depth: int = 0, max_depth: int = 18) -> List[complex]:
-        """Recursively approximate any segment with a polyline within tolerance.
-        Returns a list of complex points from t0..t1 (including endpoints).
-        """
-        p0 = segment.point(t0)
-        p2 = segment.point(t1)
-        pm = segment.point(0.5 * (t0 + t1))
-
-        # Error as distance of midpoint to chord
-        err = Utils.point_line_dist(pm, p0, p2)
-        if err <= tol or depth >= max_depth:
-            return [p0, p2]
-        else:
-            left = SvgConverter._flatten_segment(
-                segment, tol, t0, 0.5 * (t0 + t1), depth + 1, max_depth)
-            right = SvgConverter._flatten_segment(
-                segment, tol, 0.5 * (t0 + t1), t1, depth + 1, max_depth)
-            # Avoid duplicating the midpoint
-            return left[:-1] + right
 
     @staticmethod
     def path_to_polylines(path: Path, tol: float = 0.25) -> List[List[complex]]:
@@ -81,7 +60,7 @@ class SvgConverter:
                 segments = [seg]
 
             for s in segments:
-                pts = SvgConverter._flatten_segment(s, tol)
+                pts = GeometryUtils.flatten_segment(s, tol)
                 if not current:
                     current.extend(pts)
                 else:
@@ -195,38 +174,38 @@ class SvgConverter:
 
             # ----- <line>
             elif tag == "line":
-                x1 = Utils.safe_float(el.attrib.get("x1", "0"))
-                y1 = Utils.safe_float(el.attrib.get("y1", "0"))
-                x2 = Utils.safe_float(el.attrib.get("x2", "0"))
-                y2 = Utils.safe_float(el.attrib.get("y2", "0"))
+                x1 = GeometryUtils.safe_float(el.attrib.get("x1", "0"))
+                y1 = GeometryUtils.safe_float(el.attrib.get("y1", "0"))
+                x2 = GeometryUtils.safe_float(el.attrib.get("x2", "0"))
+                y2 = GeometryUtils.safe_float(el.attrib.get("y2", "0"))
                 pts = [complex(x1, y1), complex(x2, y2)]
                 yield SvgConverter._apply_transform_to_polyline(pts, T)
 
             # ----- <rect> (no rounded corners in this minimal version)
             elif tag == "rect":
-                x = Utils.safe_float(el.attrib.get("x", "0"))
-                y = Utils.safe_float(el.attrib.get("y", "0"))
-                w = Utils.safe_float(el.attrib.get("width", "0"))
-                h = Utils.safe_float(el.attrib.get("height", "0"))
+                x = GeometryUtils.safe_float(el.attrib.get("x", "0"))
+                y = GeometryUtils.safe_float(el.attrib.get("y", "0"))
+                w = GeometryUtils.safe_float(el.attrib.get("width", "0"))
+                h = GeometryUtils.safe_float(el.attrib.get("height", "0"))
                 if w > 0 and h > 0:
                     pts = SvgConverter._rect_to_polyline(x, y, w, h)
                     yield SvgConverter._apply_transform_to_polyline(pts, T)
 
             # ----- <circle>
             elif tag == "circle":
-                cx = Utils.safe_float(el.attrib.get("cx", "0"))
-                cy = Utils.safe_float(el.attrib.get("cy", "0"))
-                r = Utils.safe_float(el.attrib.get("r", "0"))
+                cx = GeometryUtils.safe_float(el.attrib.get("cx", "0"))
+                cy = GeometryUtils.safe_float(el.attrib.get("cy", "0"))
+                r = GeometryUtils.safe_float(el.attrib.get("r", "0"))
                 if r > 0:
                     pts = SvgConverter._circle_to_polyline(cx, cy, r)
                     yield SvgConverter._apply_transform_to_polyline(pts, T)
 
             # ----- <ellipse>
             elif tag == "ellipse":
-                cx = Utils.safe_float(el.attrib.get("cx", "0"))
-                cy = Utils.safe_float(el.attrib.get("cy", "0"))
-                rx = Utils.safe_float(el.attrib.get("rx", "0"))
-                ry = Utils.safe_float(el.attrib.get("ry", "0"))
+                cx = GeometryUtils.safe_float(el.attrib.get("cx", "0"))
+                cy = GeometryUtils.safe_float(el.attrib.get("cy", "0"))
+                rx = GeometryUtils.safe_float(el.attrib.get("rx", "0"))
+                ry = GeometryUtils.safe_float(el.attrib.get("ry", "0"))
                 if rx > 0 and ry > 0:
                     pts = SvgConverter._ellipse_to_polyline(cx, cy, rx, ry)
                     yield SvgConverter._apply_transform_to_polyline(pts, T)

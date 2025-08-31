@@ -1,9 +1,10 @@
 import math
 from dataclasses import dataclass
+from typing import List
 
 
 @dataclass(frozen=True)
-class Utils:
+class GeometryUtils:
     @staticmethod
     def float_to_int(x: float, scale: int) -> int:
         """Convert floating point to scaled integer."""
@@ -32,3 +33,24 @@ class Utils:
         t = max(0.0, min(1.0, ((px - ax) * abx + (py - ay) * aby) / ab2))
         cx, cy = ax + t * abx, ay + t * aby
         return math.hypot(px - cx, py - cy)
+
+    @staticmethod
+    def flatten_segment(segment, tol: float, t0: float = 0.0, t1: float = 1.0, depth: int = 0, max_depth: int = 18) -> List[complex]:
+        """Recursively approximate any segment with a polyline within tolerance.
+        Returns a list of complex points from t0..t1 (including endpoints).
+        """
+        p0 = segment.point(t0)
+        p2 = segment.point(t1)
+        pm = segment.point(0.5 * (t0 + t1))
+
+        # Error as distance of midpoint to chord
+        err = GeometryUtils.point_line_dist(pm, p0, p2)
+        if err <= tol or depth >= max_depth:
+            return [p0, p2]
+        else:
+            left = GeometryUtils.flatten_segment(
+                segment, tol, t0, 0.5 * (t0 + t1), depth + 1, max_depth)
+            right = GeometryUtils.flatten_segment(
+                segment, tol, 0.5 * (t0 + t1), t1, depth + 1, max_depth)
+            # Avoid duplicating the midpoint
+            return left[:-1] + right
