@@ -4,3 +4,4 @@ numpy
 svgelements
 pytest
 pytest-pythonpath
+pyclipper

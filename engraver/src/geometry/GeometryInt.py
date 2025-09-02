@@ -6,7 +6,7 @@ from geometry.PolylineInt import PolylineInt
 @dataclass
 class GeometryInt:
     polylines: List[PolylineInt]
-    scale: int
+    scale: int = 1
 
     def bounds(self) -> Tuple[int, int, int, int]:
         """(minx, miny, maxx, maxy) in integer space"""
