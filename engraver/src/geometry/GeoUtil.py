@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 from geometry.GeometryInt import GeometryInt
 from geometry.PointFloat import PointFloat
+from geometry.PointInt import PointInt
 
 
 @dataclass(frozen=True)
@@ -97,3 +98,16 @@ class GeoUtil:
         d = abs(a - b)
         m = max(abs(a), abs(b), 1.0)
         return d <= max(abs_tol, 1e-6 * m)
+
+    @staticmethod
+    def area(points: List["PointInt"]) -> int:
+        n = len(points)
+        area = 0
+
+        # Calculate area (shoelace)
+        for i1 in range(n):
+            i2 = (i1 + 1) % n
+            area += points[i1].x * points[i2].y - points[i1].y * points[i2].x
+
+        # Divide by 2 to get true area
+        return area >> 1

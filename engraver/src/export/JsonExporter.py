@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass
 from geometry.GeometryInt import GeometryInt
-from src.geometry.GeoUtil import GeoUtil
+from geometry.GeoUtil import GeoUtil
 
 
 @dataclass

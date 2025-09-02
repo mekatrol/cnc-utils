@@ -1,7 +1,7 @@
 import math
 from typing import Any, Iterable, List, Optional, Tuple, cast
 from svgelements import SVG, Path, Line, SimpleLine, Rect, Circle, Ellipse, Polyline, Polygon, Matrix, Close
-from src.geometry.GeoUtil import GeoUtil
+from geometry.GeoUtil import GeoUtil
 from geometry.GeometryInt import GeometryInt
 from geometry.PolylineInt import PolylineInt
 from geometry.PointInt import PointInt

@@ -60,7 +60,7 @@ class App(tk.Tk):
 
         # Default tabs
         self.add_view("2D")
-        self.add_view("3D")
+        # self.add_view("3D")
 
         # Load a tiny demo so it's not heartbreakingly empty
         self.load_demo_geometry()

@@ -9,7 +9,7 @@
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}",
       "env": {
-        "PYTHONPATH": "${workspaceFolder}"
+        "PYTHONPATH": "${workspaceFolder}/src"
       },
       "args": [
         "--input",
@@ -22,6 +22,17 @@
         "output/six-toolpaths.json"
       ],
       "justMyCode": true
+    },
+    {
+      "name": "Python: pytest",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      },
+      "args": ["-q"]
     }
   ]
 }

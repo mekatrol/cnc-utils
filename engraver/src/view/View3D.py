@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 import math
 from typing import Tuple
-from src.geometry.GeoUtil import GeoUtil
+from geometry.GeoUtil import GeoUtil
 from view.colors import COLORS
 from view.BaseView import BaseView
 

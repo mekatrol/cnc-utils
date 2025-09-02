@@ -2,3 +2,5 @@ svgpathtools
 matplotlib 
 numpy
 svgelements
+pytest
+pytest-pythonpath
