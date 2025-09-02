@@ -162,7 +162,10 @@ class App(tk.Tk):
 
     def load_demo_geometry(self):
         # Simple rectangle + diagonal in 1000-scale units
-        pl1 = PolylineInt([PointInt(0, 0), PointInt(10000, 0), PointInt(10000, 6000), PointInt(0, 6000), PointInt(0, 0)])
-        pl2 = PolylineInt([PointInt(0, 0), PointInt(10000, 6000)])
-        geom = GeometryInt(polylines=[pl1, pl2], scale=1000)
+        pl1 = PolylineInt(points=[
+            PointInt(0000, 0000), PointInt(8000, 0000), PointInt(8000, 8000),
+            PointInt(6000, 8000), PointInt(6000, 2000), PointInt(2000, 2000),
+            PointInt(2000, 8000), PointInt(0000, 8000), PointInt(0000, 0000)],
+            simplify_tolerance=5)
+        geom = GeometryInt(polylines=[pl1], scale=1000)
         self.set_geometry(geom, source="<demo>")

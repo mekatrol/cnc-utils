@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 from geometry.GeometryInt import GeometryInt
 from geometry.PointFloat import PointFloat
+from geometry.PointInPolygonResult import PointInPolygonResult
 from geometry.PointInt import PointInt
 
 
@@ -111,3 +112,54 @@ class GeoUtil:
 
         # Divide by 2 to get true area
         return area >> 1
+
+    @staticmethod
+    def point_in_polygon(point: PointInt, poly_points: List[PointInt]) -> PointInPolygonResult:
+        """
+        Ray-casting with left/right counts
+        Polygon may be open or closed; repeated first/last vertex is OK.
+        """
+        n = len(poly_points)
+
+        # Empty polygon then point is outside of it
+        if n == 0:
+            return PointInPolygonResult.Outside
+
+        # shift so `point` -> (0,0)
+        poly = [PointInt(p.x - point.x, p.y - point.y) for p in poly_points]
+
+        r_cross = 0  # crossings on +x ray
+        l_cross = 0  # crossings on -x ray
+
+        for i in range(n):
+            # vertex hit
+            if poly[i].x == 0 and poly[i].y == 0:
+                return PointInPolygonResult.Vertex
+
+            i1 = (i - 1) % n
+            yi, yi1 = poly[i].y, poly[i1].y
+
+            # straddles x-axis?
+            if (yi > 0) != (yi1 > 0):
+                # intersection x with +x ray
+                # x = (xi*yi1 - xi1*yi) / (yi1 - yi)
+                num = poly[i].x * yi1 - poly[i1].x * yi
+                den = yi1 - yi  # nonzero because signs differ
+                x = num / den
+                if x > 0:
+                    r_cross += 1
+
+            if (yi < 0) != (yi1 < 0):
+                # intersection x with -x ray
+                num = poly[i].x * yi1 - poly[i1].x * yi
+                den = yi1 - yi
+                x = num / den
+                if x < 0:
+                    l_cross += 1
+
+        # on-edge if parities differ
+        if (r_cross % 2) != (l_cross % 2):
+            return PointInPolygonResult.Edge
+
+        # inside if odd right-cross count
+        return PointInPolygonResult.Inside if (r_cross % 2) == 1 else PointInPolygonResult.Outside
