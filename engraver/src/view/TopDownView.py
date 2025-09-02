@@ -102,11 +102,11 @@ class TopDownView(BaseView):
         s = g.scale if g.scale else 1
 
         for i, pl in enumerate(g.polylines):
-            if len(pl.pts) < 2:
+            if len(pl.points) < 2:
                 continue
             coords = []
             last = None
-            for p in pl.pts:
+            for p in pl.points:
                 xw, yw = p.x / s, p.y / s
                 xs = xw * self.zoom + self.offset[0]
                 ys = -yw * self.zoom + self.offset[1]
@@ -144,5 +144,5 @@ class TopDownView(BaseView):
     def _draw_center_cross(self, w: int, h: int):
         c = self.canvas
         c.create_text(w // 2, h // 2, text="No geometry loaded", fill="#888")
-        c.create_line(w//2 - 10, h//2, w//2 + 10, h//2, fill="#444")
-        c.create_line(w//2, h//2 - 10, w//2, h//2 + 10, fill="#444")
+        c.create_line(w // 2 - 10, h // 2, w // 2 + 10, h // 2, fill="#444")
+        c.create_line(w // 2, h // 2 - 10, w // 2, h // 2 + 10, fill="#444")

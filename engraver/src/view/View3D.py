@@ -81,7 +81,7 @@ class View3D(BaseView):
         self.yaw += dx * 0.01
         self.pitch += dy * 0.01
         # Clamp pitch to avoid flipping
-        self.pitch = max(-math.pi/2 + 0.05, min(math.pi/2 - 0.05, self.pitch))
+        self.pitch = max(-math.pi / 2 + 0.05, min(math.pi / 2 - 0.05, self.pitch))
         self._last = (event.x, event.y)
         self.redraw()
 
@@ -103,7 +103,7 @@ class View3D(BaseView):
         self._zoom(1 if event.delta > 0 else -1)
 
     def _zoom(self, direction):
-        factor = 0.9 if direction > 0 else 1/0.9
+        factor = 0.9 if direction > 0 else 1 / 0.9
         self.distance *= factor
         self.distance = max(0.1, min(1e6, self.distance))
         self.redraw()
@@ -158,10 +158,10 @@ class View3D(BaseView):
 
         # Draw lines RELATIVE to pivot so rotations happen about model center
         for i, pl in enumerate(g.polylines):
-            if len(pl.pts) < 2:
+            if len(pl.points) < 2:
                 continue
             last_pt = None
-            for p in pl.pts:
+            for p in pl.points:
                 x_rel = p.x / s - cx
                 y_rel = p.y / s - cy
                 xs, ys, _ = self._project_point(x_rel, y_rel, 0.0, w, h)
@@ -186,7 +186,7 @@ class View3D(BaseView):
         x = -half
         while x <= half:
             p1 = self._project_point(x, -half, 0.0, w, h)
-            p2 = self._project_point(x,  half, 0.0, w, h)
+            p2 = self._project_point(x, half, 0.0, w, h)
             c.create_line(p1[0], p1[1], p2[0], p2[1], fill="#1a1a1a")
             x += step
 

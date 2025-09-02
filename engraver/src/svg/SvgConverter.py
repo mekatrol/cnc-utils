@@ -212,6 +212,6 @@ class SvgConverter:
                               -GeoUtil.float_to_int(pt.y, scale))
                      for pt in poly]
             if len(pts_i) >= 2:
-                polylines_int.append(PolylineInt(pts=pts_i))
+                polylines_int.append(PolylineInt(points=pts_i))
 
         return GeometryInt(polylines=polylines_int, scale=scale)
