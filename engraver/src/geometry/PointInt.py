@@ -11,6 +11,10 @@ class PointInt:
     def as_tuple(self) -> Tuple[int, int]:
         return (self.x, self.y)
 
+    def __iter__(self):
+        yield self.x
+        yield self.y
+
     def __add__(self, other: "VectorInt") -> "PointInt":
         return PointInt(self.x + other.x, self.y + other.y)
 

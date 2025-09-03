@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List
+from typing import Iterator, List, Union
 from geometry.PointInt import PointInt
 
 
@@ -7,6 +7,15 @@ from geometry.PointInt import PointInt
 class PolylineInt:
     points: List[PointInt] = field(default_factory=list)
     simplify_tolerance: int = 5
+
+    def __iter__(self) -> Iterator[PointInt]:
+        return iter(self.points)
+
+    def __len__(self) -> int:
+        return len(self.points)
+
+    def __getitem__(self, idx: Union[int, slice]) -> Union[PointInt, List[PointInt]]:
+        return self.points[idx]
 
     def simplify(self) -> None:
         # There needs to be two or more points to simplyfy
