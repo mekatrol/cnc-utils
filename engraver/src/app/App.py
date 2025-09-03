@@ -65,6 +65,7 @@ class App(tk.Tk):
         # Load a tiny demo so it's not heartbreakingly empty
         self.load_demo_geometry()
 
+        # We want view to fit on inital demo geometry
         self.after_idle(lambda: setattr(frame, "fit_to_view_pending", True))
 
     @staticmethod
