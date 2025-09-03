@@ -8,9 +8,10 @@ from PySide6.QtGui import QAction, QPen, QBrush, QColor, QTransform, QPainterPat
 from PySide6.QtWidgets import (
     QApplication, QGraphicsView, QGraphicsScene,
     QGraphicsPathItem, QGraphicsEllipseItem,
-    QFileDialog, QMainWindow
+    QFileDialog, QMainWindow, QGraphicsItem
 )
 
+from colors import COLORS
 from geometry.GeometryInt import GeometryInt
 from geometry.PointInt import PointInt
 from geometry.PolylineInt import PolylineInt
@@ -43,6 +44,10 @@ class Main(QMainWindow):
         act.triggered.connect(self.open_file)
         self.menuBar().addMenu("&File").addAction(act)
 
+        self.geom = Main.load_demo_geometry()
+        self.fit_scene()
+        self.load_geometry()
+
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open geometry JSON/SVG",
                                               filter="SVG (*.svg);;JSON (*.json);;All (*.*)")
@@ -57,45 +62,49 @@ class Main(QMainWindow):
             else:
                 self.geom = SvgConverter.svg_to_geometry_int(path, scale=10000, tol=0.25)
 
-            self.fit_scene(self.geom)
-            self.load_geometry(self.geom)
+            self.fit_scene()
+            self.load_geometry()
         finally:
             QApplication.restoreOverrideCursor()
 
-    def load_geometry(self, g: GeometryInt):
-        scale = getattr(g, "scale", None) or (g.get("scale", 1) if isinstance(g, dict) else 1)
-        colors = ["#2aaaff", "#ff6b6b", "#51cf66", "#fab005", "#845ef7"]
+    def load_geometry(self):
+        scale = self.geom.scale
+        colors = COLORS
 
-        polys = g.polylines
+        for i, pl in enumerate(self.geom.polylines):
+            pen = QPen(QColor(colors[i % len(colors)]), 1.5)
+            pen.setCosmetic(True)
 
-        for i, pl in enumerate(polys):
-            pts = pl.points
-            if len(pts) < 1:
+            points = pl.points
+
+            if len(points) < 1:
                 continue
+
             path = QPainterPath()
-            x0, y0 = pts[0]
+            x0, y0 = points[0]
             path.moveTo(QPointF(x0 / scale, -y0 / scale))
-            for x, y in pts[1:]:
+            for x, y in points[1:]:
                 path.lineTo(QPointF(x / scale, -y / scale))
             item = QGraphicsPathItem(path)
-            item.setPen(QPen(QColor(colors[i % len(colors)]), 1.5))
+            item.setPen(pen)
             self.scene.addItem(item)
 
-        pts = g.points
-
         r = 3
-        for i, (x, y) in enumerate(pts):
+        for i, (x, y) in enumerate(self.geom.points):
             cx, cy = x / scale, -y / scale
             dot = QGraphicsEllipseItem(cx - r, cy - r, 2 * r, 2 * r)
+            dot.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
             color = QColor(colors[i % len(colors)])
-            dot.setPen(QPen(color))
+            pen = QPen(color, 1.0)
+            pen.setCosmetic(True)
+            dot.setPen(pen)
             dot.setBrush(QBrush(color))
             self.scene.addItem(dot)
 
-    def fit_scene(self, g: GeometryInt):
-        bounds = g.bounds()
+    def fit_scene(self):
+        bounds = self.geom.bounds()
         rect = QRectF(bounds[0], bounds[1], bounds[2], bounds[3])
-        # rect = self.scene.itemsBoundingRect()
+        rect = self.scene.itemsBoundingRect()
 
         if rect.isNull():
             rect = QRectF(-50, -50, 100, 100)
@@ -140,6 +149,27 @@ class Main(QMainWindow):
                         pls.append(PolylineInt(pts))
 
         return GeometryInt(pls, [], scale)
+
+    @staticmethod
+    def load_demo_geometry() -> GeometryInt:
+        # Simple rectangle + diagonal in 1000-scale units
+        polyline = PolylineInt(points=[
+            PointInt(0000, 0000), PointInt(8000, 0000), PointInt(8000, 8000),
+            PointInt(6000, 8000), PointInt(6000, 2000), PointInt(2000, 2000),
+            PointInt(2000, 8000), PointInt(0000, 8000), PointInt(0000, 0000)],
+            simplify_tolerance=5)
+
+        points = [
+            PointInt(1000, 4000),
+            PointInt(4000, 2000),
+            PointInt(2000, 2000),
+            PointInt(4000, 6000),
+            PointInt(9000, 4000),
+            PointInt(-2000, 1000)
+        ]
+
+        geom = GeometryInt(polylines=[polyline], points=points, scale=1000)
+        return geom
 
 
 if __name__ == "__main__":
