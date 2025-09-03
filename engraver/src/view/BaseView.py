@@ -16,7 +16,7 @@ class BaseView(ttk.Frame):
         self.canvas.pack(fill=tk.BOTH, expand=True)
         self.canvas.bind("<Configure>", self._on_resize)
         self.canvas.bind("<Expose>", lambda e: self.redraw())
-        # Common mouse bindings are set per subclass
+        self.fit_to_view_pending = False
 
     def _on_resize(self, event):
         self.redraw()

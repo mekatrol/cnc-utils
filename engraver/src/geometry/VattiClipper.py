@@ -41,20 +41,24 @@ class VattiClipper:
         return out
 
     @staticmethod
-    def paths_to_geometry_int(
-        paths: Iterable[Iterable[Tuple[int, int]]],
-        *,
-        skip_empty: bool = True,
-        drop_duplicate_close: bool = True,
-    ) -> GeometryInt:
+    def paths_to_geometry_int(paths: Iterable[Iterable[Tuple[int, int]]]) -> GeometryInt:
         polylines: List[PolylineInt] = []
+
         for path in paths:
-            pts = [PointInt(int(x), int(y)) for (x, y) in path]
-            if drop_duplicate_close and len(pts) >= 2 and pts[0] == pts[-1]:
-                pts = pts[:-1]
-            if pts or not skip_empty:
-                polylines.append(PolylineInt(points=pts))
-        return GeometryInt(polylines=polylines)
+            points = [PointInt(int(x), int(y)) for (x, y) in path]
+
+            # Drop
+            if len(points) >= 2 and points[0] == points[-1]:
+                points = points[:-1]
+
+            if points:
+                polylines.append(PolylineInt(points=points))
+
+        geo = GeometryInt(polylines=polylines)
+
+        geo.simplify()
+
+        return geo
 
     @staticmethod
     def clip_polygons(subjects: GeometryInt,
@@ -73,6 +77,7 @@ class VattiClipper:
             pc.AddPaths(clip, pyclipper.PT_CLIP, True)     # type: ignore # closed
 
         sol = pc.Execute(int(op), int(fill_rule), int(fill_rule))
+
         return VattiClipper.paths_to_geometry_int(sol)
 
     @staticmethod
@@ -80,13 +85,17 @@ class VattiClipper:
                            clips: GeometryInt,
                            op: ClipOp,
                            fill_rule: FillRule = FillRule.EVENODD):
+
         subj = VattiClipper._to_paths(subjects)
         clip = VattiClipper._to_paths(clips)
         pc = pyclipper.Pyclipper()  # type: ignore
+
         if subj:
             pc.AddPaths(subj, pyclipper.PT_SUBJECT, True)  # type: ignore
+
         if clip:
             pc.AddPaths(clip, pyclipper.PT_CLIP, True)  # type: ignore
+
         tree = pc.Execute2(int(op), int(fill_rule), int(fill_rule))  # PolyTree
 
         def walk(node):

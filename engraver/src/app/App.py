@@ -59,11 +59,13 @@ class App(tk.Tk):
         self.notebook.pack(fill=tk.BOTH, expand=True)
 
         # Default tabs
-        self.add_view("2D")
+        frame = self.add_view("2D")
         # self.add_view("3D")
 
         # Load a tiny demo so it's not heartbreakingly empty
         self.load_demo_geometry()
+
+        self.after_idle(lambda: setattr(frame, "fit_to_view_pending", True))
 
     @staticmethod
     def _as_point(pt) -> PointInt:

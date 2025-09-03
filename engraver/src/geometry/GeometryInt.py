@@ -13,3 +13,7 @@ class GeometryInt:
         xs = [p.x for pl in self.polylines for p in pl.points]
         ys = [p.y for pl in self.polylines for p in pl.points]
         return (min(xs), min(ys), max(xs), max(ys)) if xs and ys else (0, 0, 0, 0)
+
+    def simplify(self) -> None:
+        for polyline in self.polylines:
+            polyline.simplify()

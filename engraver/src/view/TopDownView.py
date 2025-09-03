@@ -33,6 +33,7 @@ class TopDownView(BaseView):
 
     # View control
     def fit_to_view(self):
+        self.fit_to_view_pending = False
         w = self.canvas.winfo_width() or 1
         h = self.canvas.winfo_height() or 1
         minx, miny, maxx, maxy = GeoUtil.world_bounds(self.app.model)
@@ -88,6 +89,10 @@ class TopDownView(BaseView):
 
     # Drawing
     def redraw(self):
+        if self.fit_to_view_pending:
+            self.fit_to_view()
+            return
+
         c = self.canvas
         c.delete("all")
         w = c.winfo_width()
