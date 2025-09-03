@@ -11,7 +11,7 @@ from geometry.PointInt import PointInt
 from geometry.PolylineInt import PolylineInt
 from geometry.GeometryInt import GeometryInt
 from svg.SvgConverter import SvgConverter
-from view.TopDownView import TopDownView
+from view.View2D import View2D
 from view.View3D import View3D
 
 
@@ -59,8 +59,8 @@ class App(tk.Tk):
         self.notebook.pack(fill=tk.BOTH, expand=True)
 
         # Default tabs
+        self.add_view("3D")
         frame = self.add_view("2D")
-        # self.add_view("3D")
 
         # Load a tiny demo so it's not heartbreakingly empty
         self.load_demo_geometry()
@@ -141,11 +141,11 @@ class App(tk.Tk):
 
     def add_view(self, kind: str):
         if kind == "2D":
-            frame = TopDownView(self.notebook, self)
-            title = "Top-down 2D"
+            frame = View2D(self.notebook, self)
+            title = "2D View"
         elif kind == "3D":
             frame = View3D(self.notebook, self)
-            title = "3D Wireframe"
+            title = "3D View"
         else:
             raise ValueError(f"Unknown view kind: {kind}")
 

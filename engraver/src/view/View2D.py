@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from app.App import App  # adjust module path
 
 
-class TopDownView(BaseView):
+class View2D(BaseView):
     def __init__(self, master, app: "App"):
         super().__init__(master, app)
         self.zoom = 1.0  # pixels per world unit
