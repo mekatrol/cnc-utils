@@ -104,7 +104,7 @@ class App(tk.Tk):
                     if len(pts) >= 2:
                         pls.append(PolylineInt(pts))
 
-        return GeometryInt(pls, scale)
+        return GeometryInt(pls, [], scale)
 
     # Geometry management
     def set_geometry(self, geom: GeometryInt, source: str = ""):
@@ -165,10 +165,20 @@ class App(tk.Tk):
 
     def load_demo_geometry(self):
         # Simple rectangle + diagonal in 1000-scale units
-        pl1 = PolylineInt(points=[
+        polyline = PolylineInt(points=[
             PointInt(0000, 0000), PointInt(8000, 0000), PointInt(8000, 8000),
             PointInt(6000, 8000), PointInt(6000, 2000), PointInt(2000, 2000),
             PointInt(2000, 8000), PointInt(0000, 8000), PointInt(0000, 0000)],
             simplify_tolerance=5)
-        geom = GeometryInt(polylines=[pl1], scale=1000)
+
+        points = [
+            PointInt(1000, 4000),
+            PointInt(4000, 2000),
+            PointInt(2000, 2000),
+            PointInt(4000, 6000),
+            PointInt(9000, 4000),
+            PointInt(-2000, 1000)
+        ]
+
+        geom = GeometryInt(polylines=[polyline], points=points, scale=1000)
         self.set_geometry(geom, source="<demo>")

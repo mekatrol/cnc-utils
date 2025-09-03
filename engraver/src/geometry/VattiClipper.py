@@ -54,7 +54,7 @@ class VattiClipper:
             if points:
                 polylines.append(PolylineInt(points=points))
 
-        geo = GeometryInt(polylines=polylines)
+        geo = GeometryInt(polylines=polylines, points=[])
 
         geo.simplify()
 

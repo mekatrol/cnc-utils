@@ -214,4 +214,4 @@ class SvgConverter:
             if len(pts_i) >= 2:
                 polylines_int.append(PolylineInt(points=pts_i))
 
-        return GeometryInt(polylines=polylines_int, scale=scale)
+        return GeometryInt(polylines=polylines_int, points=[], scale=scale)

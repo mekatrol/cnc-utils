@@ -12,8 +12,8 @@ from geometry.PointInt import PointInt
 
 def test_convex_polygon_cases():
     # subjects and clips can be List[PointInt] or PolylineInt(points=[...])
-    A = GeometryInt(polylines=[PolylineInt(points=[PointInt(0, 0), PointInt(8, 0), PointInt(8, 8), PointInt(0, 8)])])
-    B = GeometryInt(polylines=[PolylineInt(points=[PointInt(2, 2), PointInt(6, 2), PointInt(6, 6), PointInt(2, 6)])])
+    A = GeometryInt(polylines=[PolylineInt(points=[PointInt(0, 0), PointInt(8, 0), PointInt(8, 8), PointInt(0, 8)])], points=[])
+    B = GeometryInt(polylines=[PolylineInt(points=[PointInt(2, 2), PointInt(6, 2), PointInt(6, 6), PointInt(2, 6)])], points=[])
 
     u = VattiClipper.clip_polygons(A, B, ClipOp.UNION)          # A ∪ B
     i = VattiClipper.clip_polygons(A, B, ClipOp.INTERSECTION)   # A ∩ B

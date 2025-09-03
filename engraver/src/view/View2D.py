@@ -106,22 +106,36 @@ class View2D(BaseView):
             return
         s = g.scale if g.scale else 1
 
-        for i, pl in enumerate(g.polylines):
-            if len(pl.points) < 2:
+        # Draw geometry polylines
+        for i, polyline in enumerate(g.polylines):
+            # Must be at least 2 points to have any line segments
+            if len(polyline.points) < 2:
                 continue
+
             coords = []
             last = None
-            for p in pl.points:
-                xw, yw = p.x / s, p.y / s
+
+            for poly_point in polyline.points:
+                xw, yw = poly_point.x / s, poly_point.y / s
                 xs = xw * self.zoom + self.offset[0]
                 ys = -yw * self.zoom + self.offset[1]
                 if last is not None:
                     coords.extend([last[0], last[1], xs, ys])
                 last = (xs, ys)
+
             # Batch draw this polyline as many segments
             if coords:
                 color = COLORS[i % len(COLORS)]
                 c.create_line(*coords, fill=color, width=1.5)
+
+        # Points
+        for i, pt in enumerate(g.points):
+            xw, yw = pt.x / s, pt.y / s
+            xs = xw * self.zoom + self.offset[0]
+            ys = -yw * self.zoom + self.offset[1]
+            r = 3  # screen pixels
+            color = COLORS[(i + len(COLORS) >> 1) % len(COLORS)]
+            c.create_oval(xs - r, ys - r, xs + r, ys + r, outline=color, fill=color)
 
     def _draw_grid(self, w: int, h: int):
         c = self.canvas
