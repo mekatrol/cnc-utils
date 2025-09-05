@@ -6,7 +6,6 @@ from typing import List, Optional
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-from FileBrowser import FileBrowser
 from geometry.PointInt import PointInt
 from geometry.PolylineInt import PolylineInt
 from geometry.GeometryInt import GeometryInt
@@ -48,24 +47,11 @@ class AppView(tk.Tk):
         paned.add(left, weight=0)
         paned.add(right, weight=1)
 
-        # Left: file browser
-        self.browser = FileBrowser(left, self)
-        self.browser.pack(fill=tk.BOTH, expand=True)
-
         # Right: toolbar + notebook
         topbar = ttk.Frame(right)
         topbar.pack(fill=tk.X)
         ttk.Label(topbar, textvariable=self.source_label_var).pack(
             side=tk.LEFT, padx=8, pady=6
-        )
-        ttk.Button(topbar, text="Open File", command=self.open_file_dialog).pack(
-            side=tk.RIGHT, padx=6
-        )
-        ttk.Button(topbar, text="New 3D Tab", command=lambda: self.add_view("3D")).pack(
-            side=tk.RIGHT
-        )
-        ttk.Button(topbar, text="New 2D Tab", command=lambda: self.add_view("2D")).pack(
-            side=tk.RIGHT
         )
 
         self.notebook = ttk.Notebook(right)
@@ -201,6 +187,14 @@ class AppView(tk.Tk):
         widget = self.nametowidget(cur)
         if hasattr(widget, "fit_to_view"):
             widget.fit_to_view()
+
+    def reset_current(self):
+        cur = self.notebook.select()
+        if not cur:
+            return
+        widget = self.nametowidget(cur)
+        if hasattr(widget, "reset_view"):
+            widget.reset_view()
 
     def load_demo_geometry(self):
         # Simple rectangle + diagonal in 1000-scale units

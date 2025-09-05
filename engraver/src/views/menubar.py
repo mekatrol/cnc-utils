@@ -10,42 +10,55 @@ if TYPE_CHECKING:
 
 
 class Menubar(tk.Frame):
-    def __init__(self, root: "AppView"):
-        self.root = root
+    def __init__(self, app: "AppView"):
+        self.app = app
 
-        super().__init__(root)
+        super().__init__(app)
 
-        self.main_frame = self
-        self.main_frame.pack(fill=tk.BOTH, expand=True)
-        self.main_frame.columnconfigure(0, weight=1)
-        self.main_frame.rowconfigure(0, weight=1)
+        self.pack(fill=tk.BOTH, expand=True)
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
 
         # No files are dirty by default
         self.files_dirty = False
 
         # Disable menu tear off
-        self.root.option_add("*tearOff", tk.FALSE)
+        self.app.option_add("*tearOff", tk.FALSE)
 
         self.create_menubar()
 
     def create_menubar(self) -> None:
-        self.menubar = tk.Menu(self.root)
-        self.root.config(menu=self.menubar)
+        self.menubar = tk.Menu(self.app)
+        self.app.config(menu=self.menubar)
 
         self.file_menu = tk.Menu(self.menubar)
-        self.edit_menu = tk.Menu(self.menubar)
+        self.view_menu = tk.Menu(self.menubar)
         self.menubar.add_cascade(menu=self.file_menu, label="File")
-        self.menubar.add_cascade(menu=self.edit_menu, label="Edit")
+        self.menubar.add_cascade(menu=self.view_menu, label="View")
 
         self.add_file_menu_items()
+        self.add_view_menu_items()
+
+    def add_view_menu_items(self):
+        self.view_menu.add_command(
+            label="Fit",
+            command=self.app.fit_current,
+        )
+
+        self.view_menu.add_command(
+            label="Reset",
+            command=self.app.reset_current,
+        )
 
     def add_file_menu_items(self):
         self.file_menu.add_command(
             label="Open",
             accelerator="Ctrl-O",
             state=tk.ACTIVE,
-            command=self.root.open_file_dialog,
+            command=self.app.open_file_dialog,
         )
+
+        self.file_menu.add_separator()
 
         if sys.platform == "darwin":  # macOS
             accel = "Command-X"  # ⌘X
@@ -54,13 +67,11 @@ class Menubar(tk.Frame):
             accel = "Alt-X"
             bind = "<Alt-x>"
 
-        # in your menu
         self.file_menu.add_command(
             label="Exit", accelerator=accel, command=self.on_exit
         )
 
-        # bind actual key sequence
-        self.root.bind_all(bind, lambda e: self.on_exit())
+        self.app.bind_all(bind, lambda e: self.on_exit())
 
     def save_file(self):
         self.files_dirty = False
@@ -78,4 +89,4 @@ class Menubar(tk.Frame):
                 self.save_file()
 
         # Exit app
-        self.root.destroy()
+        self.app.destroy()
