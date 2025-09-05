@@ -1,12 +1,30 @@
-## Run sample
+## Create venv
 
 ```bash
-# View file
-python src/engraver.py --input samples/six.svg --scale 10000 --tol 0.1
-
-# Export without viewing
-python src/engraver.py --input samples/six.svg --scale 10000 --tol 0.1 --export-json output/six-toolpaths.json --no-view
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
 ```
+
+## PIP
+
+### Remove pip packages using requirements.txt
+
+```bash
+pip freeze | % { pip uninstall -y ($_ -split '==')[0] }
+```
+
+### List pip packages
+```bash
+pip list
+```
+
+### Install pip packages
+```bash
+pip install -r requirements.txt
+```
+
 
 ## Pytest
 
@@ -19,3 +37,10 @@ python src/engraver.py --input samples/six.svg --scale 10000 --tol 0.1 --export-
    pip install -e .
    pip install pytest
    pytest
+
+
+## ruff
+
+```bash
+ruff check .
+```

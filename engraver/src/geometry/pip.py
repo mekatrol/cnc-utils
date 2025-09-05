@@ -3,128 +3,154 @@ from typing import List
 from geometry.PointInt import PointInt
 
 
-class PolyRelation(Enum):
-    DISJOINT = auto()      # no touching
-    INTERSECT = auto()     # edges cross or touch (incl. tangency/overlap)
+class PolygonRelation(Enum):
+    DISJOINT = auto()  # no touching
+    INTERSECT = auto()  # edges cross or touch (incl. tangency/overlap)
     A_INSIDE_B = auto()
     B_INSIDE_A = auto()
 
 
-def _bbox(poly: List[PointInt]):
-    xs = [p.x for p in poly]
-    ys = [p.y for p in poly]
-    return min(xs), min(ys), max(xs), max(ys)
+def bounding_box(polygon: List[PointInt]):
+    x_values = [point.x for point in polygon]
+    y_values = [point.y for point in polygon]
+    return min(x_values), min(y_values), max(x_values), max(y_values)
 
 
-def _orient(a: PointInt, b: PointInt, c: PointInt) -> int:
-    return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)  # 2*area, integer
+def orientation(point_a: PointInt, point_b: PointInt, point_c: PointInt) -> int:
+    return (point_b.x - point_a.x) * (point_c.y - point_a.y) - (
+        point_b.y - point_a.y
+    ) * (point_c.x - point_a.x)
 
 
-def _on_seg(a: PointInt, b: PointInt, c: PointInt) -> bool:
-    return (min(a.x, b.x) <= c.x <= max(a.x, b.x) and
-            min(a.y, b.y) <= c.y <= max(a.y, b.y))
+def is_point_on_segment(
+    point_a: PointInt, point_b: PointInt, point_c: PointInt
+) -> bool:
+    return min(point_a.x, point_b.x) <= point_c.x <= max(point_a.x, point_b.x) and min(
+        point_a.y, point_b.y
+    ) <= point_c.y <= max(point_a.y, point_b.y)
 
 
-def _seg_intersect(a: PointInt, b: PointInt, c: PointInt, d: PointInt) -> bool:
-    o1 = _orient(a, b, c)
-    o2 = _orient(a, b, d)
-    o3 = _orient(c, d, a)
-    o4 = _orient(c, d, b)
-    if (o1 > 0) != (o2 > 0) and (o3 > 0) != (o4 > 0):
+def do_segments_intersect(
+    point_a: PointInt, point_b: PointInt, point_c: PointInt, point_d: PointInt
+) -> bool:
+    orientation1 = orientation(point_a, point_b, point_c)
+    orientation2 = orientation(point_a, point_b, point_d)
+    orientation3 = orientation(point_c, point_d, point_a)
+    orientation4 = orientation(point_c, point_d, point_b)
+
+    if (orientation1 > 0) != (orientation2 > 0) and (orientation3 > 0) != (
+        orientation4 > 0
+    ):
         return True  # proper crossing
+
     # touching or collinear overlap
-    if o1 == 0 and _on_seg(a, b, c):
+    if orientation1 == 0 and is_point_on_segment(point_a, point_b, point_c):
         return True
-    if o2 == 0 and _on_seg(a, b, d):
+    if orientation2 == 0 and is_point_on_segment(point_a, point_b, point_d):
         return True
-    if o3 == 0 and _on_seg(c, d, a):
+    if orientation3 == 0 and is_point_on_segment(point_c, point_d, point_a):
         return True
-    if o4 == 0 and _on_seg(c, d, b):
+    if orientation4 == 0 and is_point_on_segment(point_c, point_d, point_b):
         return True
     return False
 
 
-def _edges(poly: List[PointInt]):
-    n = len(poly)
-    last = n - 1
-    # treat as closed ring; ignore duplicate last==first if present
-    m = n - 1 if n >= 2 and poly[0] == poly[-1] else n
-    for i in range(m):
-        a = poly[i]
-        b = poly[(i + 1) % m]
-        if a != b:
-            yield a, b
+def polygon_edges(polygon: List[PointInt]):
+    count = len(polygon)
+    max_index = count - 1 if count >= 2 and polygon[0] == polygon[-1] else count
+    for i in range(max_index):
+        point_a = polygon[i]
+        point_b = polygon[(i + 1) % max_index]
+        if point_a != point_b:
+            yield point_a, point_b
 
 
-class PIP(Enum):
-    OUT = 0
-    IN = 1
-    EDGE = 2
-    VERTEX = 3
+class PointInPolygonResult(Enum):
+    OUTSIDE = 0
+    INSIDE = 1
+    ON_EDGE = 2
+    ON_VERTEX = 3
 
 
-def _point_in_polygon(q: PointInt, poly: List[PointInt]) -> PIP:
-    # Ray-cast on +x and -x to detect edge vs inside robustly (integer math)
-    n = len(poly)
-    if n == 0:
-        return PIP.OUT
-    # shift by q to test against origin
-    px = [p.x - q.x for p in poly]
-    py = [p.y - q.y for p in poly]
-    r = l = 0
-    for i in range(n):
-        if px[i] == 0 and py[i] == 0:
-            return PIP.VERTEX
-        j = (i - 1) % n
-        if (py[i] > 0) != (py[j] > 0):
-            num = px[i] * py[j] - px[j] * py[i]
-            den = py[j] - py[i]
-            x = num / den
-            if x > 0:
-                r += 1
-        if (py[i] < 0) != (py[j] < 0):
-            num = px[i] * py[j] - px[j] * py[i]
-            den = py[j] - py[i]
-            x = num / den
-            if x < 0:
-                l += 1
-    if (r & 1) != (l & 1):
-        return PIP.EDGE
-    return PIP.IN if (r & 1) else PIP.OUT
+def point_in_polygon(
+    query_point: PointInt, polygon: List[PointInt]
+) -> PointInPolygonResult:
+    count = len(polygon)
+    if count == 0:
+        return PointInPolygonResult.OUTSIDE
+
+    shifted_x = [point.x - query_point.x for point in polygon]
+    shifted_y = [point.y - query_point.y for point in polygon]
+
+    crossings_right = 0
+    crossings_left = 0
+
+    for i in range(count):
+        if shifted_x[i] == 0 and shifted_y[i] == 0:
+            return PointInPolygonResult.ON_VERTEX
+
+        j = (i - 1) % count
+
+        if (shifted_y[i] > 0) != (shifted_y[j] > 0):
+            numerator = shifted_x[i] * shifted_y[j] - shifted_x[j] * shifted_y[i]
+            denominator = shifted_y[j] - shifted_y[i]
+            x_intersection = numerator / denominator
+            if x_intersection > 0:
+                crossings_right += 1
+
+        if (shifted_y[i] < 0) != (shifted_y[j] < 0):
+            numerator = shifted_x[i] * shifted_y[j] - shifted_x[j] * shifted_y[i]
+            denominator = shifted_y[j] - shifted_y[i]
+            x_intersection = numerator / denominator
+            if x_intersection < 0:
+                crossings_left += 1
+
+    if (crossings_right & 1) != (crossings_left & 1):
+        return PointInPolygonResult.ON_EDGE
+    return (
+        PointInPolygonResult.INSIDE
+        if (crossings_right & 1)
+        else PointInPolygonResult.OUTSIDE
+    )
 
 
-def classify_polygons(A: List[PointInt], B: List[PointInt]) -> PolyRelation:
-    if len(A) < 3 or len(B) < 3:
-        # degenerate: fall back to segment tests only
-        for a1, a2 in _edges(A):
-            for b1, b2 in _edges(B):
-                if _seg_intersect(a1, a2, b1, b2):
-                    return PolyRelation.INTERSECT
-        return PolyRelation.DISJOINT
+def classify_polygons(
+    polygon_a: List[PointInt], polygon_b: List[PointInt]
+) -> PolygonRelation:
+    if len(polygon_a) < 3 or len(polygon_b) < 3:
+        for edge_a_start, edge_a_end in polygon_edges(polygon_a):
+            for edge_b_start, edge_b_end in polygon_edges(polygon_b):
+                if do_segments_intersect(
+                    edge_a_start, edge_a_end, edge_b_start, edge_b_end
+                ):
+                    return PolygonRelation.INTERSECT
+        return PolygonRelation.DISJOINT
 
-    # 1) bbox reject
-    ax0, ay0, ax1, ay1 = _bbox(A)
-    bx0, by0, bx1, by1 = _bbox(B)
+    # bounding box reject
+    ax0, ay0, ax1, ay1 = bounding_box(polygon_a)
+    bx0, by0, bx1, by1 = bounding_box(polygon_b)
     if ax1 < bx0 or bx1 < ax0 or ay1 < by0 or by1 < ay0:
-        return PolyRelation.DISJOINT
+        return PolygonRelation.DISJOINT
 
-    # 2) edge intersection (including touching)
-    for a1, a2 in _edges(A):
-        for b1, b2 in _edges(B):
-            if _seg_intersect(a1, a2, b1, b2):
-                return PolyRelation.INTERSECT
+    # edge intersection
+    for edge_a_start, edge_a_end in polygon_edges(polygon_a):
+        for edge_b_start, edge_b_end in polygon_edges(polygon_b):
+            if do_segments_intersect(
+                edge_a_start, edge_a_end, edge_b_start, edge_b_end
+            ):
+                return PolygonRelation.INTERSECT
 
-    # 3) containment (touch counts as intersect)
-    pipAB = _point_in_polygon(A[0], B)
-    if pipAB == PIP.IN:
-        return PolyRelation.A_INSIDE_B
-    if pipAB in (PIP.EDGE, PIP.VERTEX):
-        return PolyRelation.INTERSECT
+    # containment check
+    pip_a_in_b = point_in_polygon(polygon_a[0], polygon_b)
+    if pip_a_in_b == PointInPolygonResult.INSIDE:
+        return PolygonRelation.A_INSIDE_B
+    if pip_a_in_b in (PointInPolygonResult.ON_EDGE, PointInPolygonResult.ON_VERTEX):
+        return PolygonRelation.INTERSECT
 
-    pipBA = _point_in_polygon(B[0], A)
-    if pipBA == PIP.IN:
-        return PolyRelation.B_INSIDE_A
-    if pipBA in (PIP.EDGE, PIP.VERTEX):
-        return PolyRelation.INTERSECT
+    pip_b_in_a = point_in_polygon(polygon_b[0], polygon_a)
+    if pip_b_in_a == PointInPolygonResult.INSIDE:
+        return PolygonRelation.B_INSIDE_A
+    if pip_b_in_a in (PointInPolygonResult.ON_EDGE, PointInPolygonResult.ON_VERTEX):
+        return PolygonRelation.INTERSECT
 
-    return PolyRelation.DISJOINT
+    return PolygonRelation.DISJOINT

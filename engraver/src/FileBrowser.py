@@ -1,9 +1,13 @@
 from __future__ import annotations
 import os
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+
+if TYPE_CHECKING:
+    # Import only for type checking; does not run at runtime
+    from app import App  # adjust module path
 
 
 class FileBrowser(ttk.Frame):
@@ -14,10 +18,18 @@ class FileBrowser(ttk.Frame):
 
         toolbar = ttk.Frame(self)
         toolbar.pack(fill=tk.X)
-        ttk.Button(toolbar, text="Open Folder", command=self.choose_folder).pack(side=tk.LEFT, padx=4, pady=4)
-        ttk.Button(toolbar, text="New 2D Tab", command=lambda: self.app.add_view("2D")).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="New 3D Tab", command=lambda: self.app.add_view("3D")).pack(side=tk.LEFT, padx=2)
-        ttk.Button(toolbar, text="Fit", command=self.app.fit_current).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Open Folder", command=self.choose_folder).pack(
+            side=tk.LEFT, padx=4, pady=4
+        )
+        ttk.Button(
+            toolbar, text="New 2D Tab", command=lambda: self.app.add_view("2D")
+        ).pack(side=tk.LEFT, padx=2)
+        ttk.Button(
+            toolbar, text="New 3D Tab", command=lambda: self.app.add_view("3D")
+        ).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar, text="Fit", command=self.app.fit_current).pack(
+            side=tk.LEFT, padx=2
+        )
 
         self.tree = ttk.Treeview(self, columns=("name",), show="tree")
         self.tree.pack(fill=tk.BOTH, expand=True)
@@ -38,7 +50,9 @@ class FileBrowser(ttk.Frame):
         for dirpath, dirnames, filenames in os.walk(self.root_dir):
             # Only show json files
             rel = Path(dirpath).relative_to(self.root_dir)
-            parent_id = root_id if rel == Path('.') else self._ensure_parents(root_id, rel)
+            parent_id = (
+                root_id if rel == Path(".") else self._ensure_parents(root_id, rel)
+            )
             for name in sorted(filenames):
                 if name.lower().endswith(".json"):
                     full = Path(dirpath) / name
@@ -71,7 +85,7 @@ class FileBrowser(ttk.Frame):
             return
         path = Path(vals[0])
         try:
-            geom = load_geometry_from_json(path)
+            geom = App.load_geometry_from_json(path)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load {path}:\n{e}")
             return

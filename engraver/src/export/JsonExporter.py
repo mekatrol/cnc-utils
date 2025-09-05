@@ -1,12 +1,10 @@
 import json
 from dataclasses import dataclass
 from geometry.GeometryInt import GeometryInt
-from geometry.GeoUtil import GeoUtil
 
 
 @dataclass
 class JsonExporter:
-
     @staticmethod
     def export(geom: GeometryInt, path: str) -> None:
         """Export as JSON: { "scale": int, "points": [ [[x,y], ...], ... ] }"""

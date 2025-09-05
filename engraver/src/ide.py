@@ -1,180 +1,36 @@
-from pathlib import Path
+from __future__ import annotations
+
 import sys
-import json
-from typing import List
-
-from PySide6.QtCore import Qt, QPointF, QRectF
-from PySide6.QtGui import QAction, QPen, QBrush, QColor, QTransform, QPainterPath, QPainter
-from PySide6.QtWidgets import (
-    QApplication, QGraphicsView, QGraphicsScene,
-    QGraphicsPathItem, QGraphicsEllipseItem,
-    QFileDialog, QMainWindow, QGraphicsItem
-)
-
-from colors import COLORS
-from geometry.GeometryInt import GeometryInt
-from geometry.PointInt import PointInt
-from geometry.PolylineInt import PolylineInt
-from svg.SvgConverter import SvgConverter
+import tkinter as tk
+from app import App
 
 
-class View(QGraphicsView):
-    def __init__(self, scene):
-        super().__init__(scene)
-        self.setRenderHints(
-            QPainter.RenderHint.Antialiasing |
-            QPainter.RenderHint.TextAntialiasing
-        )
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)  # pan with mouse
-        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
+def maximize(win: tk.Tk):
+    win.update_idletasks()
+    # 1) Try native “zoomed” (Windows, many X11)
+    try:
+        win.state("zoomed")
+        return
+    except tk.TclError:
+        pass
+    # 2) Some X11 WMs expose -zoomed
+    try:
+        win.attributes("-zoomed", True)
+        return
+    except tk.TclError:
+        pass
+    # 3) macOS fallback (fullscreen) or generic geometry fill
+    if sys.platform == "darwin":
+        win.attributes("-fullscreen", True)  # Esc to exit if you add a binding
+    else:
+        win.geometry(f"{win.winfo_screenwidth()}x{win.winfo_screenheight()}+0+0")
 
-    def wheelEvent(self, e):
-        s = 1.15 if e.angleDelta().y() > 0 else 1 / 1.15
-        self.scale(s, s)
 
-
-class Main(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.scene = QGraphicsScene(self)
-        self.view = View(self.scene)
-        self.setCentralWidget(self.view)
-
-        act = QAction("Open…", self)
-        act.triggered.connect(self.open_file)
-        self.menuBar().addMenu("&File").addAction(act)
-
-        self.geom = Main.load_demo_geometry()
-        self.fit_scene()
-        self.load_geometry()
-
-    def open_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Open geometry JSON/SVG",
-                                              filter="SVG (*.svg);;JSON (*.json);;All (*.*)")
-        if not path:
-            return
-
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)  # hourglass
-        try:
-            self.scene.clear()
-            if path.lower().endswith(".json"):
-                self.geom = Main.load_geometry_from_json(Path(path))
-            else:
-                self.geom = SvgConverter.svg_to_geometry_int(path, scale=10000, tol=0.25)
-
-            self.fit_scene()
-            self.load_geometry()
-        finally:
-            QApplication.restoreOverrideCursor()
-
-    def load_geometry(self):
-        scale = self.geom.scale
-        colors = COLORS
-
-        for i, pl in enumerate(self.geom.polylines):
-            pen = QPen(QColor(colors[i % len(colors)]), 1.5)
-            pen.setCosmetic(True)
-
-            points = pl.points
-
-            if len(points) < 1:
-                continue
-
-            path = QPainterPath()
-            x0, y0 = points[0]
-            path.moveTo(QPointF(x0 / scale, -y0 / scale))
-            for x, y in points[1:]:
-                path.lineTo(QPointF(x / scale, -y / scale))
-            item = QGraphicsPathItem(path)
-            item.setPen(pen)
-            self.scene.addItem(item)
-
-        r = 3
-        for i, (x, y) in enumerate(self.geom.points):
-            cx, cy = x / scale, -y / scale
-            dot = QGraphicsEllipseItem(cx - r, cy - r, 2 * r, 2 * r)
-            dot.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
-            color = QColor(colors[i % len(colors)])
-            pen = QPen(color, 1.0)
-            pen.setCosmetic(True)
-            dot.setPen(pen)
-            dot.setBrush(QBrush(color))
-            self.scene.addItem(dot)
-
-    def fit_scene(self):
-        bounds = self.geom.bounds()
-        rect = QRectF(bounds[0], bounds[1], bounds[2], bounds[3])
-        rect = self.scene.itemsBoundingRect()
-
-        if rect.isNull():
-            rect = QRectF(-50, -50, 100, 100)
-        self.view.setTransform(QTransform())  # reset zoom
-        self.view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
-
-    @staticmethod
-    def _as_point(pt) -> PointInt:
-        if isinstance(pt, dict) and "x" in pt and "y" in pt:
-            return PointInt(int(pt["x"]), int(pt["y"]))
-        if (
-            isinstance(pt, (list, tuple))
-            and len(pt) >= 2
-            and all(isinstance(v, (int, float)) for v in pt[:2])
-        ):
-            return PointInt(int(pt[0]), int(pt[1]))
-
-        raise ValueError(f"Unsupported point format: {pt!r}")
-
-    @staticmethod
-    def load_geometry_from_json(path: Path) -> GeometryInt:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        scale = int(data.get("scale", 1) or 1)
-
-        pls: List[PolylineInt] = []
-
-        # Case 1: standard "polylines": [{"pts": [...]}, ...]
-        if isinstance(data.get("polylines"), list):
-            for pl in data.get("polylines", []):
-                pts_raw = pl.get("pts", []) if isinstance(pl, dict) else []
-                pts = [Main._as_point(p) for p in pts_raw]
-                if len(pts) >= 2:
-                    pls.append(PolylineInt(pts))
-
-        # Case 2: root-level "points": [ [ [x,y], ... ], [ ... ] ]
-        elif isinstance(data.get("points"), list):
-            for poly in data.get("points", []):
-                if isinstance(poly, list):
-                    pts = [Main._as_point(p) for p in poly]
-                    if len(pts) >= 2:
-                        pls.append(PolylineInt(pts))
-
-        return GeometryInt(pls, [], scale)
-
-    @staticmethod
-    def load_demo_geometry() -> GeometryInt:
-        # Simple rectangle + diagonal in 1000-scale units
-        polyline = PolylineInt(points=[
-            PointInt(0000, 0000), PointInt(8000, 0000), PointInt(8000, 8000),
-            PointInt(6000, 8000), PointInt(6000, 2000), PointInt(2000, 2000),
-            PointInt(2000, 8000), PointInt(0000, 8000), PointInt(0000, 0000)],
-            simplify_tolerance=5)
-
-        points = [
-            PointInt(1000, 4000),
-            PointInt(4000, 2000),
-            PointInt(2000, 2000),
-            PointInt(4000, 6000),
-            PointInt(9000, 4000),
-            PointInt(-2000, 1000)
-        ]
-
-        geom = GeometryInt(polylines=[polyline], points=points, scale=1000)
-        return geom
+def main():
+    app = App()
+    maximize(app)
+    app.mainloop()
 
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    w = Main()
-    w.resize(1000, 700)
-    w.showMaximized()
-    sys.exit(app.exec())
+    main()
