@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 from pathlib import Path
+import sys
 from typing import List, Optional
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -10,13 +11,16 @@ from geometry.PointInt import PointInt
 from geometry.PolylineInt import PolylineInt
 from geometry.GeometryInt import GeometryInt
 from svg.SvgConverter import SvgConverter
-from views.views import View2D, View3D
+
+from views.view_2d import View2D
+from views.view_3d import View3D
+from views.menubar import Menubar
 
 
-class App(tk.Tk):
+class AppView(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Polyline Viewer: Tk IDE-ish")
+        self.title("Polygon Engraver")
         self.geometry("1200x800")
         self.minsize(900, 600)
         try:
@@ -27,6 +31,9 @@ class App(tk.Tk):
         style = ttk.Style(self)
         if "clam" in style.theme_names():
             style.theme_use("clam")
+
+        # Create main menubar
+        self.menubar = Menubar(self)
 
         # Shared state
         self.model: Optional[GeometryInt] = None
@@ -68,11 +75,33 @@ class App(tk.Tk):
         self.add_view("3D")
         frame = self.add_view("2D")
 
+        self.maximize()
+
         # Load a tiny demo so it's not heartbreakingly empty
         self.load_demo_geometry()
 
         # We want view to fit on inital demo geometry
         self.after_idle(lambda: setattr(frame, "fit_to_view_pending", True))
+
+    def maximize(self):
+        self.update_idletasks()
+        # 1) Try native "zoomed" (Windows, many X11)
+        try:
+            self.state("zoomed")
+            return
+        except tk.TclError:
+            pass
+        # 2) Some X11 WMs expose -zoomed
+        try:
+            self.attributes("-zoomed", True)
+            return
+        except tk.TclError:
+            pass
+        # 3) macOS fallback (fullscreen) or generic geometry fill
+        if sys.platform == "darwin":
+            self.attributes("-fullscreen", True)  # Esc to exit if you add a binding
+        else:
+            self.geometry(f"{self.winfo_screenwidth()}x{self.winfo_screenheight()}+0+0")
 
     @staticmethod
     def _as_point(pt) -> PointInt:
@@ -98,7 +127,7 @@ class App(tk.Tk):
         if isinstance(data.get("polylines"), list):
             for pl in data.get("polylines", []):
                 pts_raw = pl.get("pts", []) if isinstance(pl, dict) else []
-                pts = [App._as_point(p) for p in pts_raw]
+                pts = [AppView._as_point(p) for p in pts_raw]
                 if len(pts) >= 2:
                     pls.append(PolylineInt(pts))
 
@@ -106,7 +135,7 @@ class App(tk.Tk):
         elif isinstance(data.get("points"), list):
             for poly in data.get("points", []):
                 if isinstance(poly, list):
-                    pts = [App._as_point(p) for p in poly]
+                    pts = [AppView._as_point(p) for p in poly]
                     if len(pts) >= 2:
                         pls.append(PolylineInt(pts))
 
@@ -139,7 +168,7 @@ class App(tk.Tk):
         try:
             ext = Path(path).suffix.lower()
             if ext == ".json":
-                geom = App.load_geometry_from_json(Path(path))
+                geom = AppView.load_geometry_from_json(Path(path))
             elif ext == ".svg":
                 geom = SvgConverter.svg_to_geometry_int(path, scale=10000, tol=0.25)
             else:
