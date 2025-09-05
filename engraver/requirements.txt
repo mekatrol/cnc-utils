@@ -8,3 +8,4 @@ pyclipper
 PySide6
 PyQt6
 pyqtgraph
+ruff
