@@ -27,6 +27,11 @@ class AppView(tk.Tk):
         except Exception:
             pass
 
+        self._first_load_done = False
+        self._mapped = False
+        self.bind("<Map>", self._on_map)
+        self.bind("<Configure>", self._on_configure)
+
         # Shared state
         self.model: Optional[GeometryInt] = None
         self.source_label_var = tk.StringVar(value="No file loaded")
@@ -46,15 +51,43 @@ class AppView(tk.Tk):
 
         # Default tabs
         self.add_view("3D")
-        frame = self.add_view("2D")
+        self.add_view("2D")
 
         self.maximize()
 
         # Load a tiny demo so it's not heartbreakingly empty
         self.load_demo_geometry()
 
-        # We want view to fit on inital demo geometry
-        self.after_idle(lambda: setattr(frame, "fit_to_view_pending", True))
+    def _on_map(self, _):
+        self._mapped = True
+
+    def _on_configure(self, _):
+        if self._first_load_done or not self._mapped:
+            return
+
+        # Debounce sziing events on startup: run after resize/placement bursts stop
+        if getattr(self, "_settle_job", None):
+            self.after_cancel(self._settle_job)
+
+        self._settle_job = self.after(150, self._call_first_loaded)
+
+    def _call_first_loaded(self):
+        if self._first_load_done:
+            return
+        w, h = self.winfo_width(), self.winfo_height()
+        if w <= 1 or h <= 1:
+            # still not realized; check again shortly
+            self._settle_job = self.after(50, self._call_first_loaded)
+            return
+        self._first_load_done = True
+        # optional: unbind to avoid later calls
+        self.unbind("<Map>")
+        self.unbind("<Configure>")
+        self.on_first_loaded()  # <-- your method
+
+    def on_first_loaded(self):
+        # run once when window is visible and size is final-ish
+        self.fit_current()
 
     def maximize(self):
         self.update_idletasks()
@@ -150,6 +183,7 @@ class AppView(tk.Tk):
             messagebox.showerror("Error", f"Failed to load {path}:\n{e}")
             return
         self.set_geometry(geom, source=str(path))
+        self.fit_current()
 
     def add_view(self, kind: str):
         if kind == "2D":
@@ -164,7 +198,6 @@ class AppView(tk.Tk):
         self.notebook.add(frame, text=title)
         self.notebook.select(frame)
         self.notebook.update_idletasks()  # ensure geometry is computed
-        frame.after_idle(frame.fit_to_view)  # run when widget is idle/mapped
         return frame
 
     def fit_current(self):
