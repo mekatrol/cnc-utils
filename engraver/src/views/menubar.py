@@ -1,77 +1,52 @@
+# views/menubar.py
 from __future__ import annotations
 import sys
+import tkinter as tk
 from tkinter import messagebox
 from typing import TYPE_CHECKING
-import tkinter as tk
 
 if TYPE_CHECKING:
-    # Import only for type checking; does not run at runtime
-    from views.view_app import AppView  # adjust module path
+    from views.view_app import AppView
 
 
-class Menubar(tk.Frame):
+class Menubar(tk.Menu):
     def __init__(self, app: "AppView"):
-        self.app = app
-
         super().__init__(app)
-
-        self.pack(fill=tk.BOTH, expand=True)
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=1)
-
-        # No files are dirty by default
+        self.app = app
         self.files_dirty = False
 
-        # Disable menu tear off
-        self.app.option_add("*tearOff", tk.FALSE)
+        app.option_add("*tearOff", False)
 
-        self.create_menubar()
+        # attach menubar
+        app.config(menu=self)
 
-    def create_menubar(self) -> None:
-        self.menubar = tk.Menu(self.app)
-        self.app.config(menu=self.menubar)
+        filem = tk.Menu(self)
+        viewm = tk.Menu(self)
+        self.add_cascade(label="File", menu=filem)
+        self.add_cascade(label="View", menu=viewm)
 
-        self.file_menu = tk.Menu(self.menubar)
-        self.view_menu = tk.Menu(self.menubar)
-        self.menubar.add_cascade(menu=self.file_menu, label="File")
-        self.menubar.add_cascade(menu=self.view_menu, label="View")
+        # Platform accelerators
+        if sys.platform == "darwin":
+            open_accel, open_bind = "Command-O", "<Command-o>"
+            exit_accel, exit_bind = "Command-Q", "<Command-q>"
+        else:
+            open_accel, open_bind = "Ctrl-O", "<Control-o>"
+            exit_accel, exit_bind = "Alt-X", "<Alt-x>"
 
-        self.add_file_menu_items()
-        self.add_view_menu_items()
-
-    def add_view_menu_items(self):
-        self.view_menu.add_command(
-            label="Fit",
-            command=self.app.fit_current,
+        # File
+        filem.add_command(
+            label="Open", accelerator=open_accel, command=app.open_file_dialog
         )
+        filem.add_separator()
+        filem.add_command(label="Exit", accelerator=exit_accel, command=self.on_exit)
 
-        self.view_menu.add_command(
-            label="Reset",
-            command=self.app.reset_current,
-        )
+        # View
+        viewm.add_command(label="Fit", command=app.fit_current)
+        viewm.add_command(label="Reset", command=app.reset_current)
 
-    def add_file_menu_items(self):
-        self.file_menu.add_command(
-            label="Open",
-            accelerator="Ctrl-O",
-            state=tk.ACTIVE,
-            command=self.app.open_file_dialog,
-        )
-
-        self.file_menu.add_separator()
-
-        if sys.platform == "darwin":  # macOS
-            accel = "Command-X"  # ⌘X
-            bind = "<Command-x>"
-        else:  # Windows, Linux
-            accel = "Alt-X"
-            bind = "<Alt-x>"
-
-        self.file_menu.add_command(
-            label="Exit", accelerator=accel, command=self.on_exit
-        )
-
-        self.app.bind_all(bind, lambda e: self.on_exit())
+        # Key bindings
+        app.bind_all(open_bind, lambda e: app.open_file_dialog())
+        app.bind_all(exit_bind, lambda e: self.on_exit())
 
     def save_file(self):
         self.files_dirty = False
@@ -82,11 +57,7 @@ class Menubar(tk.Frame):
                 "Unsaved changes", "Save changes before exit?"
             )
             if ans is None:
-                # Cancel selected
                 return
             if ans:
-                # Save before exit
                 self.save_file()
-
-        # Exit app
         self.app.destroy()

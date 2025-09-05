@@ -27,6 +27,10 @@ class AppView(tk.Tk):
         except Exception:
             pass
 
+        # Shared state
+        self.model: Optional[GeometryInt] = None
+        self.source_label_var = tk.StringVar(value="No file loaded")
+
         style = ttk.Style(self)
         if "clam" in style.theme_names():
             style.theme_use("clam")
@@ -34,28 +38,11 @@ class AppView(tk.Tk):
         # Create main menubar
         self.menubar = Menubar(self)
 
-        # Shared state
-        self.model: Optional[GeometryInt] = None
-        self.source_label_var = tk.StringVar(value="No file loaded")
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
 
-        # Layout: PanedWindow with left browser and right notebook
-        paned = ttk.Panedwindow(self, orient=tk.HORIZONTAL)
-        paned.pack(fill=tk.BOTH, expand=True)
-
-        left = ttk.Frame(paned, width=280)
-        right = ttk.Frame(paned)
-        paned.add(left, weight=0)
-        paned.add(right, weight=1)
-
-        # Right: toolbar + notebook
-        topbar = ttk.Frame(right)
-        topbar.pack(fill=tk.X)
-        ttk.Label(topbar, textvariable=self.source_label_var).pack(
-            side=tk.LEFT, padx=8, pady=6
-        )
-
-        self.notebook = ttk.Notebook(right)
-        self.notebook.pack(fill=tk.BOTH, expand=True)
+        self.notebook = ttk.Notebook(self)
+        self.notebook.grid(row=0, column=0, sticky="nsew")
 
         # Default tabs
         self.add_view("3D")
