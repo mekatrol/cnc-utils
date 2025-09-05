@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sys
+import threading
 from typing import List, Optional
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -14,11 +15,13 @@ from svg.SvgConverter import SvgConverter
 from views.view_2d import View2D
 from views.view_3d import View3D
 from views.menubar import Menubar
+from views.view_spinner import Spinner
 
 
 class AppView(tk.Tk):
     def __init__(self):
         super().__init__()
+        self.spinner: tk.Toplevel | None = None
         self.title("Polygon Engraver")
         self.geometry("1200x800")
         self.minsize(900, 600)
@@ -175,15 +178,87 @@ class AppView(tk.Tk):
             ext = Path(path).suffix.lower()
             if ext == ".json":
                 geom = AppView.load_geometry_from_json(Path(path))
+                self.set_geometry(geom, source=str(path))
+                self.fit_current()
             elif ext == ".svg":
-                geom = SvgConverter.svg_to_geometry_int(path, scale=10000, tol=0.25)
+                self.open_svg_async(str(path))
             else:
                 return
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load {path}:\n{e}")
             return
-        self.set_geometry(geom, source=str(path))
+
+    def _center_in_parent(self, win: tk.Toplevel):
+        win.update_idletasks()  # ensure geometry is calculated
+
+        pw, ph = self.winfo_width(), self.winfo_height()
+        px, py = self.winfo_rootx(), self.winfo_rooty()
+
+        ww, wh = win.winfo_width(), win.winfo_height()
+
+        x = px + (pw // 2) - (ww // 2)
+        y = py + (ph // 2) - (wh // 2)
+
+        win.geometry(f"+{x}+{y}")
+
+    def _show_spinner(self, message):
+        # show spinner dialog
+        self.spinner = tk.Toplevel(self)
+        self.spinner.overrideredirect(True)
+
+        frame = tk.Frame(self.spinner, bg="#57CAF8", padx=15, pady=15)
+        frame.pack(fill="both", expand=True)
+
+        style = ttk.Style(self.spinner)
+        style.configure(
+            "Blue.Horizontal.TProgressbar",
+            troughcolor=frame.cget("bg"),  # background area
+            background="#57CAF8",  # moving bar color
+        )
+
+        ttk.Label(
+            frame,
+            text=message,
+            background=frame.cget("bg"),
+            font=("Helvetica", 24, "bold"),
+        ).pack(padx=0, pady=0)
+
+        sp = Spinner(frame, size=64, thickness=6, color="#f89999", bg=frame.cget("bg"))
+        sp.pack()
+        sp.start()
+        self._center_in_parent(self.spinner)
+
+    def open_svg_async(self, path: str):
+        self._show_spinner("Processing…")
+        threading.Thread(
+            target=self._load_svg_worker, args=(path,), daemon=True
+        ).start()
+
+    def _load_svg_worker(self, path: str):
+        try:
+            geom = SvgConverter.svg_to_geometry_int(path, scale=10000, tol=0.25)
+        except Exception as e:
+            # report back to UI thread
+            self.after(0, self._load_svg_failed, path, e)
+            return
+
+        # hand result to UI thread
+        self.after(0, lambda: self._load_svg_done(path, geom))
+
+    def _load_svg_done(self, path: str, geom):
+        self._hide_spinner()
+        self.set_geometry(geom, source=path)  # safe here
         self.fit_current()
+
+    def _load_svg_failed(self, path: str, err: Exception):
+        self._hide_spinner()
+        from tkinter import messagebox
+
+        messagebox.showerror("Load failed", f"{path}\n\n{err}")
+
+    def _hide_spinner(self):
+        if self.spinner and self.spinner.winfo_exists():
+            self.spinner.destroy()
 
     def add_view(self, kind: str):
         if kind == "2D":
