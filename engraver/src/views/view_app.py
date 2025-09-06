@@ -206,14 +206,14 @@ class AppView(tk.Tk):
         self.spinner = tk.Toplevel(self)
         self.spinner.overrideredirect(True)
 
-        frame = tk.Frame(self.spinner, bg="#57CAF8", padx=15, pady=15)
+        frame = tk.Frame(self.spinner, bg="#B0E0F3", padx=15, pady=15)
         frame.pack(fill="both", expand=True)
 
         style = ttk.Style(self.spinner)
         style.configure(
-            "Blue.Horizontal.TProgressbar",
+            "Blue.Horizontal.Bar",
             troughcolor=frame.cget("bg"),  # background area
-            background="#57CAF8",  # moving bar color
+            background="#B0E0F3",  # moving bar color
         )
 
         ttk.Label(
@@ -223,7 +223,7 @@ class AppView(tk.Tk):
             font=("Helvetica", 24, "bold"),
         ).pack(padx=0, pady=0)
 
-        sp = Spinner(frame, size=64, thickness=6, color="#f89999", bg=frame.cget("bg"))
+        sp = Spinner(frame, size=64, thickness=6, color="#00428d", bg=frame.cget("bg"))
         sp.pack()
         sp.start()
         self._center_in_parent(self.spinner)
