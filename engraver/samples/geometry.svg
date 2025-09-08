@@ -13,6 +13,28 @@
     <!-- ellipse -->
     <ellipse cx="100" cy="220" rx="50" ry="20"/>
 
+    <!-- standalone arc (half-ellipse from left to right) -->
+    <path d="M220,250 A40,30 0 0 1 300,250"/>
+    <path d="M340,230 A40,30 0 0 1 430,250"/>
+
+    <!-- basic -->
+    <text x="100" y="40" fill="#fff" font-family="Arial" font-size="16">Hello</text>
+
+    <!-- centered on (100,100) -->
+    <text x="100" y="100" fill="#fff" font-family="Arial" font-size="18"
+          text-anchor="middle" dominant-baseline="middle">Center</text>
+
+    <!-- multi-line via tspan -->
+    <text x="260" y="80" fill="#fff" font-family="Arial" font-size="14">
+      <tspan x="260" dy="0">Line 1</tspan>
+      <tspan x="260" dy="1.2em">Line 2</tspan>
+    </text>
+
+    <!-- rotated -->
+    <text x="420" y="60" fill="#fff" font-family="Arial" font-size="16" transform="rotate(20 420 60)">
+      Rotated
+    </text>
+
     <!-- polyline -->
     <polyline points="220,40 260,80 240,120 300,160 260,200 320,220"/>
 
