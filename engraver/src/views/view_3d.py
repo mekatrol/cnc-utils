@@ -16,8 +16,8 @@ class View3D(BaseView):
     def __init__(self, master, app: "AppView"):
         super().__init__(master, app)
         # Camera/world params
-        self.yaw = math.radians(35)
-        self.pitch = math.radians(25)
+        self.yaw = math.radians(0)
+        self.pitch = math.radians(0)
         self.distance = 10.0  # camera distance along +Z
         self.zoom = 50.0  # pixel scale (screen pixels per world unit at z≈0)
         self.pan = [0.0, 0.0]  # screen-space pan in pixels
@@ -54,8 +54,8 @@ class View3D(BaseView):
         self.canvas.bind_all("R", lambda e: self.reset_view())
 
     def reset_view(self):
-        self.yaw = math.radians(35)
-        self.pitch = math.radians(25)
+        self.yaw = math.radians(0)
+        self.pitch = math.radians(0)
         self.distance = 10.0
         self.zoom = 50.0
         self.pan = [0.0, 0.0]
@@ -71,8 +71,8 @@ class View3D(BaseView):
         self.distance = size * 1.5 if size > 0 else 10.0
         # Center the model on screen (pivot at screen center)
         self.pan = [0.0, 0.0]
-        self.yaw = math.radians(35)
-        self.pitch = math.radians(25)
+        self.yaw = math.radians(0)
+        self.pitch = math.radians(0)
 
         self.redraw()
 
