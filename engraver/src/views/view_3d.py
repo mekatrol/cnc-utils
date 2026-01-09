@@ -175,6 +175,7 @@ class View3D(BaseView):
 
         # Grid plane (drawn around pivot)
         self._draw_grid_3d(w, h)
+        self._draw_axis_gizmo(w, h, cx, cy)
         self._draw_selection(w, h, cx, cy)
 
         g = self.app.model
@@ -513,6 +514,43 @@ class View3D(BaseView):
         yx, yy, _ = self._project_point(0.0, step, 0.0, w, h)
         c.create_line(ox, oy, xx, xy, fill="#444", width=2)  # X
         c.create_line(ox, oy, yx, yy, fill="#444", width=2)  # Y
+
+    def _draw_axis_gizmo(self, w: int, h: int, cx: float, cy: float) -> None:
+        # Draw fixed-size axis arrows at the true world origin.
+        ox, oy, _ = self._project_point(-cx, -cy, 0.0, w, h)
+        axis_len = 45.0
+        r = 5.0
+
+        def axis_dir(x: float, y: float, z: float) -> tuple[float, float]:
+            cyaw = math.cos(self.yaw)
+            syaw = math.sin(self.yaw)
+            cpitch = math.cos(self.pitch)
+            spitch = math.sin(self.pitch)
+            x1 = x * cyaw + z * syaw
+            z1 = -x * syaw + z * cyaw
+            y2 = y * cpitch - z1 * spitch
+            dx = x1
+            dy = -y2
+            norm = math.hypot(dx, dy) or 1.0
+            return dx / norm, dy / norm
+
+        axes = [
+            (1.0, 0.0, 0.0, "#e05050"),
+            (0.0, 1.0, 0.0, "#50d070"),
+            (0.0, 0.0, 1.0, "#5aa0ff"),
+        ]
+        for ax, ay, az, color in axes:
+            dx, dy = axis_dir(ax, ay, az)
+            x2 = ox + dx * axis_len
+            y2 = oy + dy * axis_len
+            self.canvas.create_line(
+                ox, oy, x2, y2, fill=color, width=2, arrow="last"
+            )
+
+        # Origin marker
+        self.canvas.create_oval(
+            ox - r, oy - r, ox + r, oy + r, fill="#fff", outline=""
+        )
 
     @staticmethod
     def _nice_step(raw: float) -> float:
