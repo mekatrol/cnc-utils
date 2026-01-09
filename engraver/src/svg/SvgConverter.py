@@ -173,14 +173,52 @@ class SvgConverter:
         return None
 
     @staticmethod
+    def _parse_viewbox(vb: Any) -> Optional[List[float]]:
+        if vb is None:
+            return None
+        if isinstance(vb, (list, tuple)) and len(vb) == 4:
+            return [GeoUtil.safe_to_float(v, None) for v in vb]
+        if all(hasattr(vb, k) for k in ("x", "y", "width", "height")):
+            return [
+                GeoUtil.safe_to_float(getattr(vb, "x"), None),
+                GeoUtil.safe_to_float(getattr(vb, "y"), None),
+                GeoUtil.safe_to_float(getattr(vb, "width"), None),
+                GeoUtil.safe_to_float(getattr(vb, "height"), None),
+            ]
+        if isinstance(vb, str):
+            parts = [p for p in vb.replace(",", " ").split() if p]
+            if len(parts) == 4:
+                return [GeoUtil.safe_to_float(p, None) for p in parts]
+        return None
+
+    @staticmethod
+    def _viewbox_matrix(doc: SVG) -> Matrix:
+        vb = getattr(doc, "viewbox", None) or getattr(doc, "viewBox", None)
+        vb_vals = SvgConverter._parse_viewbox(vb)
+        if not vb_vals or any(v is None for v in vb_vals):
+            return Matrix()
+        min_x, min_y, vb_w, vb_h = vb_vals
+        if not vb_w or not vb_h:
+            return Matrix()
+
+        width = GeoUtil.safe_to_float(getattr(doc, "width", None), None)
+        height = GeoUtil.safe_to_float(getattr(doc, "height", None), None)
+        sx = (width / vb_w) if width not in (None, 0) else 1.0
+        sy = (height / vb_h) if height not in (None, 0) else 1.0
+
+        # Map viewBox coords into viewport: (x - min_x) * sx, (y - min_y) * sy
+        return Matrix(sx, 0, 0, sy, -min_x * sx, -min_y * sy)
+
+    @staticmethod
     def svg_to_geometry_int(
         svg_path: str, scale: int = 10000, tol: float = 0.25
     ) -> GeometryInt:
         doc = SVG.parse(svg_path)
+        viewbox_matrix = SvgConverter._viewbox_matrix(doc)
 
         polylines_float: List[List[PointFloat]] = []
 
-        for elem, M in SvgConverter._walk_with_matrix(doc):
+        for elem, M in SvgConverter._walk_with_matrix(doc, viewbox_matrix):
             t = (
                 getattr(elem, "transform", Matrix())
                 if isinstance(getattr(elem, "transform", None), Matrix)
