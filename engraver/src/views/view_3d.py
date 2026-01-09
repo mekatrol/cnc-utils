@@ -518,10 +518,13 @@ class View3D(BaseView):
 
         # Axes at the pivot
         ox, oy, _ = self._project_point(0.0, 0.0, 0.0, w, h)
-        xx, xy, _ = self._project_point(step, 0.0, 0.0, w, h)
-        yx, yy, _ = self._project_point(0.0, step, 0.0, w, h)
-        c.create_line(ox, oy, xx, xy, fill="#444", width=2)  # X
-        c.create_line(ox, oy, yx, yy, fill="#444", width=2)  # Y
+        axis_len = step * 0.3
+        xx, xy, _ = self._project_point(axis_len, 0.0, 0.0, w, h)
+        yx, yy, _ = self._project_point(0.0, axis_len, 0.0, w, h)
+        
+        # Simulate 50% opacity over the dark background by pre-blending colors.
+        c.create_line(ox, oy, xx, xy, fill="#783030", width=2, arrow="last")  # X
+        c.create_line(ox, oy, yx, yy, fill="#307040", width=2, arrow="last")  # Y
 
     def _draw_axis_gizmo(self, w: int, h: int, cx: float, cy: float) -> None:
         # Draw fixed-size axis arrows at the true world origin.
