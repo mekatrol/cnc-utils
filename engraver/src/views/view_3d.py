@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING, Tuple
 from colors import COLORS
 from geometry.GeoUtil import GeoUtil
 from geometry.PointInPolygonResult import PointInPolygonResult
-from geometry.PointInt import PointInt
 from views.view_base import BaseView
 
 
