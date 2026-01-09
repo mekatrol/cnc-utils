@@ -6,6 +6,18 @@ from geometry.GeoUtil import GeoUtil
 from geometry.PointInPolygonResult import PointInPolygonResult
 from geometry.PointInt import PointInt
 from views.view_base import BaseView
+from views.view_constants import (
+    AXIS_X_COLOR,
+    AXIS_Y_COLOR,
+    BACKGROUND_COLOR,
+    EMPTY_TEXT_COLOR,
+    FILL_COLOR_2D,
+    GRID_AXIS_COLOR,
+    GRID_CENTER_CROSS_COLOR,
+    GRID_LINE_COLOR,
+    HATCH_COLOR,
+    ORIGIN_BALL_COLOR,
+)
 
 if TYPE_CHECKING:
     # Import only for type checking; does not run at runtime
@@ -30,8 +42,8 @@ class View2D(BaseView):
         self._selected_polygons = []
         self.hatch_angle_deg = 45.0
         self.hatch_spacing_px = 8.0
-        self.hatch_color = "#2b6f8a"
-        self.fill_color = "#232d5a"
+        self.hatch_color = HATCH_COLOR
+        self.fill_color = FILL_COLOR_2D
         self.fill_stipple = "gray12"
 
         self.canvas.bind("<ButtonPress-1>", self._on_press)
@@ -177,13 +189,13 @@ class View2D(BaseView):
         axis_len = 45.0
         r = 5.0
         self.canvas.create_line(
-            ox, oy, ox + axis_len, oy, fill="#e05050", width=2, arrow="last"
+            ox, oy, ox + axis_len, oy, fill=AXIS_X_COLOR, width=2, arrow="last"
         )
         self.canvas.create_line(
-            ox, oy, ox, oy - axis_len, fill="#50d070", width=2, arrow="last"
+            ox, oy, ox, oy - axis_len, fill=AXIS_Y_COLOR, width=2, arrow="last"
         )
         self.canvas.create_oval(
-            ox - r, oy - r, ox + r, oy + r, fill="#fff", outline=""
+            ox - r, oy - r, ox + r, oy + r, fill=ORIGIN_BALL_COLOR, outline=""
         )
 
     def _screen_to_world(self, x: float, y: float) -> tuple[float, float]:
@@ -266,7 +278,7 @@ class View2D(BaseView):
             return
         s = g.scale or 1
         c = self.canvas
-        bg = c.cget("background")
+        bg = c.cget("background") or BACKGROUND_COLOR
 
         def to_screen(points):
             coords = []
@@ -423,22 +435,26 @@ class View2D(BaseView):
         # Keep it simple: use px_step as-is
         # Find world origin on screen
         # Draw axes
-        c.create_line(0, self.offset[1], w, self.offset[1], fill="#333")
-        c.create_line(self.offset[0], 0, self.offset[0], h, fill="#333")
+        c.create_line(0, self.offset[1], w, self.offset[1], fill=GRID_AXIS_COLOR)
+        c.create_line(self.offset[0], 0, self.offset[0], h, fill=GRID_AXIS_COLOR)
         # Light grid lines
         # Horizontal
         y = self.offset[1] % px_step
         while y < h:
-            c.create_line(0, y, w, y, fill="#1a1a1a")
+            c.create_line(0, y, w, y, fill=GRID_LINE_COLOR)
             y += px_step
         # Vertical
         x = self.offset[0] % px_step
         while x < w:
-            c.create_line(x, 0, x, h, fill="#1a1a1a")
+            c.create_line(x, 0, x, h, fill=GRID_LINE_COLOR)
             x += px_step
 
     def _draw_center_cross(self, w: int, h: int):
         c = self.canvas
-        c.create_text(w // 2, h // 2, text="No geometry loaded", fill="#888")
-        c.create_line(w // 2 - 10, h // 2, w // 2 + 10, h // 2, fill="#444")
-        c.create_line(w // 2, h // 2 - 10, w // 2, h // 2 + 10, fill="#444")
+        c.create_text(w // 2, h // 2, text="No geometry loaded", fill=EMPTY_TEXT_COLOR)
+        c.create_line(
+            w // 2 - 10, h // 2, w // 2 + 10, h // 2, fill=GRID_CENTER_CROSS_COLOR
+        )
+        c.create_line(
+            w // 2, h // 2 - 10, w // 2, h // 2 + 10, fill=GRID_CENTER_CROSS_COLOR
+        )

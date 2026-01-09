@@ -6,6 +6,21 @@ from geometry.GeoUtil import GeoUtil
 from geometry.PointInt import PointInt
 from geometry.PointInPolygonResult import PointInPolygonResult
 from views.view_base import BaseView
+from views.view_constants import (
+    AXIS_X_COLOR,
+    AXIS_X_DIM_COLOR,
+    AXIS_Y_COLOR,
+    AXIS_Y_DIM_COLOR,
+    AXIS_Z_COLOR,
+    AXIS_Z_DIM_COLOR,
+    BACKGROUND_COLOR,
+    EMPTY_TEXT_COLOR,
+    FILL_COLOR_3D,
+    GRID_LINE_COLOR,
+    HATCH_COLOR,
+    ORIGIN_BALL_COLOR,
+    ORIGIN_BALL_DIM_COLOR,
+)
 
 
 if TYPE_CHECKING:
@@ -34,8 +49,8 @@ class View3D(BaseView):
         self._selected_polygons = []
         self.hatch_angle_deg = 45.0
         self.hatch_spacing_px = 8.0
-        self.hatch_color = "#2b6f8a"
-        self.fill_color = "#4b4b4b"
+        self.hatch_color = HATCH_COLOR
+        self.fill_color = FILL_COLOR_3D
         self.fill_stipple = "gray12"
 
         # Bindings
@@ -188,7 +203,9 @@ class View3D(BaseView):
 
         g = self.app.model
         if not g or not g.polylines:
-            c.create_text(w // 2, h // 2, text="No geometry loaded", fill="#888")
+            c.create_text(
+                w // 2, h // 2, text="No geometry loaded", fill=EMPTY_TEXT_COLOR
+            )
             return
         s = g.scale if g.scale else 1
 
@@ -492,7 +509,7 @@ class View3D(BaseView):
     def _draw_grid_3d(self, w: int, h: int):
         # Simple world XY grid centered on the pivot (origin after centering)
         c = self.canvas
-        c.create_rectangle(0, 0, w, h, fill="#111", outline="")
+        c.create_rectangle(0, 0, w, h, fill=BACKGROUND_COLOR, outline="")
 
         minx, miny, maxx, maxy = GeoUtil.world_bounds(self.app.model)
         dx = max(maxx - minx, 1.0)
@@ -506,14 +523,14 @@ class View3D(BaseView):
         while x <= half:
             p1 = self._project_point(x, -half, 0.0, w, h)
             p2 = self._project_point(x, half, 0.0, w, h)
-            c.create_line(p1[0], p1[1], p2[0], p2[1], fill="#1a1a1a")
+            c.create_line(p1[0], p1[1], p2[0], p2[1], fill=GRID_LINE_COLOR)
             x += step
 
         y = -half
         while y <= half:
             p1 = self._project_point(-half, y, 0.0, w, h)
             p2 = self._project_point(half, y, 0.0, w, h)
-            c.create_line(p1[0], p1[1], p2[0], p2[1], fill="#1a1a1a")
+            c.create_line(p1[0], p1[1], p2[0], p2[1], fill=GRID_LINE_COLOR)
             y += step
 
         # Axes at the pivot
@@ -524,10 +541,23 @@ class View3D(BaseView):
         zx, zy, _ = self._project_point(0.0, 0.0, axis_len, w, h)
 
         # Simulate 50% opacity over the dark background by pre-blending colors.
-        c.create_line(ox, oy, xx, xy, fill="#783030", width=2, arrow="last")  # X
-        c.create_line(ox, oy, yx, yy, fill="#307040", width=2, arrow="last")  # Y
-        c.create_line(ox, oy, zx, zy, fill="#355888", width=2, arrow="last")  # Z
-        c.create_oval(ox - 4, oy - 4, ox + 4, oy + 4, fill="#999999", outline="")
+        c.create_line(
+            ox, oy, xx, xy, fill=AXIS_X_DIM_COLOR, width=2, arrow="last"
+        )  # X
+        c.create_line(
+            ox, oy, yx, yy, fill=AXIS_Y_DIM_COLOR, width=2, arrow="last"
+        )  # Y
+        c.create_line(
+            ox, oy, zx, zy, fill=AXIS_Z_DIM_COLOR, width=2, arrow="last"
+        )  # Z
+        c.create_oval(
+            ox - 4,
+            oy - 4,
+            ox + 4,
+            oy + 4,
+            fill=ORIGIN_BALL_DIM_COLOR,
+            outline="",
+        )
 
     def _draw_axis_gizmo(self, w: int, h: int, cx: float, cy: float) -> None:
         # Draw fixed-size axis arrows at the true world origin.
@@ -549,9 +579,9 @@ class View3D(BaseView):
             return dx / norm, dy / norm
 
         axes = [
-            (1.0, 0.0, 0.0, "#e05050"),
-            (0.0, 1.0, 0.0, "#50d070"),
-            (0.0, 0.0, 1.0, "#5aa0ff"),
+            (1.0, 0.0, 0.0, AXIS_X_COLOR),
+            (0.0, 1.0, 0.0, AXIS_Y_COLOR),
+            (0.0, 0.0, 1.0, AXIS_Z_COLOR),
         ]
         for ax, ay, az, color in axes:
             dx, dy = axis_dir(ax, ay, az)
@@ -563,7 +593,7 @@ class View3D(BaseView):
 
         # Origin marker
         self.canvas.create_oval(
-            ox - r, oy - r, ox + r, oy + r, fill="#fff", outline=""
+            ox - r, oy - r, ox + r, oy + r, fill=ORIGIN_BALL_COLOR, outline=""
         )
 
     @staticmethod

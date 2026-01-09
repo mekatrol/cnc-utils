@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 import tkinter as tk
 from tkinter import ttk
+from views.view_constants import BACKGROUND_COLOR
 
 if TYPE_CHECKING:
     # Import only for type checking; does not run at runtime
@@ -12,7 +13,9 @@ class BaseView(ttk.Frame):
     def __init__(self, master, app: "AppView"):
         super().__init__(master)
         self.app = app
-        self.canvas = tk.Canvas(self, background="#111", highlightthickness=0)
+        self.canvas = tk.Canvas(
+            self, background=BACKGROUND_COLOR, highlightthickness=0
+        )
         self.canvas.pack(fill=tk.BOTH, expand=True)
         self.canvas.bind("<Configure>", self._on_resize)
         self.canvas.bind("<Expose>", lambda e: self.redraw())
