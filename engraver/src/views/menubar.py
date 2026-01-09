@@ -44,7 +44,6 @@ class Menubar(tk.Menu):
 
         # View
         viewm.add_command(label="Fit", command=app.fit_current)
-        viewm.add_command(label="Reset", command=app.reset_current)
 
         # Key bindings
         app.bind_all(open_bind, lambda e: app.open_file_dialog())

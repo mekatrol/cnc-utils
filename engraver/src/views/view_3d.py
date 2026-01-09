@@ -65,15 +65,6 @@ class View3D(BaseView):
         self.canvas.bind("<Button-5>", lambda e: self._zoom(-1))  # Linux
         self.canvas.bind_all("f", lambda e: self.fit_to_view())
         self.canvas.bind_all("F", lambda e: self.fit_to_view())
-        self.canvas.bind_all("r", lambda e: self.reset_view())
-        self.canvas.bind_all("R", lambda e: self.reset_view())
-
-    def reset_view(self):
-        self.yaw = math.radians(0)
-        self.pitch = math.radians(0)
-        self.zoom = 50.0
-        self.pan = [0.0, 0.0]
-        self.redraw()
 
     def fit_to_view(self):
         # Compute bounding box in world units and scale to canvas size
@@ -239,7 +230,9 @@ class View3D(BaseView):
             polygons.append({"index": idx, "points": points})
         return polygons
 
-    def _project_polygon(self, points, w: int, h: int, cx: float, cy: float, scale: int):
+    def _project_polygon(
+        self, points, w: int, h: int, cx: float, cy: float, scale: int
+    ):
         coords = []
         for pt in points:
             x_rel = pt.x / scale - cx
@@ -331,8 +324,11 @@ class View3D(BaseView):
 
         selected_entry = {"polygon": selected, "holes": holes}
         existing_idx = next(
-            (idx for idx, entry in enumerate(self._selected_polygons)
-             if entry["polygon"]["index"] == selected["index"]),
+            (
+                idx
+                for idx, entry in enumerate(self._selected_polygons)
+                if entry["polygon"]["index"] == selected["index"]
+            ),
             None,
         )
         if existing_idx is None:
@@ -452,7 +448,9 @@ class View3D(BaseView):
             for i in range(len(polygon_points)):
                 p0 = polygon_points[i]
                 p1 = polygon_points[(i + 1) % len(polygon_points)]
-                hit = self._line_segment_intersection((dx, dy), (nx, ny), offset, p0, p1)
+                hit = self._line_segment_intersection(
+                    (dx, dy), (nx, ny), offset, p0, p1
+                )
                 if hit is not None:
                     intersections.append(hit)
 
@@ -541,15 +539,9 @@ class View3D(BaseView):
         zx, zy, _ = self._project_point(0.0, 0.0, axis_len, w, h)
 
         # Simulate 50% opacity over the dark background by pre-blending colors.
-        c.create_line(
-            ox, oy, xx, xy, fill=AXIS_X_DIM_COLOR, width=2, arrow="last"
-        )  # X
-        c.create_line(
-            ox, oy, yx, yy, fill=AXIS_Y_DIM_COLOR, width=2, arrow="last"
-        )  # Y
-        c.create_line(
-            ox, oy, zx, zy, fill=AXIS_Z_DIM_COLOR, width=2, arrow="last"
-        )  # Z
+        c.create_line(ox, oy, xx, xy, fill=AXIS_X_DIM_COLOR, width=2, arrow="last")  # X
+        c.create_line(ox, oy, yx, yy, fill=AXIS_Y_DIM_COLOR, width=2, arrow="last")  # Y
+        c.create_line(ox, oy, zx, zy, fill=AXIS_Z_DIM_COLOR, width=2, arrow="last")  # Z
         c.create_oval(
             ox - 4,
             oy - 4,
@@ -587,9 +579,7 @@ class View3D(BaseView):
             dx, dy = axis_dir(ax, ay, az)
             x2 = ox + dx * axis_len
             y2 = oy + dy * axis_len
-            self.canvas.create_line(
-                ox, oy, x2, y2, fill=color, width=2, arrow="last"
-            )
+            self.canvas.create_line(ox, oy, x2, y2, fill=color, width=2, arrow="last")
 
         # Origin marker
         self.canvas.create_oval(

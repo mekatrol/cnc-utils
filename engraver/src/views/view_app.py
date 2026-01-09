@@ -286,14 +286,6 @@ class AppView(tk.Tk):
         if hasattr(widget, "fit_to_view"):
             widget.fit_to_view()
 
-    def reset_current(self):
-        cur = self.notebook.select()
-        if not cur:
-            return
-        widget = self.nametowidget(cur)
-        if hasattr(widget, "reset_view"):
-            widget.reset_view()
-
     def centre_to_origin(self):
         if not self.model:
             messagebox.showinfo("Centre to Origin", "No geometry loaded.")
