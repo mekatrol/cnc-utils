@@ -130,6 +130,7 @@ class View2D(BaseView):
         h = c.winfo_height()
         # Grid
         self._draw_grid(w, h)
+        self._draw_axis_gizmo(w, h)
         self._draw_selection()
         # Geometry
         g = self.app.model
@@ -168,6 +169,22 @@ class View2D(BaseView):
             r = 3  # screen pixels
             color = COLORS[(i + len(COLORS) >> 1) % len(COLORS)]
             c.create_oval(xs - r, ys - r, xs + r, ys + r, outline=color, fill=color)
+
+    def _draw_axis_gizmo(self, w: int, h: int) -> None:
+        # Fixed-size axis arrows anchored at the world origin.
+        ox = 0.0 * self.zoom + self.offset[0]
+        oy = -0.0 * self.zoom + self.offset[1]
+        axis_len = 45.0
+        r = 5.0
+        self.canvas.create_line(
+            ox, oy, ox + axis_len, oy, fill="#e05050", width=2, arrow="last"
+        )
+        self.canvas.create_line(
+            ox, oy, ox, oy - axis_len, fill="#50d070", width=2, arrow="last"
+        )
+        self.canvas.create_oval(
+            ox - r, oy - r, ox + r, oy + r, fill="#fff", outline=""
+        )
 
     def _screen_to_world(self, x: float, y: float) -> tuple[float, float]:
         return (x - self.offset[0]) / self.zoom, -(y - self.offset[1]) / self.zoom
