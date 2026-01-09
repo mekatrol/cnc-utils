@@ -153,6 +153,10 @@ class AppView(tk.Tk):
         self.model = geom
         self.source_label_var.set(source or "(in-memory geometry)")
         self.source_path = source or None
+        for i in range(self.notebook.index("end")):
+            widget = self.notebook.nametowidget(self.notebook.tabs()[i])
+            if isinstance(widget, View3D):
+                widget.fit_to_view_pending = True
         self.redraw_all()
 
     def redraw_all(self):

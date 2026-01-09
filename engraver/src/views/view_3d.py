@@ -62,8 +62,12 @@ class View3D(BaseView):
 
     def fit_to_view(self):
         # Compute bounding box in world units and scale to canvas size
+        self.fit_to_view_pending = False
         w = self.canvas.winfo_width() or 1
         h = self.canvas.winfo_height() or 1
+        if w <= 1 or h <= 1:
+            self.fit_to_view_pending = True
+            return
         minx, miny, maxx, maxy = GeoUtil.world_bounds(self.app.model)
         dx = maxx - minx or 1.0
         dy = maxy - miny or 1.0
@@ -163,6 +167,10 @@ class View3D(BaseView):
 
     # Drawing
     def redraw(self):
+        if self.fit_to_view_pending:
+            self.fit_to_view()
+            if self.fit_to_view_pending:
+                return
         c = self.canvas
         c.delete("all")
         w = c.winfo_width()
