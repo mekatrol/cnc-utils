@@ -39,6 +39,7 @@ class AppView(tk.Tk):
         self.model: Optional[GeometryInt] = None
         self.source_label_var = tk.StringVar(value="No file loaded")
         self.source_path: Optional[str] = None
+        self.selected_polygons = []
 
         style = ttk.Style(self)
         if "clam" in style.theme_names():
@@ -153,6 +154,7 @@ class AppView(tk.Tk):
         self.model = geom
         self.source_label_var.set(source or "(in-memory geometry)")
         self.source_path = source or None
+        self.selected_polygons = []
         for i in range(self.notebook.index("end")):
             widget = self.notebook.nametowidget(self.notebook.tabs()[i])
             if isinstance(widget, View3D):

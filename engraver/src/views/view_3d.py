@@ -46,7 +46,6 @@ class View3D(BaseView):
 
         # Selection state
         self._selected_polygon_solid_fill = True
-        self._selected_polygons = []
         self.hatch_angle_deg = 45.0
         self.hatch_spacing_px = 8.0
         self.hatch_color = HATCH_COLOR
@@ -135,7 +134,7 @@ class View3D(BaseView):
         self._panning = False
         if was_rotating and not self._drag_moved:
             self._select_polygon(event.x, event.y)
-            self.redraw()
+            self.app.redraw_all()
 
     def _on_wheel(self, event):
         self._zoom(1 if event.delta > 0 else -1)
@@ -276,7 +275,7 @@ class View3D(BaseView):
     def _select_polygon(self, x: float, y: float) -> None:
         g = self.app.model
         if not g or not g.polylines:
-            self._selected_polygons = []
+            self.app.selected_polygons = []
             return
 
         s = g.scale if g.scale else 1
@@ -306,7 +305,7 @@ class View3D(BaseView):
                     containing.append(poly)
 
         if not containing:
-            self._selected_polygons = []
+            self.app.selected_polygons = []
             return
 
         selected = min(
@@ -326,15 +325,15 @@ class View3D(BaseView):
         existing_idx = next(
             (
                 idx
-                for idx, entry in enumerate(self._selected_polygons)
+                for idx, entry in enumerate(self.app.selected_polygons)
                 if entry["polygon"]["index"] == selected["index"]
             ),
             None,
         )
         if existing_idx is None:
-            self._selected_polygons.append(selected_entry)
+            self.app.selected_polygons.append(selected_entry)
         else:
-            self._selected_polygons.pop(existing_idx)
+            self.app.selected_polygons.pop(existing_idx)
 
     @staticmethod
     def _point_on_segment(point, a, b, eps: float = 1e-6) -> bool:
@@ -370,7 +369,7 @@ class View3D(BaseView):
         return inside
 
     def _draw_selection(self, w: int, h: int, cx: float, cy: float) -> None:
-        if not self._selected_polygons:
+        if not self.app.selected_polygons:
             return
         g = self.app.model
         if not g:
@@ -380,10 +379,10 @@ class View3D(BaseView):
         bg = c.cget("background")
 
         selected_indices = {
-            entry["polygon"]["index"] for entry in self._selected_polygons
+            entry["polygon"]["index"] for entry in self.app.selected_polygons
         }
 
-        for entry in self._selected_polygons:
+        for entry in self.app.selected_polygons:
             selected_polygon = entry["polygon"]
             selected_holes = entry["holes"]
             polygon_points = self._project_polygon(
