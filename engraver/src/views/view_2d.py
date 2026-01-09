@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 from typing import TYPE_CHECKING
 from colors import COLORS
 from geometry.GeoUtil import GeoUtil
@@ -17,14 +18,20 @@ class View2D(BaseView):
         self.zoom = 1.0  # pixels per world unit
         self.offset = [0.0, 0.0]  # screen offset in pixels
         self.grid_step = 10.0  # world units
+        
         # Mouse state
         self._dragging = False
         self._drag_last = (0, 0)
         self._drag_moved = False
         self._press_pos = (0, 0)
+        
         # Selection state
+        self._selected_polygon_solid_fill = True
         self._selected_polygon = None
         self._selected_holes = []
+        self.hatch_angle_deg = 45.0
+        self.hatch_spacing_px = 8.0
+        self.hatch_color = "#2b6f8a"        
 
         self.canvas.bind("<ButtonPress-1>", self._on_press)
         self.canvas.bind("<B1-Motion>", self._on_drag)
@@ -237,23 +244,134 @@ class View2D(BaseView):
         c = self.canvas
         bg = c.cget("background")
 
-        def to_screen(points):
-            coords = []
-            for pt in points:
-                xw, yw = pt.x / s, pt.y / s
-                xs = xw * self.zoom + self.offset[0]
-                ys = -yw * self.zoom + self.offset[1]
-                coords.extend([xs, ys])
-            return coords
+        if self._selected_polygon_solid_fill:
+            def to_screen(points):
+                coords = []
+                for pt in points:
+                    xw, yw = pt.x / s, pt.y / s
+                    xs = xw * self.zoom + self.offset[0]
+                    ys = -yw * self.zoom + self.offset[1]
+                    coords.extend([xs, ys])
+                return coords
+                    
+            coords = to_screen(self._selected_polygon["points"])
+            if coords:
+                c.create_polygon(*coords, fill="#d4e2e7", outline="")
 
-        coords = to_screen(self._selected_polygon["points"])
-        if coords:
-            c.create_polygon(*coords, fill="#d4e2e7", outline="")
+            for hole in self._selected_holes:
+                hole_coords = to_screen(hole["points"])
+                if hole_coords:
+                    c.create_polygon(*hole_coords, fill=bg, outline="")
+        else:
+            def to_screen_points(points):
+                coords = []
+                for pt in points:
+                    xw, yw = pt.x / s, pt.y / s
+                    xs = xw * self.zoom + self.offset[0]
+                    ys = -yw * self.zoom + self.offset[1]
+                    coords.append((xs, ys))
+                return coords
 
-        for hole in self._selected_holes:
-            hole_coords = to_screen(hole["points"])
-            if hole_coords:
-                c.create_polygon(*hole_coords, fill=bg, outline="")
+            polygon_points = to_screen_points(self._selected_polygon["points"])
+            if polygon_points:
+                self._draw_hatch_polygon(polygon_points)
+
+            for hole in self._selected_holes:
+                hole_points = to_screen_points(hole["points"])
+                if hole_points:
+                    hole_coords = [coord for pt in hole_points for coord in pt]
+                    c.create_polygon(*hole_coords, fill=bg, outline="")
+
+    def _draw_hatch_polygon(self, polygon_points) -> None:
+        if len(polygon_points) < 3:
+            return
+        self._draw_hatch_lines(polygon_points, self.hatch_angle_deg)
+        self._draw_hatch_lines(polygon_points, self.hatch_angle_deg + 90.0)
+
+    def _draw_hatch_lines(self, polygon_points, angle_deg: float) -> None:
+        c = self.canvas
+        angle = math.radians(angle_deg)
+        dx = math.cos(angle)
+        dy = math.sin(angle)
+        nx = -dy
+        ny = dx
+
+        xs = [p[0] for p in polygon_points]
+        ys = [p[1] for p in polygon_points]
+        minx, maxx = min(xs), max(xs)
+        miny, maxy = min(ys), max(ys)
+
+        corners = [
+            (minx, miny),
+            (minx, maxy),
+            (maxx, miny),
+            (maxx, maxy),
+        ]
+        offsets = [corner[0] * nx + corner[1] * ny for corner in corners]
+        min_o, max_o = min(offsets), max(offsets)
+
+        spacing = max(1.0, float(self.hatch_spacing_px))
+        start = math.floor(min_o / spacing) * spacing
+        end = math.ceil(max_o / spacing) * spacing
+
+        for offset in self._frange(start, end, spacing):
+            intersections = []
+            for i in range(len(polygon_points)):
+                p0 = polygon_points[i]
+                p1 = polygon_points[(i + 1) % len(polygon_points)]
+                hit = self._line_segment_intersection((dx, dy), (nx, ny), offset, p0, p1)
+                if hit is not None:
+                    intersections.append(hit)
+
+            if len(intersections) < 2:
+                continue
+
+            intersections.sort(key=lambda item: item[0])
+            deduped = []
+            for t, pt in intersections:
+                if not deduped or abs(t - deduped[-1][0]) > 1e-6:
+                    deduped.append((t, pt))
+
+            for i in range(0, len(deduped) - 1, 2):
+                p0 = deduped[i][1]
+                p1 = deduped[i + 1][1]
+                c.create_line(
+                    p0[0],
+                    p0[1],
+                    p1[0],
+                    p1[1],
+                    fill=self.hatch_color,
+                    width=1.0,
+                )
+
+    @staticmethod
+    def _line_segment_intersection(direction, normal, offset, seg_a, seg_b):
+        dx, dy = direction
+        nx, ny = normal
+        ax, ay = seg_a
+        bx, by = seg_b
+        sx = bx - ax
+        sy = by - ay
+
+        denom = nx * sx + ny * sy
+        if abs(denom) < 1e-9:
+            return None
+
+        t = (offset - (nx * ax + ny * ay)) / denom
+        if t < 0.0 or t > 1.0:
+            return None
+
+        x = ax + t * sx
+        y = ay + t * sy
+        line_t = x * dx + y * dy
+        return line_t, (x, y)
+
+    @staticmethod
+    def _frange(start: float, end: float, step: float):
+        value = start
+        while value <= end + 1e-6:
+            yield value
+            value += step
 
     def _draw_grid(self, w: int, h: int):
         c = self.canvas
