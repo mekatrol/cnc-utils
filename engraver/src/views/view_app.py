@@ -38,6 +38,7 @@ class AppView(tk.Tk):
         # Shared state
         self.model: Optional[GeometryInt] = None
         self.source_label_var = tk.StringVar(value="No file loaded")
+        self.source_path: Optional[str] = None
 
         style = ttk.Style(self)
         if "clam" in style.theme_names():
@@ -57,9 +58,6 @@ class AppView(tk.Tk):
         self.add_view("2D")
 
         self.maximize()
-
-        # Load a tiny demo so it's not heartbreakingly empty
-        self.load_demo_geometry()
 
     def _on_map(self, _):
         self._mapped = True
@@ -154,6 +152,7 @@ class AppView(tk.Tk):
     def set_geometry(self, geom: GeometryInt, source: str = ""):
         self.model = geom
         self.source_label_var.set(source or "(in-memory geometry)")
+        self.source_path = source or None
         self.redraw_all()
 
     def redraw_all(self):
@@ -291,31 +290,81 @@ class AppView(tk.Tk):
         if hasattr(widget, "reset_view"):
             widget.reset_view()
 
-    def load_demo_geometry(self):
-        # Simple rectangle + diagonal in 1000-scale units
-        polyline = PolylineInt(
-            points=[
-                PointInt(0000, 0000),
-                PointInt(8000, 0000),
-                PointInt(8000, 8000),
-                PointInt(6000, 8000),
-                PointInt(6000, 2000),
-                PointInt(2000, 2000),
-                PointInt(2000, 8000),
-                PointInt(0000, 8000),
-                PointInt(0000, 0000),
-            ],
-            simplify_tolerance=5,
-        )
+    def centre_to_origin(self):
+        if not self.model:
+            messagebox.showinfo("Centre to Origin", "No geometry loaded.")
+            return
+        minx, miny, maxx, maxy = self.model.bounds()
 
-        points = [
-            PointInt(1000, 4000),
-            PointInt(4000, 2000),
-            PointInt(2000, 2000),
-            PointInt(4000, 6000),
-            PointInt(9000, 4000),
-            PointInt(-2000, 1000),
+        if minx == 0 and miny == 0:
+            return
+
+        midx = minx + (maxx - minx) / 2.0
+        midy = miny + (maxy - miny) / 2.0
+
+        new_polylines: List[PolylineInt] = []
+
+        for pl in self.model.polylines:
+            moved = [PointInt(p.x - midx, p.y - midy) for p in pl.points]
+            new_polylines.append(
+                PolylineInt(moved, simplify_tolerance=pl.simplify_tolerance)
+            )
+        new_points = [PointInt(p.x - midx, p.y - midy) for p in self.model.points]
+        self.model = GeometryInt(new_polylines, new_points, self.model.scale)
+        self.menubar.files_dirty = True
+        self.redraw_all()
+
+    def _format_svg_number(self, value: float) -> str:
+        text = f"{value:.6f}".rstrip("0").rstrip(".")
+        return text if text else "0"
+
+    def _write_svg(self, path: str):
+        if not self.model:
+            return
+        minx, miny, maxx, maxy = self.model.bounds()
+        scale = self.model.scale or 1
+        width = max((maxx - minx) / scale, 1e-6)
+        height = max((maxy - miny) / scale, 1e-6)
+        view_minx = minx / scale
+        view_miny = -maxy / scale
+
+        def fmt(val: float) -> str:
+            return self._format_svg_number(val)
+
+        lines = [
+            '<?xml version="1.0" encoding="utf-8"?>',
+            (
+                f'<svg xmlns="http://www.w3.org/2000/svg" '
+                f'viewBox="{fmt(view_minx)} {fmt(view_miny)} {fmt(width)} {fmt(height)}" '
+                f'width="{fmt(width)}" height="{fmt(height)}">'
+            ),
         ]
 
-        geom = GeometryInt(polylines=[polyline], points=points, scale=1000)
-        self.set_geometry(geom, source="<demo>")
+        for pl in self.model.polylines:
+            if len(pl.points) < 2:
+                continue
+            pts = [f"{fmt(p.x / scale)} {fmt(-p.y / scale)}" for p in pl.points]
+            d = "M " + " L ".join(pts)
+            lines.append(f'  <path d="{d}" fill="none" stroke="#000" />')
+        lines.append("</svg>")
+
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+
+    def save_svg_as(self):
+        if not self.model:
+            messagebox.showinfo("Save SVG", "No geometry loaded.")
+            return
+        path = filedialog.asksaveasfilename(
+            title="Save SVG As",
+            defaultextension=".svg",
+            filetypes=[("SVG Files", "*.svg"), ("All Files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            self._write_svg(path)
+        except Exception as e:
+            messagebox.showerror("Save failed", f"{path}\n\n{e}")
+            return
+        self.menubar.files_dirty = False

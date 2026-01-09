@@ -37,6 +37,8 @@ class Menubar(tk.Menu):
         filem.add_command(
             label="Open", accelerator=open_accel, command=app.open_file_dialog
         )
+        filem.add_command(label="Centre to Origin", command=app.centre_to_origin)
+        filem.add_command(label="Save SVG As...", command=app.save_svg_as)
         filem.add_separator()
         filem.add_command(label="Exit", accelerator=exit_accel, command=self.on_exit)
 
