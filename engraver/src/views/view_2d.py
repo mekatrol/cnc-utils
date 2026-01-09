@@ -2,6 +2,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from colors import COLORS
 from geometry.GeoUtil import GeoUtil
+from geometry.PointInPolygonResult import PointInPolygonResult
+from geometry.PointInt import PointInt
 from views.view_base import BaseView
 
 if TYPE_CHECKING:
@@ -18,6 +20,11 @@ class View2D(BaseView):
         # Mouse state
         self._dragging = False
         self._drag_last = (0, 0)
+        self._drag_moved = False
+        self._press_pos = (0, 0)
+        # Selection state
+        self._selected_polygon = None
+        self._selected_holes = []
 
         self.canvas.bind("<ButtonPress-1>", self._on_press)
         self.canvas.bind("<B1-Motion>", self._on_drag)
@@ -61,9 +68,19 @@ class View2D(BaseView):
     def _on_press(self, event):
         self._dragging = True
         self._drag_last = (event.x, event.y)
+        self._drag_moved = False
+        self._press_pos = (event.x, event.y)
 
     def _on_drag(self, event):
         if not self._dragging:
+            return
+        if not self._drag_moved:
+            dx0 = event.x - self._press_pos[0]
+            dy0 = event.y - self._press_pos[1]
+            if abs(dx0) + abs(dy0) < 3:
+                return
+            self._drag_moved = True
+            self._drag_last = (event.x, event.y)
             return
         dx = event.x - self._drag_last[0]
         dy = event.y - self._drag_last[1]
@@ -74,6 +91,9 @@ class View2D(BaseView):
 
     def _on_release(self, event):
         self._dragging = False
+        if not self._drag_moved:
+            self._select_polygon(event.x, event.y)
+            self.redraw()
 
     def _on_wheel(self, event):
         direction = 1 if event.delta > 0 else -1
@@ -102,6 +122,7 @@ class View2D(BaseView):
         h = c.winfo_height()
         # Grid
         self._draw_grid(w, h)
+        self._draw_selection()
         # Geometry
         g = self.app.model
         if not g or not g.polylines:
@@ -139,6 +160,100 @@ class View2D(BaseView):
             r = 3  # screen pixels
             color = COLORS[(i + len(COLORS) >> 1) % len(COLORS)]
             c.create_oval(xs - r, ys - r, xs + r, ys + r, outline=color, fill=color)
+
+    def _screen_to_world(self, x: float, y: float) -> tuple[float, float]:
+        return (x - self.offset[0]) / self.zoom, -(y - self.offset[1]) / self.zoom
+
+    def _screen_to_pointint(self, x: float, y: float, scale: int) -> PointInt:
+        xw, yw = self._screen_to_world(x, y)
+        return PointInt(
+            GeoUtil.float_to_int(xw, scale),
+            GeoUtil.float_to_int(yw, scale),
+        )
+
+    def _collect_polygons(self):
+        g = self.app.model
+        if not g or not g.polylines:
+            return []
+        polygons = []
+        for idx, polyline in enumerate(g.polylines):
+            points = polyline.points
+            if len(points) < 3:
+                continue
+            if len(points) >= 2 and points[0] == points[-1]:
+                points = points[:-1]
+            if len(points) < 3:
+                continue
+            polygons.append({"index": idx, "points": points})
+        return polygons
+
+    def _select_polygon(self, x: float, y: float) -> None:
+        g = self.app.model
+        if not g or not g.polylines:
+            self._selected_polygon = None
+            self._selected_holes = []
+            return
+
+        query = self._screen_to_pointint(x, y, g.scale or 1)
+        polygons = self._collect_polygons()
+        containing = []
+        for poly in polygons:
+            result = GeoUtil.point_in_polygon(query, poly["points"])
+            if result in (
+                PointInPolygonResult.Inside,
+                PointInPolygonResult.Edge,
+                PointInPolygonResult.Vertex,
+            ):
+                containing.append(poly)
+
+        if not containing:
+            self._selected_polygon = None
+            self._selected_holes = []
+            return
+
+        selected = min(
+            containing,
+            key=lambda poly: abs(GeoUtil.area(poly["points"])),
+        )
+
+        holes = []
+        for poly in polygons:
+            if poly is selected:
+                continue
+            result = GeoUtil.point_in_polygon(poly["points"][0], selected["points"])
+            if result == PointInPolygonResult.Inside:
+                holes.append(poly)
+
+        self._selected_polygon = selected
+        self._selected_holes = holes
+
+    def _draw_selection(self) -> None:
+        if not self._selected_polygon:
+            return
+        g = self.app.model
+        if not g:
+            return
+        s = g.scale or 1
+        c = self.canvas
+        bg = c.cget("background")
+
+        def to_screen(points):
+            coords = []
+            for pt in points:
+                xw, yw = pt.x / s, pt.y / s
+                xs = xw * self.zoom + self.offset[0]
+                ys = -yw * self.zoom + self.offset[1]
+                coords.extend([xs, ys])
+            return coords
+
+        coords = to_screen(self._selected_polygon["points"])
+        if coords:
+            c.create_polygon(*coords, fill="#d4e2e7", outline="")
+
+        for hole in self._selected_holes:
+            hole_coords = to_screen(hole["points"])
+            if hole_coords:
+                c.create_polygon(*hole_coords, fill=bg, outline="")
 
     def _draw_grid(self, w: int, h: int):
         c = self.canvas
