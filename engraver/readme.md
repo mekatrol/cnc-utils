@@ -9,7 +9,7 @@ pip install -r requirements.txt
 
 ## PIP
 
-### Remove pip packages using requirements.txt
+### Remove pip packages
 
 ```bash
 pip freeze | % { pip uninstall -y ($_ -split '==')[0] }
@@ -23,6 +23,11 @@ pip list
 ### Install pip packages
 ```bash
 pip install -r requirements.txt
+```
+
+### Install tkinter
+```bash
+sudo apt install python3-tk
 ```
 
 
