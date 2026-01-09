@@ -18,7 +18,6 @@ class View3D(BaseView):
         # Camera/world params
         self.yaw = math.radians(0)
         self.pitch = math.radians(0)
-        self.distance = 10.0  # camera distance along +Z
         self.zoom = 50.0  # pixel scale (screen pixels per world unit at z≈0)
         self.pan = [0.0, 0.0]  # screen-space pan in pixels
 
@@ -56,19 +55,22 @@ class View3D(BaseView):
     def reset_view(self):
         self.yaw = math.radians(0)
         self.pitch = math.radians(0)
-        self.distance = 10.0
         self.zoom = 50.0
         self.pan = [0.0, 0.0]
         self.redraw()
 
     def fit_to_view(self):
-        # Compute bounding box in world units
+        # Compute bounding box in world units and scale to canvas size
+        w = self.canvas.winfo_width() or 1
+        h = self.canvas.winfo_height() or 1
         minx, miny, maxx, maxy = GeoUtil.world_bounds(self.app.model)
         dx = maxx - minx or 1.0
         dy = maxy - miny or 1.0
         size = max(dx, dy)
-        # Adjust camera distance so model fits nicely
-        self.distance = size * 1.5 if size > 0 else 10.0
+        # Fit geometry to the visible area with a little padding
+        scale_x = (w * 0.9) / dx
+        scale_y = (h * 0.9) / dy
+        self.zoom = min(scale_x, scale_y)
         # Center the model on screen (pivot at screen center)
         self.pan = [0.0, 0.0]
         self.yaw = math.radians(0)
@@ -129,9 +131,9 @@ class View3D(BaseView):
         self._zoom(1 if event.delta > 0 else -1)
 
     def _zoom(self, direction):
-        factor = 0.9 if direction > 0 else 1 / 0.9
-        self.distance *= factor
-        self.distance = max(0.1, min(1e6, self.distance))
+        factor = 1.1 if direction > 0 else 1.0 / 1.1
+        self.zoom *= factor
+        self.zoom = max(1e-3, min(1e6, self.zoom))
         self.redraw()
 
     # Math helpers
@@ -153,11 +155,7 @@ class View3D(BaseView):
         y2 = y * cp - z1 * sp
         z2 = y * sp + z1 * cp
 
-        camz = self.distance
-        denom = camz + z2
-        if denom <= 1e-6:
-            denom = 1e-6
-        scale = self.zoom * (camz / denom)
+        scale = self.zoom
 
         xs = x1 * scale + w * 0.5 + self.pan[0]
         ys = -y2 * scale + h * 0.5 + self.pan[1]
