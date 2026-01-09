@@ -521,10 +521,13 @@ class View3D(BaseView):
         axis_len = step * 0.3
         xx, xy, _ = self._project_point(axis_len, 0.0, 0.0, w, h)
         yx, yy, _ = self._project_point(0.0, axis_len, 0.0, w, h)
-        
+        zx, zy, _ = self._project_point(0.0, 0.0, axis_len, w, h)
+
         # Simulate 50% opacity over the dark background by pre-blending colors.
         c.create_line(ox, oy, xx, xy, fill="#783030", width=2, arrow="last")  # X
         c.create_line(ox, oy, yx, yy, fill="#307040", width=2, arrow="last")  # Y
+        c.create_line(ox, oy, zx, zy, fill="#355888", width=2, arrow="last")  # Z
+        c.create_oval(ox - 4, oy - 4, ox + 4, oy + 4, fill="#999999", outline="")
 
     def _draw_axis_gizmo(self, w: int, h: int, cx: float, cy: float) -> None:
         # Draw fixed-size axis arrows at the true world origin.
