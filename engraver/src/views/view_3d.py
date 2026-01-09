@@ -3,6 +3,8 @@ import math
 from typing import TYPE_CHECKING, Tuple
 from colors import COLORS
 from geometry.GeoUtil import GeoUtil
+from geometry.PointInPolygonResult import PointInPolygonResult
+from geometry.PointInt import PointInt
 from views.view_base import BaseView
 
 
@@ -25,6 +27,17 @@ class View3D(BaseView):
         self._rotating = False
         self._panning = False
         self._last = (0, 0)
+        self._drag_moved = False
+        self._press_pos = (0, 0)
+
+        # Selection state
+        self._selected_polygon_solid_fill = True
+        self._selected_polygons = []
+        self.hatch_angle_deg = 45.0
+        self.hatch_spacing_px = 8.0
+        self.hatch_color = "#2b6f8a"
+        self.fill_color = "#4b4b4b"
+        self.fill_stipple = "gray12"
 
         # Bindings
         self.canvas.bind("<ButtonPress-1>", self._on_press_left)
@@ -68,6 +81,8 @@ class View3D(BaseView):
     def _on_press_left(self, event):
         self._rotating = True
         self._last = (event.x, event.y)
+        self._drag_moved = False
+        self._press_pos = (event.x, event.y)
 
     def _on_press_right(self, event):
         self._panning = True
@@ -75,6 +90,14 @@ class View3D(BaseView):
 
     def _on_drag_left(self, event):
         if not self._rotating:
+            return
+        if not self._drag_moved:
+            dx0 = event.x - self._press_pos[0]
+            dy0 = event.y - self._press_pos[1]
+            if abs(dx0) + abs(dy0) < 3:
+                return
+            self._drag_moved = True
+            self._last = (event.x, event.y)
             return
         dx = event.x - self._last[0]
         dy = event.y - self._last[1]
@@ -96,8 +119,12 @@ class View3D(BaseView):
         self.redraw()
 
     def _on_release(self, event):
+        was_rotating = self._rotating
         self._rotating = False
         self._panning = False
+        if was_rotating and not self._drag_moved:
+            self._select_polygon(event.x, event.y)
+            self.redraw()
 
     def _on_wheel(self, event):
         self._zoom(1 if event.delta > 0 else -1)
@@ -151,6 +178,7 @@ class View3D(BaseView):
 
         # Grid plane (drawn around pivot)
         self._draw_grid_3d(w, h)
+        self._draw_selection(w, h, cx, cy)
 
         g = self.app.model
         if not g or not g.polylines:
@@ -171,6 +199,247 @@ class View3D(BaseView):
                     color = COLORS[i % len(COLORS)]
                     c.create_line(last_pt[0], last_pt[1], xs, ys, fill=color, width=1.5)
                 last_pt = (xs, ys)
+
+    def _collect_polygons(self):
+        g = self.app.model
+        if not g or not g.polylines:
+            return []
+        polygons = []
+        for idx, polyline in enumerate(g.polylines):
+            points = polyline.points
+            if len(points) < 3:
+                continue
+            if len(points) >= 2 and points[0] == points[-1]:
+                points = points[:-1]
+            if len(points) < 3:
+                continue
+            polygons.append({"index": idx, "points": points})
+        return polygons
+
+    def _project_polygon(self, points, w: int, h: int, cx: float, cy: float, scale: int):
+        coords = []
+        for pt in points:
+            x_rel = pt.x / scale - cx
+            y_rel = pt.y / scale - cy
+            xs, ys, _ = self._project_point(x_rel, y_rel, 0.0, w, h)
+            coords.append((xs, ys))
+        return coords
+
+    def _select_polygon(self, x: float, y: float) -> None:
+        g = self.app.model
+        if not g or not g.polylines:
+            self._selected_polygons = []
+            return
+
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+        if w <= 1 or h <= 1:
+            return
+
+        minx, miny, maxx, maxy = GeoUtil.world_bounds(self.app.model)
+        cx = (minx + maxx) * 0.5
+        cy = (miny + maxy) * 0.5
+        s = g.scale if g.scale else 1
+
+        polygons = self._collect_polygons()
+        containing = []
+        for poly in polygons:
+            proj = self._project_polygon(poly["points"], w, h, cx, cy, s)
+            if self._point_in_polygon_screen((x, y), proj):
+                containing.append(poly)
+
+        if not containing:
+            return
+
+        selected = min(
+            containing,
+            key=lambda poly: abs(GeoUtil.area(poly["points"])),
+        )
+
+        holes = []
+        for poly in polygons:
+            if poly is selected:
+                continue
+            result = GeoUtil.point_in_polygon(poly["points"][0], selected["points"])
+            if result == PointInPolygonResult.Inside:
+                holes.append(poly)
+
+        selected_entry = {"polygon": selected, "holes": holes}
+        existing_idx = next(
+            (idx for idx, entry in enumerate(self._selected_polygons)
+             if entry["polygon"]["index"] == selected["index"]),
+            None,
+        )
+        if existing_idx is None:
+            self._selected_polygons.append(selected_entry)
+        else:
+            self._selected_polygons.pop(existing_idx)
+
+    @staticmethod
+    def _point_on_segment(point, a, b, eps: float = 1e-6) -> bool:
+        px, py = point
+        ax, ay = a
+        bx, by = b
+        cross = (px - ax) * (by - ay) - (py - ay) * (bx - ax)
+        if abs(cross) > eps:
+            return False
+        dot = (px - ax) * (bx - ax) + (py - ay) * (by - ay)
+        if dot < -eps:
+            return False
+        seg_len = (bx - ax) * (bx - ax) + (by - ay) * (by - ay)
+        return dot <= seg_len + eps
+
+    def _point_in_polygon_screen(self, point, polygon_points) -> bool:
+        if not polygon_points:
+            return False
+        x, y = point
+        inside = False
+        count = len(polygon_points)
+        for i in range(count):
+            p1 = polygon_points[i]
+            p2 = polygon_points[(i + 1) % count]
+            if self._point_on_segment(point, p1, p2):
+                return True
+            x1, y1 = p1
+            x2, y2 = p2
+            if (y1 > y) != (y2 > y):
+                x_intersect = (x2 - x1) * (y - y1) / (y2 - y1) + x1
+                if x_intersect > x:
+                    inside = not inside
+        return inside
+
+    def _draw_selection(self, w: int, h: int, cx: float, cy: float) -> None:
+        if not self._selected_polygons:
+            return
+        g = self.app.model
+        if not g:
+            return
+        s = g.scale if g.scale else 1
+        c = self.canvas
+        bg = c.cget("background")
+
+        selected_indices = {
+            entry["polygon"]["index"] for entry in self._selected_polygons
+        }
+
+        for entry in self._selected_polygons:
+            selected_polygon = entry["polygon"]
+            selected_holes = entry["holes"]
+            polygon_points = self._project_polygon(
+                selected_polygon["points"], w, h, cx, cy, s
+            )
+            if not polygon_points:
+                continue
+
+            if self._selected_polygon_solid_fill:
+                coords = [coord for pt in polygon_points for coord in pt]
+                c.create_polygon(
+                    *coords,
+                    fill=self.fill_color,
+                    outline="",
+                    stipple=self.fill_stipple,
+                )
+            else:
+                self._draw_hatch_polygon(polygon_points)
+
+            for hole in selected_holes:
+                if hole["index"] in selected_indices:
+                    continue
+                hole_points = self._project_polygon(hole["points"], w, h, cx, cy, s)
+                if hole_points:
+                    hole_coords = [coord for pt in hole_points for coord in pt]
+                    c.create_polygon(*hole_coords, fill=bg, outline="")
+
+    def _draw_hatch_polygon(self, polygon_points) -> None:
+        if len(polygon_points) < 3:
+            return
+        self._draw_hatch_lines(polygon_points, self.hatch_angle_deg)
+        self._draw_hatch_lines(polygon_points, self.hatch_angle_deg + 90.0)
+
+    def _draw_hatch_lines(self, polygon_points, angle_deg: float) -> None:
+        c = self.canvas
+        angle = math.radians(angle_deg)
+        dx = math.cos(angle)
+        dy = math.sin(angle)
+        nx = -dy
+        ny = dx
+
+        xs = [p[0] for p in polygon_points]
+        ys = [p[1] for p in polygon_points]
+        minx, maxx = min(xs), max(xs)
+        miny, maxy = min(ys), max(ys)
+
+        corners = [
+            (minx, miny),
+            (minx, maxy),
+            (maxx, miny),
+            (maxx, maxy),
+        ]
+        offsets = [corner[0] * nx + corner[1] * ny for corner in corners]
+        min_o, max_o = min(offsets), max(offsets)
+
+        spacing = max(1.0, float(self.hatch_spacing_px))
+        start = math.floor(min_o / spacing) * spacing
+        end = math.ceil(max_o / spacing) * spacing
+
+        for offset in self._frange(start, end, spacing):
+            intersections = []
+            for i in range(len(polygon_points)):
+                p0 = polygon_points[i]
+                p1 = polygon_points[(i + 1) % len(polygon_points)]
+                hit = self._line_segment_intersection((dx, dy), (nx, ny), offset, p0, p1)
+                if hit is not None:
+                    intersections.append(hit)
+
+            if len(intersections) < 2:
+                continue
+
+            intersections.sort(key=lambda item: item[0])
+            deduped = []
+            for t, pt in intersections:
+                if not deduped or abs(t - deduped[-1][0]) > 1e-6:
+                    deduped.append((t, pt))
+
+            for i in range(0, len(deduped) - 1, 2):
+                p0 = deduped[i][1]
+                p1 = deduped[i + 1][1]
+                c.create_line(
+                    p0[0],
+                    p0[1],
+                    p1[0],
+                    p1[1],
+                    fill=self.hatch_color,
+                    width=1.0,
+                )
+
+    @staticmethod
+    def _line_segment_intersection(direction, normal, offset, seg_a, seg_b):
+        dx, dy = direction
+        nx, ny = normal
+        ax, ay = seg_a
+        bx, by = seg_b
+        sx = bx - ax
+        sy = by - ay
+
+        denom = nx * sx + ny * sy
+        if abs(denom) < 1e-9:
+            return None
+
+        t = (offset - (nx * ax + ny * ay)) / denom
+        if t < 0.0 or t > 1.0:
+            return None
+
+        x = ax + t * sx
+        y = ay + t * sy
+        line_t = x * dx + y * dy
+        return line_t, (x, y)
+
+    @staticmethod
+    def _frange(start: float, end: float, step: float):
+        value = start
+        while value <= end + 1e-6:
+            yield value
+            value += step
 
     def _draw_grid_3d(self, w: int, h: int):
         # Simple world XY grid centered on the pivot (origin after centering)
