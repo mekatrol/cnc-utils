@@ -27,11 +27,12 @@ class View2D(BaseView):
         
         # Selection state
         self._selected_polygon_solid_fill = True
-        self._selected_polygon = None
-        self._selected_holes = []
+        self._selected_polygons = []
         self.hatch_angle_deg = 45.0
         self.hatch_spacing_px = 8.0
-        self.hatch_color = "#2b6f8a"        
+        self.hatch_color = "#2b6f8a"
+        self.fill_color = "#232d5a"
+        self.fill_stipple = "gray12"
 
         self.canvas.bind("<ButtonPress-1>", self._on_press)
         self.canvas.bind("<B1-Motion>", self._on_drag)
@@ -197,8 +198,7 @@ class View2D(BaseView):
     def _select_polygon(self, x: float, y: float) -> None:
         g = self.app.model
         if not g or not g.polylines:
-            self._selected_polygon = None
-            self._selected_holes = []
+            self._selected_polygons = []
             return
 
         query = self._screen_to_pointint(x, y, g.scale or 1)
@@ -214,8 +214,7 @@ class View2D(BaseView):
                 containing.append(poly)
 
         if not containing:
-            self._selected_polygon = None
-            self._selected_holes = []
+            self._selected_polygons = []
             return
 
         selected = min(
@@ -231,11 +230,19 @@ class View2D(BaseView):
             if result == PointInPolygonResult.Inside:
                 holes.append(poly)
 
-        self._selected_polygon = selected
-        self._selected_holes = holes
+        selected_entry = {"polygon": selected, "holes": holes}
+        existing_idx = next(
+            (idx for idx, entry in enumerate(self._selected_polygons)
+             if entry["polygon"]["index"] == selected["index"]),
+            None,
+        )
+        if existing_idx is None:
+            self._selected_polygons.append(selected_entry)
+        else:
+            self._selected_polygons.pop(existing_idx)
 
     def _draw_selection(self) -> None:
-        if not self._selected_polygon:
+        if not self._selected_polygons:
             return
         g = self.app.model
         if not g:
@@ -244,43 +251,60 @@ class View2D(BaseView):
         c = self.canvas
         bg = c.cget("background")
 
-        if self._selected_polygon_solid_fill:
-            def to_screen(points):
-                coords = []
-                for pt in points:
-                    xw, yw = pt.x / s, pt.y / s
-                    xs = xw * self.zoom + self.offset[0]
-                    ys = -yw * self.zoom + self.offset[1]
-                    coords.extend([xs, ys])
-                return coords
-                    
-            coords = to_screen(self._selected_polygon["points"])
-            if coords:
-                c.create_polygon(*coords, fill="#d4e2e7", outline="")
+        def to_screen(points):
+            coords = []
+            for pt in points:
+                xw, yw = pt.x / s, pt.y / s
+                xs = xw * self.zoom + self.offset[0]
+                ys = -yw * self.zoom + self.offset[1]
+                coords.extend([xs, ys])
+            return coords
 
-            for hole in self._selected_holes:
-                hole_coords = to_screen(hole["points"])
-                if hole_coords:
-                    c.create_polygon(*hole_coords, fill=bg, outline="")
-        else:
-            def to_screen_points(points):
-                coords = []
-                for pt in points:
-                    xw, yw = pt.x / s, pt.y / s
-                    xs = xw * self.zoom + self.offset[0]
-                    ys = -yw * self.zoom + self.offset[1]
-                    coords.append((xs, ys))
-                return coords
+        def to_screen_points(points):
+            coords = []
+            for pt in points:
+                xw, yw = pt.x / s, pt.y / s
+                xs = xw * self.zoom + self.offset[0]
+                ys = -yw * self.zoom + self.offset[1]
+                coords.append((xs, ys))
+            return coords
 
-            polygon_points = to_screen_points(self._selected_polygon["points"])
-            if polygon_points:
-                self._draw_hatch_polygon(polygon_points)
+        selected_indices = {
+            entry["polygon"]["index"] for entry in self._selected_polygons
+        }
 
-            for hole in self._selected_holes:
-                hole_points = to_screen_points(hole["points"])
-                if hole_points:
-                    hole_coords = [coord for pt in hole_points for coord in pt]
-                    c.create_polygon(*hole_coords, fill=bg, outline="")
+        for entry in self._selected_polygons:
+            selected_polygon = entry["polygon"]
+            selected_holes = entry["holes"]
+
+            if self._selected_polygon_solid_fill:
+                coords = to_screen(selected_polygon["points"])
+                if coords:
+                    c.create_polygon(
+                        *coords,
+                        fill=self.fill_color,
+                        outline="",
+                        stipple=self.fill_stipple,
+                    )
+
+                for hole in selected_holes:
+                    if hole["index"] in selected_indices:
+                        continue
+                    hole_coords = to_screen(hole["points"])
+                    if hole_coords:
+                        c.create_polygon(*hole_coords, fill=bg, outline="")
+            else:
+                polygon_points = to_screen_points(selected_polygon["points"])
+                if polygon_points:
+                    self._draw_hatch_polygon(polygon_points)
+
+                for hole in selected_holes:
+                    if hole["index"] in selected_indices:
+                        continue
+                    hole_points = to_screen_points(hole["points"])
+                    if hole_points:
+                        hole_coords = [coord for pt in hole_points for coord in pt]
+                        c.create_polygon(*hole_coords, fill=bg, outline="")
 
     def _draw_hatch_polygon(self, polygon_points) -> None:
         if len(polygon_points) < 3:
