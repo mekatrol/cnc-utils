@@ -3,6 +3,7 @@ import math
 from typing import TYPE_CHECKING, Tuple
 from colors import COLORS
 from geometry.GeoUtil import GeoUtil
+from geometry.PointInt import PointInt
 from geometry.PointInPolygonResult import PointInPolygonResult
 from views.view_base import BaseView
 
@@ -66,7 +67,6 @@ class View3D(BaseView):
         minx, miny, maxx, maxy = GeoUtil.world_bounds(self.app.model)
         dx = maxx - minx or 1.0
         dy = maxy - miny or 1.0
-        size = max(dx, dy)
         # Fit geometry to the visible area with a little padding
         scale_x = (w * 0.9) / dx
         scale_y = (h * 0.9) / dy
@@ -222,30 +222,72 @@ class View3D(BaseView):
             coords.append((xs, ys))
         return coords
 
+    def _screen_to_world(
+        self, x: float, y: float, center_x: float, center_y: float
+    ) -> tuple[float, float] | None:
+        w = self.canvas.winfo_width() or 1
+        h = self.canvas.winfo_height() or 1
+        x1 = (x - w * 0.5 - self.pan[0]) / self.zoom
+        y2 = -(y - h * 0.5 - self.pan[1]) / self.zoom
+
+        cos_yaw = math.cos(self.yaw)
+        sin_yaw = math.sin(self.yaw)
+        cos_pitch = math.cos(self.pitch)
+        sin_pitch = math.sin(self.pitch)
+
+        # Solve for world x,y on z=0 plane directly from orthographic projection.
+        if abs(cos_yaw) < 1e-6 or abs(cos_pitch) < 1e-6:
+            return None
+        x_rel = x1 / cos_yaw
+        y_rel = (y2 - sin_pitch * sin_yaw * x_rel) / cos_pitch
+        return x_rel + center_x, y_rel + center_y
+
+    def _screen_to_pointint(
+        self, x: float, y: float, scale: int, cx: float, cy: float
+    ) -> "PointInt" | None:
+        world = self._screen_to_world(x, y, cx, cy)
+        if world is None:
+            return None
+        xw, yw = world
+        return PointInt(
+            GeoUtil.float_to_int(xw, scale),
+            GeoUtil.float_to_int(yw, scale),
+        )
+
     def _select_polygon(self, x: float, y: float) -> None:
         g = self.app.model
         if not g or not g.polylines:
             self._selected_polygons = []
             return
 
-        w = self.canvas.winfo_width()
-        h = self.canvas.winfo_height()
-        if w <= 1 or h <= 1:
-            return
-
+        s = g.scale if g.scale else 1
         minx, miny, maxx, maxy = GeoUtil.world_bounds(self.app.model)
         cx = (minx + maxx) * 0.5
         cy = (miny + maxy) * 0.5
-        s = g.scale if g.scale else 1
-
         polygons = self._collect_polygons()
         containing = []
-        for poly in polygons:
-            proj = self._project_polygon(poly["points"], w, h, cx, cy, s)
-            if self._point_in_polygon_screen((x, y), proj):
-                containing.append(poly)
+        query = self._screen_to_pointint(x, y, s, cx, cy)
+        if query is not None:
+            for poly in polygons:
+                result = GeoUtil.point_in_polygon(query, poly["points"])
+                if result in (
+                    PointInPolygonResult.Inside,
+                    PointInPolygonResult.Edge,
+                    PointInPolygonResult.Vertex,
+                ):
+                    containing.append(poly)
+        else:
+            w = self.canvas.winfo_width()
+            h = self.canvas.winfo_height()
+            if w <= 1 or h <= 1:
+                return
+            for poly in polygons:
+                proj = self._project_polygon(poly["points"], w, h, cx, cy, s)
+                if self._point_in_polygon_screen((x, y), proj):
+                    containing.append(poly)
 
         if not containing:
+            self._selected_polygons = []
             return
 
         selected = min(
