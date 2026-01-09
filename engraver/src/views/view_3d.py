@@ -36,6 +36,7 @@ class View3D(BaseView):
         self.pitch = math.radians(0)
         self.zoom = 50.0  # pixel scale (screen pixels per world unit at z≈0)
         self.pan = [0.0, 0.0]  # screen-space pan in pixels
+        self._pivot_center: tuple[float, float] | None = None
 
         # Mouse state
         self._rotating = False
@@ -65,7 +66,7 @@ class View3D(BaseView):
         self.canvas.bind_all("f", lambda e: self.fit_to_view())
         self.canvas.bind_all("F", lambda e: self.fit_to_view())
 
-    def fit_to_view(self):
+    def fit_to_view(self, include_origin: bool = False):
         # Compute bounding box in world units and scale to canvas size
         self.fit_to_view_pending = False
         w = self.canvas.winfo_width() or 1
@@ -74,6 +75,11 @@ class View3D(BaseView):
             self.fit_to_view_pending = True
             return
         minx, miny, maxx, maxy = GeoUtil.world_bounds(self.app.model)
+        if include_origin:
+            minx = min(minx, 0.0)
+            miny = min(miny, 0.0)
+            maxx = max(maxx, 0.0)
+            maxy = max(maxy, 0.0)
         dx = maxx - minx or 1.0
         dy = maxy - miny or 1.0
         # Fit geometry to the visible area with a little padding
@@ -84,8 +90,18 @@ class View3D(BaseView):
         self.pan = [0.0, 0.0]
         self.yaw = math.radians(0)
         self.pitch = math.radians(0)
+        self._pivot_center = ((minx + maxx) * 0.5, (miny + maxy) * 0.5)
 
         self.redraw()
+
+    def _get_pivot_center(self) -> tuple[float, float]:
+        if self._pivot_center is not None:
+            return self._pivot_center
+        g = self.app.model
+        if not g or not g.polylines:
+            return 0.0, 0.0
+        minx, miny, maxx, maxy = GeoUtil.world_bounds(g)
+        return (minx + maxx) * 0.5, (miny + maxy) * 0.5
 
     # Events
     def _on_press_left(self, event):
@@ -182,9 +198,7 @@ class View3D(BaseView):
         h = c.winfo_height()
 
         # Compute pivot at model center in world units (bbox center)
-        minx, miny, maxx, maxy = GeoUtil.world_bounds(self.app.model)
-        cx = (minx + maxx) * 0.5
-        cy = (miny + maxy) * 0.5
+        cx, cy = self._get_pivot_center()
 
         # Grid plane (drawn around pivot)
         self._draw_grid_3d(w, h)
@@ -279,9 +293,7 @@ class View3D(BaseView):
             return
 
         s = g.scale if g.scale else 1
-        minx, miny, maxx, maxy = GeoUtil.world_bounds(self.app.model)
-        cx = (minx + maxx) * 0.5
-        cy = (miny + maxy) * 0.5
+        cx, cy = self._get_pivot_center()
         polygons = self._collect_polygons()
         containing = []
         query = self._screen_to_pointint(x, y, s, cx, cy)

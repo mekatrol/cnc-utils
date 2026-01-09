@@ -58,11 +58,16 @@ class View2D(BaseView):
         self.canvas.bind_all("R", lambda e: self.reset_view())
 
     # View control
-    def fit_to_view(self):
+    def fit_to_view(self, include_origin: bool = False):
         self.fit_to_view_pending = False
         w = self.canvas.winfo_width() or 1
         h = self.canvas.winfo_height() or 1
         minx, miny, maxx, maxy = GeoUtil.world_bounds(self.app.model)
+        if include_origin:
+            minx = min(minx, 0.0)
+            miny = min(miny, 0.0)
+            maxx = max(maxx, 0.0)
+            maxy = max(maxy, 0.0)
         dx = maxx - minx or 1.0
         dy = maxy - miny or 1.0
         # Leave a little padding

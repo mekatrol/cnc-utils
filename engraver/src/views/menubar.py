@@ -44,6 +44,9 @@ class Menubar(tk.Menu):
 
         # View
         viewm.add_command(label="Fit", command=app.fit_current)
+        viewm.add_command(
+            label="Fit Including Origin", command=app.fit_current_including_origin
+        )
 
         # Key bindings
         app.bind_all(open_bind, lambda e: app.open_file_dialog())
