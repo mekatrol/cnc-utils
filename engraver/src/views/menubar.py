@@ -22,10 +22,8 @@ class Menubar(tk.Menu):
 
         filem = tk.Menu(self)
         viewm = tk.Menu(self)
-        genm = tk.Menu(self)
         self.add_cascade(label="File", menu=filem)
         self.add_cascade(label="View", menu=viewm)
-        self.add_cascade(label="Generate", menu=genm)
 
         # Platform accelerators
         if sys.platform == "darwin":
@@ -49,10 +47,6 @@ class Menubar(tk.Menu):
         viewm.add_command(
             label="Fit Including Origin", command=app.fit_current_including_origin
         )
-
-        # Generate
-        genm.add_command(label="Generate Paths", command=app.generate_paths_for_selection)
-        genm.add_command(label="Clear Generated Paths", command=app.clear_generated_paths)
 
         # Key bindings
         app.bind_all(open_bind, lambda e: app.open_file_dialog())
