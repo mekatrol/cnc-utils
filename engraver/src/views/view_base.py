@@ -47,8 +47,9 @@ class BaseView(ttk.Frame):
             points = polyline.points
             if len(points) < 3:
                 continue
-            if len(points) >= 2 and points[0] == points[-1]:
-                points = points[:-1]
+            if len(points) < 2 or points[0] != points[-1]:
+                continue
+            points = points[:-1]
             if len(points) < 3:
                 continue
             polygons.append({"index": idx, "points": points})

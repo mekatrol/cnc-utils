@@ -313,6 +313,12 @@ class SvgConverter:
                         pts.append(pts[0])
                     polylines_float.append(SvgConverter._apply_matrix_to_points(pts, M))
 
+            elif isinstance(elem, Polyline):
+                raw = cast(Iterable[Any], getattr(elem, "points", ()))
+                pts = [p for p in (GeoUtil.safe_to_point(p) for p in raw) if p]
+                if len(pts) >= 2:
+                    polylines_float.append(SvgConverter._apply_matrix_to_points(pts, M))
+
         # Integerize (and flip Y)
         polylines_int: List[PolylineInt] = []
         close_tol = max(1e-6, tol)
