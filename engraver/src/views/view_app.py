@@ -13,6 +13,7 @@ from geometry.PointInt import PointInt
 from geometry.PolylineInt import PolylineInt
 from geometry.GeometryInt import GeometryInt
 from geometry.GeoUtil import GeoUtil
+from geometry.poly_processor import PolyProcessor
 from export.JsonExporter import JsonExporter
 from svg.SvgConverter import SvgConverter
 
@@ -448,6 +449,14 @@ class AppView(tk.Tk):
             self._tree_menu.add_command(
                 label="Centre to origin", command=self.centre_to_origin
             )
+            self._tree_menu.add_separator()
+            self._tree_menu.add_command(
+                label="Fix Self Intersecting Polygons", command=self.simplify_polygons
+            )
+            self._tree_menu.add_command(
+                label="Close Polygons", command=self.close_polygons
+            )
+            self._tree_menu.add_command(label="Clip All", command=self.clip_all)
         elif kind == "geometry_root":
             self._tree_menu.add_command(
                 label="Centre to origin (all)", command=self.centre_to_origin
@@ -1077,6 +1086,64 @@ class AppView(tk.Tk):
         self.menubar.files_dirty = True
         self.redraw_all()
         self.fit_current()
+
+    def simplify_polygons(self) -> None:
+        self._run_polygon_processing(
+            "Fixing self intersecting polygons…",
+            lambda polylines, _scale: PolyProcessor.split_self_intersections(polylines),
+        )
+
+    def close_polygons(self) -> None:
+        self._run_polygon_processing(
+            "Closing polygons…",
+            lambda polylines, _scale: PolyProcessor.close_open_polylines(polylines),
+        )
+
+    def clip_all(self) -> None:
+        self._run_polygon_processing(
+            "Clipping polygons…",
+            lambda polylines, scale: PolyProcessor.split_intersections_between_polygons(
+                polylines, scale
+            ),
+        )
+
+    def _run_polygon_processing(self, message: str, func) -> None:
+        if not self.model or not self.model.polylines:
+            messagebox.showinfo("Geometry Operation", "No geometry loaded.")
+            return
+        polylines = self.model.polylines
+        scale = int(self.model.scale) if self.model.scale else 1
+        self._show_spinner(message)
+        threading.Thread(
+            target=self._polygon_processing_worker,
+            args=(func, polylines, scale),
+            daemon=True,
+        ).start()
+
+    def _polygon_processing_worker(self, func, polylines, scale: int) -> None:
+        try:
+            result = func(polylines, scale)
+        except Exception as e:
+            self.after(0, lambda: self._polygon_processing_failed(e))
+            return
+        self.after(0, lambda: self._polygon_processing_done(result))
+
+    def _polygon_processing_done(self, polylines: List[PolylineInt]) -> None:
+        self._hide_spinner()
+        if not self.model:
+            return
+        self.model = GeometryInt(polylines, self.model.points, self.model.scale)
+        self.selected_polygons = []
+        self.generated_paths = []
+        self.show_generated_paths.set(True)
+        self.menubar.files_dirty = True
+        self._refresh_tree()
+        self.update_properties()
+        self.redraw_all()
+
+    def _polygon_processing_failed(self, err: Exception) -> None:
+        self._hide_spinner()
+        messagebox.showerror("Geometry Operation Failed", f"{err}")
 
     def _format_svg_number(self, value: float) -> str:
         text = f"{value:.6f}".rstrip("0").rstrip(".")

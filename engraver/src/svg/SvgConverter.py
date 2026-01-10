@@ -1,6 +1,5 @@
 import math
 from typing import Any, Iterable, List, Optional, cast
-from geometry.poly_processor import PolyProcessor
 from svgelements import (
     SVG,
     Path,
@@ -333,11 +332,5 @@ class SvgConverter:
                 if is_closed:
                     pts_i[-1] = pts_i[0]
                 polylines_int.append(PolylineInt(points=pts_i))
-
-        polylines_int = PolyProcessor.split_self_intersections(polylines_int)
-        polylines_int = PolyProcessor.close_open_polylines(polylines_int)
-        polylines_int = PolyProcessor.split_intersections_between_polygons(
-            polylines_int, scale
-        )
 
         return GeometryInt(polylines=polylines_int, points=[], scale=scale)
