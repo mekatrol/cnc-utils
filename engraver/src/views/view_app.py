@@ -162,6 +162,10 @@ class AppView(tk.Tk):
                 label=label, command=self._toggle_all_paths_visibility
             )
             self._tree_menu.add_command(
+                label="Generate paths for selected polygons",
+                command=lambda: self.generate_paths_for_selection(append=True),
+            )
+            self._tree_menu.add_command(
                 label="Remove All", command=self._remove_all_paths
             )
         elif kind == "path":
@@ -701,7 +705,7 @@ class AppView(tk.Tk):
             return
         self.menubar.files_dirty = False
 
-    def generate_paths_for_selection(self) -> None:
+    def generate_paths_for_selection(self, append: bool = False) -> None:
         if not self.selected_polygons:
             messagebox.showinfo("Generate Paths", "No polygons selected.")
             return
@@ -726,7 +730,7 @@ class AppView(tk.Tk):
         self._show_spinner("Generating paths…")
         threading.Thread(
             target=self._generate_paths_worker,
-            args=(selection, hatch_angle, hatch_spacing, scale),
+            args=(selection, hatch_angle, hatch_spacing, scale, append),
             daemon=True,
         ).start()
 
@@ -736,6 +740,7 @@ class AppView(tk.Tk):
         hatch_angle: float,
         hatch_spacing: float,
         scale: int,
+        append: bool,
     ):
         try:
             paths = []
@@ -774,11 +779,14 @@ class AppView(tk.Tk):
             self.after(0, self._generate_paths_failed, e)
             return
 
-        self.after(0, self._generate_paths_done, paths)
+        self.after(0, self._generate_paths_done, paths, append)
 
-    def _generate_paths_done(self, paths):
+    def _generate_paths_done(self, paths, append: bool = False):
         self._hide_spinner()
-        self.generated_paths = paths
+        if append:
+            self.generated_paths.extend(paths)
+        else:
+            self.generated_paths = paths
         self.menubar.files_dirty = True
         self._refresh_tree()
         self.update_properties()
