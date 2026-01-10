@@ -115,19 +115,11 @@ class AppView(tk.Tk):
         self.right_sidebar = ttk.Frame(self.main_frame, width=260)
         self.right_sidebar.grid(row=0, column=2, sticky="nsew")
         self.right_sidebar.grid_propagate(False)
-        self.right_sidebar.rowconfigure(2, weight=1)
+        self.right_sidebar.rowconfigure(1, weight=1)
         self.right_sidebar.columnconfigure(0, weight=1)
 
         label = ttk.Label(self.right_sidebar, text="Properties")
         label.grid(row=0, column=0, sticky="w", padx=8, pady=(8, 4))
-
-        show_paths = ttk.Checkbutton(
-            self.right_sidebar,
-            text="Show generated paths",
-            variable=self.show_generated_paths,
-            command=self._on_toggle_generated_paths,
-        )
-        show_paths.grid(row=1, column=0, sticky="w", padx=8, pady=(0, 8))
 
         props = ttk.Label(
             self.right_sidebar,
@@ -135,11 +127,7 @@ class AppView(tk.Tk):
             justify="left",
             wraplength=240,
         )
-        props.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
-
-    def _on_toggle_generated_paths(self) -> None:
-        self.redraw_all()
-        self.update_properties()
+        props.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
 
     def _on_tree_select(self, _event) -> None:
         selection = self.scene_tree.selection()
@@ -154,7 +142,10 @@ class AppView(tk.Tk):
         if not row_id:
             return
         self.scene_tree.selection_set(row_id)
-        action = self._tree_item_action.get(row_id)
+        if row_id == self.tree_paths_id:
+            action = ("paths_root", None)
+        else:
+            action = self._tree_item_action.get(row_id)
         if not action:
             return
         self._tree_menu.delete(0, "end")
@@ -164,6 +155,11 @@ class AppView(tk.Tk):
             label = "Hide" if is_visible else "Show"
             self._tree_menu.add_command(
                 label=label, command=self._toggle_geometry_visibility
+            )
+        elif kind == "paths_root":
+            label = "Hide All" if self.show_generated_paths.get() else "Show All"
+            self._tree_menu.add_command(
+                label=label, command=self._toggle_all_paths_visibility
             )
         elif kind == "path":
             entry = self._get_path_entry(payload)
@@ -192,6 +188,12 @@ class AppView(tk.Tk):
         self.show_geometry.set(not self.show_geometry.get())
         if not self.show_geometry.get():
             self.selected_polygons = []
+        self._refresh_tree()
+        self.update_properties()
+        self.redraw_all()
+
+    def _toggle_all_paths_visibility(self) -> None:
+        self.show_generated_paths.set(not self.show_generated_paths.get())
         self._refresh_tree()
         self.update_properties()
         self.redraw_all()
@@ -245,6 +247,8 @@ class AppView(tk.Tk):
                 primary = len(lines.get("primary", []))
                 secondary = len(lines.get("secondary", []))
                 status = "shown" if entry.get("visible", True) else "hidden"
+                if not self.show_generated_paths.get():
+                    status = "hidden"
                 item = self.scene_tree.insert(
                     self.tree_paths_id,
                     "end",
