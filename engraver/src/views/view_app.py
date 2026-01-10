@@ -355,15 +355,17 @@ class AppView(tk.Tk):
 
         midx = minx + (maxx - minx) / 2.0
         midy = miny + (maxy - miny) / 2.0
+        midx_i = int(round(midx))
+        midy_i = int(round(midy))
 
         new_polylines: List[PolylineInt] = []
 
         for pl in self.model.polylines:
-            moved = [PointInt(p.x - midx, p.y - midy) for p in pl.points]
+            moved = [PointInt(p.x - midx_i, p.y - midy_i) for p in pl.points]
             new_polylines.append(
                 PolylineInt(moved, simplify_tolerance=pl.simplify_tolerance)
             )
-        new_points = [PointInt(p.x - midx, p.y - midy) for p in self.model.points]
+        new_points = [PointInt(p.x - midx_i, p.y - midy_i) for p in self.model.points]
         self.model = GeometryInt(new_polylines, new_points, self.model.scale)
 
         for i in range(self.notebook.index("end")):
