@@ -62,6 +62,7 @@ class AppView(tk.Tk):
         self.source_label_var = tk.StringVar(value="No file loaded")
         self.source_path: Optional[str] = None
         self.selected_polygons = []
+        self.selected_edge_polygons = []
         self.generated_paths = []
         settings = self._load_settings()
         path_settings = settings["path_generation"]

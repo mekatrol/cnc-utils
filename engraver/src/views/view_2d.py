@@ -168,6 +168,7 @@ class View2D(BaseView):
 
         if show_geometry:
             # Draw geometry polylines
+            selected_indices = set(self.app.selected_edge_polygons)
             for i, polyline in enumerate(g.polylines):
                 # Must be at least 2 points to have any line segments
                 if len(polyline.points) < 2:
@@ -187,7 +188,8 @@ class View2D(BaseView):
                 # Batch draw this polyline as many segments
                 if coords:
                     color = COLORS[i % len(COLORS)]
-                    c.create_line(*coords, fill=color, width=1.5)
+                    width = 1.5 * 2.0 if i in selected_indices else 1.5
+                    c.create_line(*coords, fill=color, width=width)
 
         self._draw_generated_paths()
 
@@ -309,10 +311,52 @@ class View2D(BaseView):
             self.app.update_properties()
             return
 
-        query = self._screen_to_pointint(x, y, g.scale or 1)
         polygons = self._collect_polygons()
+        s = g.scale or 1
+
+        def toggle_selection(selected):
+            holes = []
+            for poly in polygons:
+                if poly is selected:
+                    continue
+                result = GeoUtil.point_in_polygon(poly["points"][0], selected["points"])
+                if result == PointInPolygonResult.Inside:
+                    holes.append(poly)
+
+            selected_entry = {"polygon": selected, "holes": holes}
+            existing_idx = next(
+                (
+                    idx
+                    for idx, entry in enumerate(self.app.selected_polygons)
+                    if entry["polygon"]["index"] == selected["index"]
+                ),
+                None,
+            )
+            if existing_idx is None:
+                self.app.selected_polygons.append(selected_entry)
+            else:
+                self.app.selected_polygons.pop(existing_idx)
+            self.app.update_properties()
+
+        def toggle_edge_selection(selected):
+            idx = selected["index"]
+            if idx in self.app.selected_edge_polygons:
+                self.app.selected_edge_polygons.remove(idx)
+            else:
+                self.app.selected_edge_polygons.append(idx)
+
+        edge_hit = self._find_edge_hit_polygon(x, y, polygons, s)
+        if edge_hit is not None:
+            toggle_edge_selection(edge_hit)
+            return
+
+        query = self._screen_to_pointint(x, y, s)
         containing = []
+        qx, qy = query.x, query.y
         for poly in polygons:
+            minx, miny, maxx, maxy = self._polygon_bbox(poly["points"])
+            if qx < minx or qx > maxx or qy < miny or qy > maxy:
+                continue
             result = GeoUtil.point_in_polygon(query, poly["points"])
             if result in (
                 PointInPolygonResult.Inside,
@@ -330,29 +374,83 @@ class View2D(BaseView):
             containing,
             key=lambda poly: abs(GeoUtil.area(poly["points"])),
         )
+        toggle_selection(selected)
 
-        holes = []
-        for poly in polygons:
-            if poly is selected:
-                continue
-            result = GeoUtil.point_in_polygon(poly["points"][0], selected["points"])
-            if result == PointInPolygonResult.Inside:
-                holes.append(poly)
+    @staticmethod
+    def _polygon_bbox(points) -> tuple[int, int, int, int]:
+        minx = min(pt.x for pt in points)
+        maxx = max(pt.x for pt in points)
+        miny = min(pt.y for pt in points)
+        maxy = max(pt.y for pt in points)
+        return minx, miny, maxx, maxy
 
-        selected_entry = {"polygon": selected, "holes": holes}
-        existing_idx = next(
-            (
-                idx
-                for idx, entry in enumerate(self.app.selected_polygons)
-                if entry["polygon"]["index"] == selected["index"]
-            ),
-            None,
-        )
-        if existing_idx is None:
-            self.app.selected_polygons.append(selected_entry)
+    @staticmethod
+    def _point_segment_distance_sq(point, a, b) -> float:
+        px, py = point
+        ax, ay = a
+        bx, by = b
+        dx = bx - ax
+        dy = by - ay
+        if dx == 0.0 and dy == 0.0:
+            return (px - ax) ** 2 + (py - ay) ** 2
+        t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+        if t <= 0.0:
+            cx, cy = ax, ay
+        elif t >= 1.0:
+            cx, cy = bx, by
         else:
-            self.app.selected_polygons.pop(existing_idx)
-        self.app.update_properties()
+            cx = ax + t * dx
+            cy = ay + t * dy
+        return (px - cx) ** 2 + (py - cy) ** 2
+
+    def _find_edge_hit_polygon(self, x: float, y: float, polygons, scale: int):
+        edge_tol = 5.0
+        edge_tol_sq = edge_tol * edge_tol
+        best_poly = None
+        best_dist = None
+
+        for poly in polygons:
+            screen_points = []
+            minx = None
+            maxx = None
+            miny = None
+            maxy = None
+            for pt in poly["points"]:
+                xw, yw = pt.x / scale, pt.y / scale
+                xs = xw * self.zoom + self.offset[0]
+                ys = -yw * self.zoom + self.offset[1]
+                screen_points.append((xs, ys))
+                if minx is None:
+                    minx = maxx = xs
+                    miny = maxy = ys
+                else:
+                    minx = min(minx, xs)
+                    maxx = max(maxx, xs)
+                    miny = min(miny, ys)
+                    maxy = max(maxy, ys)
+
+            if minx is None:
+                continue
+            if (
+                x < minx - edge_tol
+                or x > maxx + edge_tol
+                or y < miny - edge_tol
+                or y > maxy + edge_tol
+            ):
+                continue
+
+            count = len(screen_points)
+            for i in range(count):
+                a = screen_points[i]
+                b = screen_points[(i + 1) % count]
+                dist_sq = self._point_segment_distance_sq((x, y), a, b)
+                if dist_sq <= edge_tol_sq and (
+                    best_dist is None or dist_sq < best_dist
+                ):
+                    best_dist = dist_sq
+                    best_poly = poly
+
+        return best_poly
 
     def _draw_selection(self) -> None:
         show_geometry = getattr(self.app, "show_geometry", None)
