@@ -1,5 +1,6 @@
 import math
 from typing import Any, Iterable, List, Optional, cast
+import pyclipper
 from svgelements import (
     SVG,
     Path,
@@ -22,6 +23,52 @@ from geometry.PointFloat import PointFloat
 
 class SvgConverter:
     """SVG -> integer-scaled polylines (GeometryInt)."""
+
+    @staticmethod
+    def _split_self_intersections(
+        polylines: List[PolylineInt],
+    ) -> List[PolylineInt]:
+        out: List[PolylineInt] = []
+        for poly in polylines:
+            pts = poly.points
+            if len(pts) < 4:
+                out.append(poly)
+                continue
+
+            if pts[0] != pts[-1]:
+                out.append(poly)
+                continue
+
+            path = [(p.x, p.y) for p in pts[:-1]]
+            if len(path) < 3:
+                out.append(poly)
+                continue
+
+            try:
+                simple_paths = pyclipper.SimplifyPolygon(
+                    path, fill_type=pyclipper.PFT_EVENODD
+                )
+            except Exception:
+                out.append(poly)
+                continue
+
+            if not simple_paths:
+                continue
+
+            for sp in simple_paths:
+                if len(sp) < 3:
+                    continue
+                points = [PointInt(int(x), int(y)) for (x, y) in sp]
+                if points[0] != points[-1]:
+                    points.append(points[0])
+                out.append(
+                    PolylineInt(
+                        points=points,
+                        simplify_tolerance=poly.simplify_tolerance,
+                    )
+                )
+
+        return out
 
     @staticmethod
     def _walk_with_matrix(node: Any, parent: Optional[Matrix] = None):
@@ -325,5 +372,7 @@ class SvgConverter:
             ]
             if len(pts_i) >= 2:
                 polylines_int.append(PolylineInt(points=pts_i))
+
+        polylines_int = SvgConverter._split_self_intersections(polylines_int)
 
         return GeometryInt(polylines=polylines_int, points=[], scale=scale)
