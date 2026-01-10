@@ -220,6 +220,30 @@ class View2D(BaseView):
             if not entry.get("visible", True):
                 continue
             lines = entry.get("lines", {})
+            children = entry.get("children", [])
+            if children:
+                for child in children:
+                    if not isinstance(child, dict):
+                        continue
+                    if not child.get("visible", True):
+                        continue
+                    key = child.get("key")
+                    if not key:
+                        continue
+                    color = (
+                        BOUNDARY_COLOR if str(key).startswith("boundary") else HATCH_COLOR
+                    )
+                    width = 1.5 if color == BOUNDARY_COLOR else 1.0
+                    for segment in lines.get(key, []):
+                        if len(segment) < 2:
+                            continue
+                        (x0, y0), (x1, y1) = segment[0], segment[1]
+                        xs0 = x0 * self.zoom + self.offset[0]
+                        ys0 = -y0 * self.zoom + self.offset[1]
+                        xs1 = x1 * self.zoom + self.offset[0]
+                        ys1 = -y1 * self.zoom + self.offset[1]
+                        c.create_line(xs0, ys0, xs1, ys1, fill=color, width=width)
+                continue
             for key in ("primary", "secondary"):
                 for segment in lines.get(key, []):
                     if len(segment) < 2:

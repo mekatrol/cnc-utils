@@ -260,6 +260,32 @@ class View3D(BaseView):
             if not entry.get("visible", True):
                 continue
             lines = entry.get("lines", {})
+            children = entry.get("children", [])
+            if children:
+                for child in children:
+                    if not isinstance(child, dict):
+                        continue
+                    if not child.get("visible", True):
+                        continue
+                    key = child.get("key")
+                    if not key:
+                        continue
+                    color = (
+                        BOUNDARY_COLOR if str(key).startswith("boundary") else HATCH_COLOR
+                    )
+                    width = 1.5 if color == BOUNDARY_COLOR else 1.0
+                    for segment in lines.get(key, []):
+                        if len(segment) < 2:
+                            continue
+                        (x0, y0), (x1, y1) = segment[0], segment[1]
+                        x_rel0 = x0 - cx
+                        y_rel0 = y0 - cy
+                        x_rel1 = x1 - cx
+                        y_rel1 = y1 - cy
+                        xs0, ys0, _ = self._project_point(x_rel0, y_rel0, 0.0, w, h)
+                        xs1, ys1, _ = self._project_point(x_rel1, y_rel1, 0.0, w, h)
+                        c.create_line(xs0, ys0, xs1, ys1, fill=color, width=width)
+                continue
             for key in ("primary", "secondary"):
                 for segment in lines.get(key, []):
                     if len(segment) < 2:

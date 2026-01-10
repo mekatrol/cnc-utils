@@ -112,6 +112,8 @@ class AppView(tk.Tk):
         self.scene_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
         self.scene_tree.bind("<Button-1>", self._on_tree_left_click)
         self.scene_tree.bind("<Button-3>", self._on_tree_right_click)
+        self.scene_tree.bind("<<TreeviewOpen>>", self._on_tree_open)
+        self.scene_tree.bind("<<TreeviewClose>>", self._on_tree_close)
 
         self.tree_geometry_id = self.scene_tree.insert(
             "", "end", text="Geometry", open=True
@@ -171,7 +173,7 @@ class AppView(tk.Tk):
             return "break"
         action = self._tree_item_action.get(row_id)
         if not action:
-            return None
+            return "break"
         kind, payload = action
         if kind == "geometry":
             self._toggle_geometry_visibility()
@@ -179,7 +181,11 @@ class AppView(tk.Tk):
         if kind == "path":
             self._toggle_path_visibility(payload)
             return "break"
-        return None
+        if kind == "path_child":
+            path_index, key = payload
+            self._toggle_path_child_visibility(path_index, key)
+            return "break"
+        return "break"
 
     def _on_tree_right_click(self, event) -> None:
         row_id = self.scene_tree.identify_row(event.y)
@@ -234,6 +240,22 @@ class AppView(tk.Tk):
             self._tree_menu.add_command(
                 label="Remove", command=lambda idx=payload: self._remove_path(idx)
             )
+        elif kind == "path_child":
+            path_index, key = payload
+            entry = self._get_path_entry(path_index)
+            if entry is None:
+                return
+            child = self._get_path_child(entry, key)
+            if child is None:
+                return
+            is_visible = child.get("visible", True)
+            label = "Hide" if is_visible else "Show"
+            self._tree_menu.add_command(
+                label=label,
+                command=lambda idx=path_index, k=key: self._toggle_path_child_visibility(
+                    idx, k
+                ),
+            )
         else:
             return
         try:
@@ -241,12 +263,62 @@ class AppView(tk.Tk):
         finally:
             self._tree_menu.grab_release()
 
+    def _on_tree_open(self, event) -> None:
+        row_id = event.widget.focus()
+        action = self._tree_item_action.get(row_id)
+        if not action:
+            return
+        kind, payload = action
+        if kind == "path":
+            entry = self._get_path_entry(payload)
+            if entry is not None:
+                entry["expanded"] = True
+
+    def _on_tree_close(self, event) -> None:
+        row_id = event.widget.focus()
+        action = self._tree_item_action.get(row_id)
+        if not action:
+            return
+        kind, payload = action
+        if kind == "path":
+            entry = self._get_path_entry(payload)
+            if entry is not None:
+                entry["expanded"] = False
+
     def _get_path_entry(self, index: int):
         if index < 0:
             return None
         if index >= len(self.generated_paths):
             return None
         return self.generated_paths[index]
+
+    def _ensure_path_children(self, entry: dict) -> list[dict]:
+        children = entry.get("children")
+        if isinstance(children, list) and children:
+            return children
+        lines = entry.get("lines", {})
+        children = []
+        if lines.get("primary"):
+            children.append(
+                {"key": "primary", "name": "Fill (primary)", "visible": True}
+            )
+        if lines.get("secondary"):
+            children.append(
+                {"key": "secondary", "name": "Fill (secondary)", "visible": True}
+            )
+        boundary_keys = [key for key in lines.keys() if key.startswith("boundary")]
+        for key in sorted(boundary_keys):
+            name = "Boundary" if key == "boundary" else key.replace("_", " ").title()
+            children.append({"key": key, "name": name, "visible": True})
+        entry["children"] = children
+        return children
+
+    def _get_path_child(self, entry: dict, key: str) -> dict | None:
+        children = self._ensure_path_children(entry)
+        for child in children:
+            if child.get("key") == key:
+                return child
+        return None
 
     def _toggle_geometry_visibility(self) -> None:
         self.show_geometry.set(not self.show_geometry.get())
@@ -284,6 +356,18 @@ class AppView(tk.Tk):
         if entry is None:
             return
         entry["visible"] = not entry.get("visible", True)
+        self._refresh_tree()
+        self.update_properties()
+        self.redraw_all()
+
+    def _toggle_path_child_visibility(self, index: int, key: str) -> None:
+        entry = self._get_path_entry(index)
+        if entry is None:
+            return
+        child = self._get_path_child(entry, key)
+        if child is None:
+            return
+        child["visible"] = not child.get("visible", True)
         self._refresh_tree()
         self.update_properties()
         self.redraw_all()
@@ -335,7 +419,11 @@ class AppView(tk.Tk):
                 lines = entry.get("lines", {})
                 primary = len(lines.get("primary", []))
                 secondary = len(lines.get("secondary", []))
-                boundary = len(lines.get("boundary", []))
+                boundary = sum(
+                    len(lines.get(key, []))
+                    for key in lines.keys()
+                    if key.startswith("boundary")
+                )
                 status = "shown" if entry.get("visible", True) else "hidden"
                 if not self.show_generated_paths.get():
                     status = "hidden"
@@ -346,16 +434,44 @@ class AppView(tk.Tk):
                 item = self.scene_tree.insert(
                     self.tree_paths_id,
                     "end",
-                    text=f"Polygon {polygon_index} ({status})",
+                    text=f"Path {polygon_index} ({status})",
                     image=icon,
+                    open=entry.get("expanded", True),
                 )
                 self._tree_item_info[item] = (
-                    f"Polygon {polygon_index}\n"
+                    f"Path {polygon_index}\n"
                     f"Primary lines: {primary}\n"
                     f"Secondary lines: {secondary}\n"
                     f"Boundary segments: {boundary}"
                 )
                 self._tree_item_action[item] = ("path", idx)
+                children = self._ensure_path_children(entry)
+                for child in children:
+                    key = child.get("key")
+                    if not key:
+                        continue
+                    child_count = len(lines.get(key, []))
+                    child_visible = child.get("visible", True)
+                    child_status = "shown" if child_visible else "hidden"
+                    if not is_visible:
+                        child_status = "hidden"
+                    child_is_visible = is_visible and child_visible
+                    child_icon = (
+                        self._tree_icon_shown
+                        if child_is_visible
+                        else self._tree_icon_hidden
+                    )
+                    child_item = self.scene_tree.insert(
+                        item,
+                        "end",
+                        text=f"{child.get('name', key)} ({child_status})",
+                        image=child_icon,
+                    )
+                    self._tree_item_info[child_item] = (
+                        f"{child.get('name', key)}\n"
+                        f"Segments: {child_count}"
+                    )
+                    self._tree_item_action[child_item] = ("path_child", (idx, key))
         else:
             none_item = self.scene_tree.insert(
                 self.tree_paths_id,
@@ -828,20 +944,42 @@ class AppView(tk.Tk):
                     hatch_spacing,
                     scale,
                 )
-                boundary = self._polygon_boundary_segments(polygon_points, scale)
-                for hole in holes:
-                    boundary.extend(self._polygon_boundary_segments(hole, scale))
+                boundary_outer = self._polygon_boundary_segments(polygon_points, scale)
+                boundary_children = [
+                    {
+                        "key": "boundary_outer",
+                        "name": "Boundary (outer)",
+                        "visible": True,
+                    }
+                ]
+                lines = {
+                    "primary": primary,
+                    "secondary": secondary,
+                    "boundary_outer": boundary_outer,
+                }
+                for hole_index, hole in enumerate(holes, start=1):
+                    key = f"boundary_hole_{hole_index}"
+                    lines[key] = self._polygon_boundary_segments(hole, scale)
+                    boundary_children.append(
+                        {
+                            "key": key,
+                            "name": f"Boundary (hole {hole_index})",
+                            "visible": True,
+                        }
+                    )
+                children = [
+                    {"key": "primary", "name": "Fill (primary)", "visible": True},
+                    {"key": "secondary", "name": "Fill (secondary)", "visible": True},
+                ]
+                children.extend(boundary_children)
                 paths.append(
                     {
                         "polygon_index": entry["polygon_index"],
                         "hatch_angle_deg": hatch_angle,
                         "hatch_spacing": hatch_spacing,
                         "visible": True,
-                        "lines": {
-                            "primary": primary,
-                            "secondary": secondary,
-                            "boundary": boundary,
-                        },
+                        "lines": lines,
+                        "children": children,
                     }
                 )
         except Exception as e:
