@@ -9,6 +9,7 @@ from views.view_constants import (
     AXIS_X_COLOR,
     AXIS_Y_COLOR,
     BACKGROUND_COLOR,
+    BOUNDARY_COLOR,
     EMPTY_TEXT_COLOR,
     FILL_COLOR_2D,
     GRID_AXIS_COLOR,
@@ -229,6 +230,15 @@ class View2D(BaseView):
                     xs1 = x1 * self.zoom + self.offset[0]
                     ys1 = -y1 * self.zoom + self.offset[1]
                     c.create_line(xs0, ys0, xs1, ys1, fill=HATCH_COLOR, width=1.0)
+            for segment in lines.get("boundary", []):
+                if len(segment) < 2:
+                    continue
+                (x0, y0), (x1, y1) = segment[0], segment[1]
+                xs0 = x0 * self.zoom + self.offset[0]
+                ys0 = -y0 * self.zoom + self.offset[1]
+                xs1 = x1 * self.zoom + self.offset[0]
+                ys1 = -y1 * self.zoom + self.offset[1]
+                c.create_line(xs0, ys0, xs1, ys1, fill=BOUNDARY_COLOR, width=1.5)
 
     def _draw_axis_gizmo(self, w: int, h: int) -> None:
         # Fixed-size axis arrows anchored at the world origin.

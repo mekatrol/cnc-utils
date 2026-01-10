@@ -335,6 +335,7 @@ class AppView(tk.Tk):
                 lines = entry.get("lines", {})
                 primary = len(lines.get("primary", []))
                 secondary = len(lines.get("secondary", []))
+                boundary = len(lines.get("boundary", []))
                 status = "shown" if entry.get("visible", True) else "hidden"
                 if not self.show_generated_paths.get():
                     status = "hidden"
@@ -351,7 +352,8 @@ class AppView(tk.Tk):
                 self._tree_item_info[item] = (
                     f"Polygon {polygon_index}\n"
                     f"Primary lines: {primary}\n"
-                    f"Secondary lines: {secondary}"
+                    f"Secondary lines: {secondary}\n"
+                    f"Boundary segments: {boundary}"
                 )
                 self._tree_item_action[item] = ("path", idx)
         else:
@@ -826,6 +828,9 @@ class AppView(tk.Tk):
                     hatch_spacing,
                     scale,
                 )
+                boundary = self._polygon_boundary_segments(polygon_points, scale)
+                for hole in holes:
+                    boundary.extend(self._polygon_boundary_segments(hole, scale))
                 paths.append(
                     {
                         "polygon_index": entry["polygon_index"],
@@ -835,6 +840,7 @@ class AppView(tk.Tk):
                         "lines": {
                             "primary": primary,
                             "secondary": secondary,
+                            "boundary": boundary,
                         },
                     }
                 )
@@ -994,6 +1000,23 @@ class AppView(tk.Tk):
             if cur < base_end:
                 result.append((cur, base_end))
         return result
+
+    @staticmethod
+    def _polygon_boundary_segments(points: List[PointInt], scale: int):
+        if len(points) < 2:
+            return []
+        segments = []
+        count = len(points)
+        for i in range(count):
+            p0 = points[i]
+            p1 = points[(i + 1) % count]
+            segments.append(
+                [
+                    [p0.x / scale, p0.y / scale],
+                    [p1.x / scale, p1.y / scale],
+                ]
+            )
+        return segments
 
     def _hatch_lines_for_polygon(
         self,

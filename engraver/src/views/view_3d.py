@@ -14,6 +14,7 @@ from views.view_constants import (
     AXIS_Z_COLOR,
     AXIS_Z_DIM_COLOR,
     BACKGROUND_COLOR,
+    BOUNDARY_COLOR,
     EMPTY_TEXT_COLOR,
     FILL_COLOR_3D,
     GRID_LINE_COLOR,
@@ -271,6 +272,17 @@ class View3D(BaseView):
                     xs0, ys0, _ = self._project_point(x_rel0, y_rel0, 0.0, w, h)
                     xs1, ys1, _ = self._project_point(x_rel1, y_rel1, 0.0, w, h)
                     c.create_line(xs0, ys0, xs1, ys1, fill=HATCH_COLOR, width=1.0)
+            for segment in lines.get("boundary", []):
+                if len(segment) < 2:
+                    continue
+                (x0, y0), (x1, y1) = segment[0], segment[1]
+                x_rel0 = x0 - cx
+                y_rel0 = y0 - cy
+                x_rel1 = x1 - cx
+                y_rel1 = y1 - cy
+                xs0, ys0, _ = self._project_point(x_rel0, y_rel0, 0.0, w, h)
+                xs1, ys1, _ = self._project_point(x_rel1, y_rel1, 0.0, w, h)
+                c.create_line(xs0, ys0, xs1, ys1, fill=BOUNDARY_COLOR, width=1.5)
 
     def _project_polygon(
         self, points, w: int, h: int, cx: float, cy: float, scale: int
