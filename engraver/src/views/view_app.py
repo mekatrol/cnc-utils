@@ -26,6 +26,12 @@ class AppView(tk.Tk):
         super().__init__()
         self.spinner: tk.Toplevel | None = None
         self.title("Polygon Engraver")
+        icon_path = Path(__file__).resolve().parents[2] / "assets" / "app-icon.png"
+        try:
+            self._app_icon = tk.PhotoImage(file=str(icon_path))
+            self.iconphoto(True, self._app_icon)
+        except Exception:
+            self._app_icon = None
         self.geometry("1200x800")
         self.minsize(900, 600)
         try:
