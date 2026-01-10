@@ -129,13 +129,164 @@ class SvgConverter:
             bx0, by0, bx1, by1 = b
             return not (ax1 < bx0 or bx1 < ax0 or ay1 < by0 or by1 < ay0)
 
+        paths: List[List[tuple[int, int]]] = []
         for poly in closed:
             pts = poly.points
             if len(pts) >= 2 and pts[0] == pts[-1]:
                 pts = pts[:-1]
             if len(pts) < 3:
                 continue
-            path = [(p.x, p.y) for p in pts]
+            paths.append([(p.x, p.y) for p in pts])
+
+        tol = max(1, cut_delta)
+
+        def point_on_segment(
+            p: tuple[int, int],
+            a: tuple[int, int],
+            b: tuple[int, int],
+            tol_dist: int,
+        ) -> bool:
+            ax, ay = a
+            bx, by = b
+            px, py = p
+            dx = bx - ax
+            dy = by - ay
+            if dx == 0 and dy == 0:
+                return px == ax and py == ay
+            cross = (px - ax) * dy - (py - ay) * dx
+            if abs(cross) > tol_dist * max(abs(dx), abs(dy), 1):
+                return False
+            minx = min(ax, bx) - tol_dist
+            maxx = max(ax, bx) + tol_dist
+            miny = min(ay, by) - tol_dist
+            maxy = max(ay, by) + tol_dist
+            return minx <= px <= maxx and miny <= py <= maxy
+
+        def insert_point(
+            path: List[tuple[int, int]],
+            p: tuple[int, int],
+            tol_dist: int,
+        ) -> tuple[Optional[List[tuple[int, int]]], Optional[int]]:
+            for i, pt in enumerate(path):
+                if pt == p:
+                    return path, i
+            n = len(path)
+            for i in range(n):
+                a = path[i]
+                b = path[(i + 1) % n]
+                if point_on_segment(p, a, b, tol_dist):
+                    new_path = path[: i + 1] + [p] + path[i + 1 :]
+                    return new_path, i + 1
+            return None, None
+
+        def split_path_with_polyline(
+            path: List[tuple[int, int]],
+            polyline: List[tuple[int, int]],
+            tol_dist: int,
+        ) -> Optional[List[List[tuple[int, int]]]]:
+            if len(polyline) < 2:
+                return None
+            p0 = polyline[0]
+            p1 = polyline[-1]
+            if p0 == p1:
+                return None
+
+            updated, i0 = insert_point(path, p0, tol_dist)
+            if updated is None or i0 is None:
+                return None
+            updated, i1 = insert_point(updated, p1, tol_dist)
+            if updated is None or i1 is None:
+                return None
+            if i0 == i1:
+                return None
+
+            n = len(updated)
+            if i0 < i1:
+                seg1 = updated[i0 : i1 + 1]
+                seg2 = updated[i1:] + updated[: i0 + 1]
+            else:
+                seg1 = updated[i0:] + updated[: i1 + 1]
+                seg2 = updated[i1 : i0 + 1]
+
+            rev_line = list(reversed(polyline))
+            poly1 = seg1 + rev_line[1:]
+            if poly1 and poly1[0] == poly1[-1]:
+                poly1 = poly1[:-1]
+
+            poly2 = seg2 + polyline[1:]
+            if poly2 and poly2[0] == poly2[-1]:
+                poly2 = poly2[:-1]
+
+            if len(poly1) < 3 or len(poly2) < 3:
+                return None
+
+            return [poly1, poly2]
+
+        if open_polylines and paths:
+            remaining_open: List[PolylineInt] = []
+            for poly in open_polylines:
+                pts = poly.points
+                if len(pts) < 2:
+                    continue
+                polyline = [(p.x, p.y) for p in pts]
+                split_done = False
+                for i in range(len(paths)):
+                    split_paths = split_path_with_polyline(paths[i], polyline, tol)
+                    if split_paths:
+                        paths.pop(i)
+                        paths.extend(split_paths)
+                        split_done = True
+                        break
+                if not split_done:
+                    remaining_open.append(poly)
+            open_polylines = remaining_open
+
+        if not paths:
+            return polylines
+
+        areas = [abs(pyclipper.Area(p)) for p in paths]
+
+        def intersection_area(
+            a: List[tuple[int, int]], b: List[tuple[int, int]]
+        ) -> int:
+            if not bboxes_overlap(bbox(a), bbox(b)):
+                return 0
+            pc = pyclipper.Pyclipper()
+            pc.AddPath(a, pyclipper.PT_SUBJECT, True)  # type: ignore
+            pc.AddPath(b, pyclipper.PT_CLIP, True)  # type: ignore
+            inter = pc.Execute(
+                pyclipper.CT_INTERSECTION,
+                pyclipper.PFT_EVENODD,
+                pyclipper.PFT_EVENODD,
+            )
+            return int(sum(abs(pyclipper.Area(p)) for p in inter))
+
+        depths = [0 for _ in paths]
+        for i, path in enumerate(paths):
+            area_i = areas[i]
+            if area_i == 0:
+                continue
+            for j, other in enumerate(paths):
+                if i == j:
+                    continue
+                area_j = areas[j]
+                if area_j == 0:
+                    continue
+                ia = intersection_area(path, other)
+                if ia <= 0:
+                    continue
+                if ia >= area_i:
+                    if ia == area_i and area_i == area_j:
+                        continue
+                    depths[i] += 1
+
+        order = sorted(
+            range(len(paths)),
+            key=lambda i: (-depths[i], areas[i]),
+        )
+
+        for idx in order:
+            path = paths[idx]
             if not disjoint_paths:
                 disjoint_paths.append(path)
                 continue
