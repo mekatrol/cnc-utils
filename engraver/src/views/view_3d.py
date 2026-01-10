@@ -92,6 +92,7 @@ class View3D(BaseView):
         self.pitch = math.radians(0)
         self._pivot_center = ((minx + maxx) * 0.5, (miny + maxy) * 0.5)
 
+        self._rebuild_selected_polygons()
         self.redraw()
 
     def _get_pivot_center(self) -> tuple[float, float]:
@@ -242,6 +243,29 @@ class View3D(BaseView):
                 continue
             polygons.append({"index": idx, "points": points})
         return polygons
+
+    def _rebuild_selected_polygons(self) -> None:
+        if not self.app.selected_polygons:
+            return
+        polygons = self._collect_polygons()
+        if not polygons:
+            self.app.selected_polygons = []
+            return
+        polygons_by_index = {poly["index"]: poly for poly in polygons}
+        rebuilt = []
+        for entry in self.app.selected_polygons:
+            selected = polygons_by_index.get(entry["polygon"]["index"])
+            if not selected:
+                continue
+            holes = []
+            for poly in polygons:
+                if poly is selected:
+                    continue
+                result = GeoUtil.point_in_polygon(poly["points"][0], selected["points"])
+                if result == PointInPolygonResult.Inside:
+                    holes.append(poly)
+            rebuilt.append({"polygon": selected, "holes": holes})
+        self.app.selected_polygons = rebuilt
 
     def _project_polygon(
         self, points, w: int, h: int, cx: float, cy: float, scale: int

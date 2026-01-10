@@ -78,6 +78,7 @@ class View2D(BaseView):
         cx = (minx + maxx) * 0.5
         cy = (miny + maxy) * 0.5
         self.offset = [w * 0.5 - cx * self.zoom, h * 0.5 + cy * self.zoom]
+        self._rebuild_selected_polygons()
         self.redraw()
 
     def reset_view(self):
@@ -227,6 +228,29 @@ class View2D(BaseView):
                 continue
             polygons.append({"index": idx, "points": points})
         return polygons
+
+    def _rebuild_selected_polygons(self) -> None:
+        if not self.app.selected_polygons:
+            return
+        polygons = self._collect_polygons()
+        if not polygons:
+            self.app.selected_polygons = []
+            return
+        polygons_by_index = {poly["index"]: poly for poly in polygons}
+        rebuilt = []
+        for entry in self.app.selected_polygons:
+            selected = polygons_by_index.get(entry["polygon"]["index"])
+            if not selected:
+                continue
+            holes = []
+            for poly in polygons:
+                if poly is selected:
+                    continue
+                result = GeoUtil.point_in_polygon(poly["points"][0], selected["points"])
+                if result == PointInPolygonResult.Inside:
+                    holes.append(poly)
+            rebuilt.append({"polygon": selected, "holes": holes})
+        self.app.selected_polygons = rebuilt
 
     def _select_polygon(self, x: float, y: float) -> None:
         g = self.app.model
