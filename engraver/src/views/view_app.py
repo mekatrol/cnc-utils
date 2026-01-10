@@ -583,6 +583,51 @@ class AppView(tk.Tk):
         return intervals
 
     @staticmethod
+    def _build_edge_cache(points, direction, normal):
+        dx, dy = direction
+        nx, ny = normal
+        edges = []
+        for i in range(len(points)):
+            ax, ay = points[i]
+            bx, by = points[(i + 1) % len(points)]
+            sx = bx - ax
+            sy = by - ay
+            denom = nx * sx + ny * sy
+            if abs(denom) < 1e-9:
+                continue
+            base = nx * ax + ny * ay
+            adot = ax * dx + ay * dy
+            sdot = sx * dx + sy * dy
+            edges.append((base, denom, adot, sdot))
+        return edges
+
+    @staticmethod
+    def _polygon_line_intervals_cached(edges, offset):
+        intersections = []
+        for base, denom, adot, sdot in edges:
+            t = (offset - base) / denom
+            if t < 0.0 or t > 1.0:
+                continue
+            intersections.append(adot + t * sdot)
+
+        if len(intersections) < 2:
+            return []
+
+        intersections.sort()
+        deduped = []
+        for t in intersections:
+            if not deduped or abs(t - deduped[-1]) > 1e-6:
+                deduped.append(t)
+
+        intervals = []
+        for i in range(0, len(deduped) - 1, 2):
+            t0 = deduped[i]
+            t1 = deduped[i + 1]
+            if t1 > t0 + 1e-9:
+                intervals.append((t0, t1))
+        return intervals
+
+    @staticmethod
     def _merge_intervals(intervals):
         if not intervals:
             return []
@@ -651,18 +696,24 @@ class AppView(tk.Tk):
         end = math.ceil(max_o / spacing) * spacing
 
         hole_points = [[(p.x, p.y) for p in hole] for hole in holes]
+        outer_edges = self._build_edge_cache(points, direction, normal)
+        hole_edges = [
+            self._build_edge_cache(hole, direction, normal) for hole in hole_points
+        ]
         lines = []
 
-        for offset in self._frange(start, end, spacing):
-            outer_intervals = self._polygon_line_intervals(
-                points, direction, normal, offset
+        steps = int(math.floor((end - start) / spacing + 1.0 + 1e-6))
+        for step in range(steps):
+            offset = start + step * spacing
+            outer_intervals = self._polygon_line_intervals_cached(
+                outer_edges, offset
             )
             if not outer_intervals:
                 continue
             hole_intervals = []
-            for hole in hole_points:
+            for edges in hole_edges:
                 hole_intervals.extend(
-                    self._polygon_line_intervals(hole, direction, normal, offset)
+                    self._polygon_line_intervals_cached(edges, offset)
                 )
             hole_intervals = self._merge_intervals(hole_intervals)
             final_intervals = self._subtract_intervals(outer_intervals, hole_intervals)
