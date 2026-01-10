@@ -378,6 +378,29 @@ class SvgConverter:
         return out
 
     @staticmethod
+    def _close_open_polylines(polylines: List[PolylineInt]) -> List[PolylineInt]:
+        out: List[PolylineInt] = []
+        for poly in polylines:
+            pts = poly.points
+            if len(pts) < 3:
+                out.append(poly)
+                continue
+            if pts[0] == pts[-1]:
+                out.append(poly)
+                continue
+            path = [(p.x, p.y) for p in pts] + [(pts[0].x, pts[0].y)]
+            if abs(pyclipper.Area(path)) == 0:
+                out.append(poly)
+                continue
+            closed = pts + [pts[0]]
+            out.append(
+                PolylineInt(
+                    points=closed, simplify_tolerance=poly.simplify_tolerance
+                )
+            )
+        return out
+
+    @staticmethod
     def _walk_with_matrix(node: Any, parent: Optional[Matrix] = None):
         """Yield (leaf, parent_matrix_without_leaf)."""
         parent_matrix = Matrix() if parent is None else parent
@@ -687,6 +710,7 @@ class SvgConverter:
                     pts_i[-1] = pts_i[0]
                 polylines_int.append(PolylineInt(points=pts_i))
 
+        polylines_int = SvgConverter._close_open_polylines(polylines_int)
         polylines_int = SvgConverter._split_self_intersections(polylines_int)
         polylines_int = SvgConverter._split_intersections_between_polygons(
             polylines_int, scale
