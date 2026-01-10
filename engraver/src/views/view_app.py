@@ -18,6 +18,14 @@ from svg.SvgConverter import SvgConverter
 from views.view_2d import View2D
 from views.view_3d import View3D
 from views.menubar import Menubar
+from views.view_constants import (
+    SPINNER_ACTIVE_COLOR,
+    SPINNER_BAR_COLOR,
+    SPINNER_FRAME_BG_COLOR,
+    SVG_STROKE_COLOR,
+    TREE_ICON_HIDDEN_COLOR,
+    TREE_ICON_SHOWN_COLOR,
+)
 from views.view_spinner import Spinner
 
 
@@ -131,8 +139,8 @@ class AppView(tk.Tk):
         width = size + pad
         shown = tk.PhotoImage(width=width, height=size)
         hidden = tk.PhotoImage(width=width, height=size)
-        shown.put("#3FA34D", to=(0, 0, size, size))
-        hidden.put("#9AA0A6", to=(0, 0, size, size))
+        shown.put(TREE_ICON_SHOWN_COLOR, to=(0, 0, size, size))
+        hidden.put(TREE_ICON_HIDDEN_COLOR, to=(0, 0, size, size))
         self._tree_icon_shown = shown
         self._tree_icon_hidden = hidden
 
@@ -751,14 +759,14 @@ class AppView(tk.Tk):
         self.spinner.withdraw()
         self.spinner.overrideredirect(True)
 
-        frame = tk.Frame(self.spinner, bg="#B0E0F3", padx=15, pady=15)
+        frame = tk.Frame(self.spinner, bg=SPINNER_FRAME_BG_COLOR, padx=15, pady=15)
         frame.pack(fill="both", expand=True)
 
         style = ttk.Style(self.spinner)
         style.configure(
             "Blue.Horizontal.Bar",
             troughcolor=frame.cget("bg"),  # background area
-            background="#B0E0F3",  # moving bar color
+            background=SPINNER_BAR_COLOR,  # moving bar color
         )
 
         ttk.Label(
@@ -768,7 +776,9 @@ class AppView(tk.Tk):
             font=("Helvetica", 24, "bold"),
         ).pack(padx=0, pady=0)
 
-        sp = Spinner(frame, size=64, thickness=6, color="#00428d", bg=frame.cget("bg"))
+        sp = Spinner(
+            frame, size=64, thickness=6, color=SPINNER_ACTIVE_COLOR, bg=frame.cget("bg")
+        )
         sp.pack()
         sp.start()
         self._center_in_parent(self.spinner)
@@ -915,7 +925,7 @@ class AppView(tk.Tk):
                 continue
             pts = [f"{fmt(p.x / scale)} {fmt(-p.y / scale)}" for p in pl.points]
             d = "M " + " L ".join(pts)
-            lines.append(f'  <path d="{d}" fill="none" stroke="#000" />')
+            lines.append(f'  <path d="{d}" fill="none" stroke="{SVG_STROKE_COLOR}" />')
         lines.append("</svg>")
 
         with open(path, "w", encoding="utf-8") as f:

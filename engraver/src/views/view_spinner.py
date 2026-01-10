@@ -1,8 +1,18 @@
 import tkinter as tk
 
+from views.view_constants import SPINNER_DEFAULT_COLOR
+
 
 class Spinner(tk.Canvas):
-    def __init__(self, master, size=64, thickness=6, color="white", speed=6, **kw):
+    def __init__(
+        self,
+        master,
+        size=64,
+        thickness=6,
+        color=SPINNER_DEFAULT_COLOR,
+        speed=6,
+        **kw,
+    ):
         super().__init__(
             master, width=size, height=size, highlightthickness=0, bg=kw.get("bg")
         )

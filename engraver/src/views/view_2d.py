@@ -1,6 +1,5 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
-from colors import COLORS
 from geometry.GeoUtil import GeoUtil
 from geometry.PointInPolygonResult import PointInPolygonResult
 from geometry.PointInt import PointInt
@@ -10,6 +9,7 @@ from views.view_constants import (
     AXIS_Y_COLOR,
     BACKGROUND_COLOR,
     BOUNDARY_COLOR,
+    COLORS,
     EMPTY_TEXT_COLOR,
     FILL_COLOR_2D,
     GRID_AXIS_COLOR,

@@ -1,7 +1,6 @@
 from __future__ import annotations
 import math
 from typing import TYPE_CHECKING, Tuple
-from colors import COLORS
 from geometry.GeoUtil import GeoUtil
 from geometry.PointInt import PointInt
 from geometry.PointInPolygonResult import PointInPolygonResult
@@ -15,6 +14,7 @@ from views.view_constants import (
     AXIS_Z_DIM_COLOR,
     BACKGROUND_COLOR,
     BOUNDARY_COLOR,
+    COLORS,
     EMPTY_TEXT_COLOR,
     FILL_COLOR_3D,
     GRID_LINE_COLOR,
