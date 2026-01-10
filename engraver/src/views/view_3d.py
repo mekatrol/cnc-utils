@@ -47,8 +47,6 @@ class View3D(BaseView):
 
         # Selection state
         self._selected_polygon_solid_fill = True
-        self.hatch_angle_deg = 45.0
-        self.hatch_spacing_px = 8.0
         self.hatch_color = HATCH_COLOR
         self.fill_color = FILL_COLOR_3D
         self.fill_stipple = "gray12"
@@ -65,6 +63,10 @@ class View3D(BaseView):
         self.canvas.bind("<Button-5>", lambda e: self._zoom(-1))  # Linux
         self.canvas.bind_all("f", lambda e: self.fit_to_view())
         self.canvas.bind_all("F", lambda e: self.fit_to_view())
+
+    @property
+    def hatch_spacing_px(self) -> float:
+        return max(1.0, float(self.app.hatch_spacing_px) * self.zoom)
 
     def fit_to_view(self, include_origin: bool = False):
         # Compute bounding box in world units and scale to canvas size
@@ -227,6 +229,28 @@ class View3D(BaseView):
                     color = COLORS[i % len(COLORS)]
                     c.create_line(last_pt[0], last_pt[1], xs, ys, fill=color, width=1.5)
                 last_pt = (xs, ys)
+
+        self._draw_generated_paths(w, h, cx, cy)
+
+    def _draw_generated_paths(self, w: int, h: int, cx: float, cy: float) -> None:
+        paths = getattr(self.app, "generated_paths", [])
+        if not paths:
+            return
+        c = self.canvas
+        for entry in paths:
+            lines = entry.get("lines", {})
+            for key in ("primary", "secondary"):
+                for segment in lines.get(key, []):
+                    if len(segment) < 2:
+                        continue
+                    (x0, y0), (x1, y1) = segment[0], segment[1]
+                    x_rel0 = x0 - cx
+                    y_rel0 = y0 - cy
+                    x_rel1 = x1 - cx
+                    y_rel1 = y1 - cy
+                    xs0, ys0, _ = self._project_point(x_rel0, y_rel0, 0.0, w, h)
+                    xs1, ys1, _ = self._project_point(x_rel1, y_rel1, 0.0, w, h)
+                    c.create_line(xs0, ys0, xs1, ys1, fill=HATCH_COLOR, width=1.0)
 
     def _project_polygon(
         self, points, w: int, h: int, cx: float, cy: float, scale: int

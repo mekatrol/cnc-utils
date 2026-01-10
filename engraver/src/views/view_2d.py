@@ -38,8 +38,6 @@ class View2D(BaseView):
         
         # Selection state
         self._selected_polygon_solid_fill = True
-        self.hatch_angle_deg = 45.0
-        self.hatch_spacing_px = 8.0
         self.hatch_color = HATCH_COLOR
         self.fill_color = FILL_COLOR_2D
         self.fill_stipple = "gray12"
@@ -55,6 +53,10 @@ class View2D(BaseView):
         self.canvas.bind_all("F", lambda e: self.fit_to_view())
         self.canvas.bind_all("r", lambda e: self.reset_view())
         self.canvas.bind_all("R", lambda e: self.reset_view())
+
+    @property
+    def hatch_spacing_px(self) -> float:
+        return max(1.0, float(self.app.hatch_spacing_px) * self.zoom)
 
     # View control
     def fit_to_view(self, include_origin: bool = False):
@@ -177,6 +179,8 @@ class View2D(BaseView):
                 color = COLORS[i % len(COLORS)]
                 c.create_line(*coords, fill=color, width=1.5)
 
+        self._draw_generated_paths()
+
         # Points
         for i, pt in enumerate(g.points):
             xw, yw = pt.x / s, pt.y / s
@@ -185,6 +189,24 @@ class View2D(BaseView):
             r = 3  # screen pixels
             color = COLORS[(i + len(COLORS) >> 1) % len(COLORS)]
             c.create_oval(xs - r, ys - r, xs + r, ys + r, outline=color, fill=color)
+
+    def _draw_generated_paths(self) -> None:
+        paths = getattr(self.app, "generated_paths", [])
+        if not paths:
+            return
+        c = self.canvas
+        for entry in paths:
+            lines = entry.get("lines", {})
+            for key in ("primary", "secondary"):
+                for segment in lines.get(key, []):
+                    if len(segment) < 2:
+                        continue
+                    (x0, y0), (x1, y1) = segment[0], segment[1]
+                    xs0 = x0 * self.zoom + self.offset[0]
+                    ys0 = -y0 * self.zoom + self.offset[1]
+                    xs1 = x1 * self.zoom + self.offset[0]
+                    ys1 = -y1 * self.zoom + self.offset[1]
+                    c.create_line(xs0, ys0, xs1, ys1, fill=HATCH_COLOR, width=1.0)
 
     def _draw_axis_gizmo(self, w: int, h: int) -> None:
         # Fixed-size axis arrows anchored at the world origin.

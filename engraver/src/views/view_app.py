@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import math
 from pathlib import Path
 import sys
 import threading
@@ -41,6 +42,9 @@ class AppView(tk.Tk):
         self.source_label_var = tk.StringVar(value="No file loaded")
         self.source_path: Optional[str] = None
         self.selected_polygons = []
+        self.generated_paths = []
+        self.hatch_angle_deg = 45.0
+        self.hatch_spacing_px = 0.25
         self._startup_load_params: Optional[tuple[str, int, float]] = None
         self._startup_export_json: Optional[str] = None
 
@@ -158,6 +162,7 @@ class AppView(tk.Tk):
         self.source_label_var.set(source or "(in-memory geometry)")
         self.source_path = source or None
         self.selected_polygons = []
+        self.generated_paths = []
         for i in range(self.notebook.index("end")):
             widget = self.notebook.nametowidget(self.notebook.tabs()[i])
             if isinstance(widget, View3D):
@@ -432,3 +437,255 @@ class AppView(tk.Tk):
             messagebox.showerror("Save failed", f"{path}\n\n{e}")
             return
         self.menubar.files_dirty = False
+
+    def generate_paths_for_selection(self) -> None:
+        if not self.selected_polygons:
+            messagebox.showinfo("Generate Paths", "No polygons selected.")
+            return
+
+        hatch_angle = float(self.hatch_angle_deg)
+        hatch_spacing = max(1e-6, float(self.hatch_spacing_px))
+        scale = int(self.model.scale) if self.model and self.model.scale else 1
+        selection = []
+        for entry in self.selected_polygons:
+            polygon = entry["polygon"]
+            holes = entry["holes"]
+            selection.append(
+                {
+                    "polygon_index": polygon["index"],
+                    "polygon_points": [(p.x, p.y) for p in polygon["points"]],
+                    "holes": [
+                        [(p.x, p.y) for p in hole["points"]] for hole in holes
+                    ],
+                }
+            )
+
+        self._show_spinner("Generating paths…")
+        threading.Thread(
+            target=self._generate_paths_worker,
+            args=(selection, hatch_angle, hatch_spacing, scale),
+            daemon=True,
+        ).start()
+
+    def _generate_paths_worker(
+        self,
+        selection,
+        hatch_angle: float,
+        hatch_spacing: float,
+        scale: int,
+    ):
+        try:
+            paths = []
+            for entry in selection:
+                polygon_points = [PointInt(x, y) for x, y in entry["polygon_points"]]
+                holes = [
+                    [PointInt(x, y) for x, y in hole] for hole in entry["holes"]
+                ]
+                primary = self._hatch_lines_for_polygon(
+                    polygon_points,
+                    holes,
+                    hatch_angle,
+                    hatch_spacing,
+                    scale,
+                )
+                secondary = self._hatch_lines_for_polygon(
+                    polygon_points,
+                    holes,
+                    hatch_angle + 90.0,
+                    hatch_spacing,
+                    scale,
+                )
+                paths.append(
+                    {
+                        "polygon_index": entry["polygon_index"],
+                        "hatch_angle_deg": hatch_angle,
+                        "hatch_spacing": hatch_spacing,
+                        "lines": {
+                            "primary": primary,
+                            "secondary": secondary,
+                        },
+                    }
+                )
+        except Exception as e:
+            self.after(0, self._generate_paths_failed, e)
+            return
+
+        self.after(0, self._generate_paths_done, paths)
+
+    def _generate_paths_done(self, paths):
+        self._hide_spinner()
+        self.generated_paths = paths
+        self.menubar.files_dirty = True
+        self.redraw_all()
+
+    def _generate_paths_failed(self, err: Exception):
+        self._hide_spinner()
+        messagebox.showerror("Generate Paths Failed", f"{err}")
+
+    @staticmethod
+    def _frange(start: float, end: float, step: float):
+        value = start
+        while value <= end + 1e-6:
+            yield value
+            value += step
+
+    @staticmethod
+    def _line_segment_intersection(direction, normal, offset, seg_a, seg_b):
+        dx, dy = direction
+        nx, ny = normal
+        ax, ay = seg_a
+        bx, by = seg_b
+        sx = bx - ax
+        sy = by - ay
+
+        denom = nx * sx + ny * sy
+        if abs(denom) < 1e-9:
+            return None
+
+        t = (offset - (nx * ax + ny * ay)) / denom
+        if t < 0.0 or t > 1.0:
+            return None
+
+        x = ax + t * sx
+        y = ay + t * sy
+        line_t = x * dx + y * dy
+        return line_t
+
+    @staticmethod
+    def _polygon_line_intervals(points, direction, normal, offset):
+        intersections = []
+        for i in range(len(points)):
+            p0 = points[i]
+            p1 = points[(i + 1) % len(points)]
+            hit = AppView._line_segment_intersection(
+                direction, normal, offset, p0, p1
+            )
+            if hit is not None:
+                intersections.append(hit)
+
+        if len(intersections) < 2:
+            return []
+
+        intersections.sort()
+        deduped = []
+        for t in intersections:
+            if not deduped or abs(t - deduped[-1]) > 1e-6:
+                deduped.append(t)
+
+        intervals = []
+        for i in range(0, len(deduped) - 1, 2):
+            t0 = deduped[i]
+            t1 = deduped[i + 1]
+            if t1 > t0 + 1e-9:
+                intervals.append((t0, t1))
+        return intervals
+
+    @staticmethod
+    def _merge_intervals(intervals):
+        if not intervals:
+            return []
+        intervals = sorted(intervals, key=lambda item: item[0])
+        merged = [intervals[0]]
+        for start, end in intervals[1:]:
+            last_start, last_end = merged[-1]
+            if start <= last_end + 1e-6:
+                merged[-1] = (last_start, max(last_end, end))
+            else:
+                merged.append((start, end))
+        return merged
+
+    @staticmethod
+    def _subtract_intervals(base_intervals, cut_intervals):
+        if not cut_intervals:
+            return list(base_intervals)
+        result = []
+        for base_start, base_end in base_intervals:
+            cur = base_start
+            for cut_start, cut_end in cut_intervals:
+                if cut_end <= cur:
+                    continue
+                if cut_start >= base_end:
+                    break
+                if cut_start > cur:
+                    result.append((cur, min(cut_start, base_end)))
+                cur = max(cur, cut_end)
+                if cur >= base_end:
+                    break
+            if cur < base_end:
+                result.append((cur, base_end))
+        return result
+
+    def _hatch_lines_for_polygon(
+        self,
+        polygon_points: List[PointInt],
+        holes: List[List[PointInt]],
+        angle_deg: float,
+        spacing_world: float,
+        scale: int,
+    ):
+        if len(polygon_points) < 3:
+            return []
+
+        spacing = max(1.0, spacing_world * scale)
+        direction = (math.cos(math.radians(angle_deg)), math.sin(math.radians(angle_deg)))
+        normal = (-direction[1], direction[0])
+
+        points = [(p.x, p.y) for p in polygon_points]
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        minx, maxx = min(xs), max(xs)
+        miny, maxy = min(ys), max(ys)
+
+        corners = [
+            (minx, miny),
+            (minx, maxy),
+            (maxx, miny),
+            (maxx, maxy),
+        ]
+        offsets = [corner[0] * normal[0] + corner[1] * normal[1] for corner in corners]
+        min_o, max_o = min(offsets), max(offsets)
+
+        start = math.floor(min_o / spacing) * spacing
+        end = math.ceil(max_o / spacing) * spacing
+
+        hole_points = [[(p.x, p.y) for p in hole] for hole in holes]
+        lines = []
+
+        for offset in self._frange(start, end, spacing):
+            outer_intervals = self._polygon_line_intervals(
+                points, direction, normal, offset
+            )
+            if not outer_intervals:
+                continue
+            hole_intervals = []
+            for hole in hole_points:
+                hole_intervals.extend(
+                    self._polygon_line_intervals(hole, direction, normal, offset)
+                )
+            hole_intervals = self._merge_intervals(hole_intervals)
+            final_intervals = self._subtract_intervals(outer_intervals, hole_intervals)
+
+            for t0, t1 in final_intervals:
+                p0 = (
+                    direction[0] * t0 + normal[0] * offset,
+                    direction[1] * t0 + normal[1] * offset,
+                )
+                p1 = (
+                    direction[0] * t1 + normal[0] * offset,
+                    direction[1] * t1 + normal[1] * offset,
+                )
+                lines.append(
+                    [
+                        [p0[0] / scale, p0[1] / scale],
+                        [p1[0] / scale, p1[1] / scale],
+                    ]
+                )
+
+        return lines
+
+    def clear_generated_paths(self) -> None:
+        if not self.generated_paths:
+            return
+        self.generated_paths = []
+        self.menubar.files_dirty = True
+        self.redraw_all()

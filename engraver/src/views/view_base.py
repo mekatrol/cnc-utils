@@ -24,6 +24,14 @@ class BaseView(ttk.Frame):
         self.canvas.bind("<Expose>", lambda e: self.redraw())
         self.fit_to_view_pending = False
 
+    @property
+    def hatch_angle_deg(self) -> float:
+        return getattr(self.app, "hatch_angle_deg", 45.0)
+
+    @property
+    def hatch_spacing_px(self) -> float:
+        return getattr(self.app, "hatch_spacing_px", 8.0)
+
     def _on_resize(self, event):
         self.redraw()
 
