@@ -110,6 +110,7 @@ class AppView(tk.Tk):
         )
         self.scene_tree.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
         self.scene_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+        self.scene_tree.bind("<Button-1>", self._on_tree_left_click)
         self.scene_tree.bind("<Button-3>", self._on_tree_right_click)
 
         self.tree_geometry_id = self.scene_tree.insert(
@@ -156,6 +157,29 @@ class AppView(tk.Tk):
         info = self._tree_item_info.get(selection[0])
         if info:
             self.properties_var.set(info)
+
+    def _on_tree_left_click(self, event) -> str | None:
+        row_id = self.scene_tree.identify_row(event.y)
+        if not row_id:
+            return None
+        element = self.scene_tree.identify("element", event.x, event.y)
+        if element != "image":
+            return None
+        self.scene_tree.selection_set(row_id)
+        if row_id == self.tree_paths_id:
+            self._toggle_all_paths_visibility()
+            return "break"
+        action = self._tree_item_action.get(row_id)
+        if not action:
+            return None
+        kind, payload = action
+        if kind == "geometry":
+            self._toggle_geometry_visibility()
+            return "break"
+        if kind == "path":
+            self._toggle_path_visibility(payload)
+            return "break"
+        return None
 
     def _on_tree_right_click(self, event) -> None:
         row_id = self.scene_tree.identify_row(event.y)
