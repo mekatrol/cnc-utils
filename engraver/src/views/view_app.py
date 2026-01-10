@@ -338,6 +338,7 @@ class AppView(tk.Tk):
         if not self.generated_paths:
             return
         self.generated_paths = []
+        self.show_generated_paths.set(True)
         self._refresh_tree()
         self.update_properties()
         self.redraw_all()
@@ -1235,6 +1236,7 @@ class AppView(tk.Tk):
         if not self.generated_paths:
             return
         self.generated_paths = []
+        self.show_generated_paths.set(True)
         self.menubar.files_dirty = True
         self._refresh_tree()
         self.update_properties()
