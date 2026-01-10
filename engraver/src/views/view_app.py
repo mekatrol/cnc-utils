@@ -144,6 +144,8 @@ class AppView(tk.Tk):
         self.scene_tree.selection_set(row_id)
         if row_id == self.tree_paths_id:
             action = ("paths_root", None)
+        elif row_id == self.tree_geometry_id:
+            action = ("geometry_root", None)
         else:
             action = self._tree_item_action.get(row_id)
         if not action:
@@ -155,6 +157,13 @@ class AppView(tk.Tk):
             label = "Hide" if is_visible else "Show"
             self._tree_menu.add_command(
                 label=label, command=self._toggle_geometry_visibility
+            )
+            self._tree_menu.add_command(
+                label="Centre to origin", command=self.centre_to_origin
+            )
+        elif kind == "geometry_root":
+            self._tree_menu.add_command(
+                label="Centre to origin (all)", command=self.centre_to_origin
             )
         elif kind == "paths_root":
             label = "Hide All" if self.show_generated_paths.get() else "Show All"
