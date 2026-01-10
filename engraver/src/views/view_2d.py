@@ -157,38 +157,50 @@ class View2D(BaseView):
             return
         s = g.scale if g.scale else 1
 
-        # Draw geometry polylines
-        for i, polyline in enumerate(g.polylines):
-            # Must be at least 2 points to have any line segments
-            if len(polyline.points) < 2:
-                continue
+        show_geometry = True
+        show_geometry_var = getattr(self.app, "show_geometry", None)
+        if show_geometry_var is not None:
+            try:
+                show_geometry = show_geometry_var.get()
+            except Exception:
+                show_geometry = bool(show_geometry_var)
 
-            coords = []
-            last = None
+        if show_geometry:
+            # Draw geometry polylines
+            for i, polyline in enumerate(g.polylines):
+                # Must be at least 2 points to have any line segments
+                if len(polyline.points) < 2:
+                    continue
 
-            for poly_point in polyline.points:
-                xw, yw = poly_point.x / s, poly_point.y / s
-                xs = xw * self.zoom + self.offset[0]
-                ys = -yw * self.zoom + self.offset[1]
-                if last is not None:
-                    coords.extend([last[0], last[1], xs, ys])
-                last = (xs, ys)
+                coords = []
+                last = None
 
-            # Batch draw this polyline as many segments
-            if coords:
-                color = COLORS[i % len(COLORS)]
-                c.create_line(*coords, fill=color, width=1.5)
+                for poly_point in polyline.points:
+                    xw, yw = poly_point.x / s, poly_point.y / s
+                    xs = xw * self.zoom + self.offset[0]
+                    ys = -yw * self.zoom + self.offset[1]
+                    if last is not None:
+                        coords.extend([last[0], last[1], xs, ys])
+                    last = (xs, ys)
+
+                # Batch draw this polyline as many segments
+                if coords:
+                    color = COLORS[i % len(COLORS)]
+                    c.create_line(*coords, fill=color, width=1.5)
 
         self._draw_generated_paths()
 
-        # Points
-        for i, pt in enumerate(g.points):
-            xw, yw = pt.x / s, pt.y / s
-            xs = xw * self.zoom + self.offset[0]
-            ys = -yw * self.zoom + self.offset[1]
-            r = 3  # screen pixels
-            color = COLORS[(i + len(COLORS) >> 1) % len(COLORS)]
-            c.create_oval(xs - r, ys - r, xs + r, ys + r, outline=color, fill=color)
+        if show_geometry:
+            # Points
+            for i, pt in enumerate(g.points):
+                xw, yw = pt.x / s, pt.y / s
+                xs = xw * self.zoom + self.offset[0]
+                ys = -yw * self.zoom + self.offset[1]
+                r = 3  # screen pixels
+                color = COLORS[(i + len(COLORS) >> 1) % len(COLORS)]
+                c.create_oval(
+                    xs - r, ys - r, xs + r, ys + r, outline=color, fill=color
+                )
 
     def _draw_generated_paths(self) -> None:
         show_paths = getattr(self.app, "show_generated_paths", None)
@@ -204,6 +216,8 @@ class View2D(BaseView):
             return
         c = self.canvas
         for entry in paths:
+            if not entry.get("visible", True):
+                continue
             lines = entry.get("lines", {})
             for key in ("primary", "secondary"):
                 for segment in lines.get(key, []):
@@ -243,6 +257,18 @@ class View2D(BaseView):
         )
 
     def _select_polygon(self, x: float, y: float) -> None:
+        show_geometry = getattr(self.app, "show_geometry", None)
+        if show_geometry is not None:
+            try:
+                if not show_geometry.get():
+                    self.app.selected_polygons = []
+                    self.app.update_properties()
+                    return
+            except Exception:
+                if not show_geometry:
+                    self.app.selected_polygons = []
+                    self.app.update_properties()
+                    return
         g = self.app.model
         if not g or not g.polylines:
             self.app.selected_polygons = []
@@ -295,6 +321,14 @@ class View2D(BaseView):
         self.app.update_properties()
 
     def _draw_selection(self) -> None:
+        show_geometry = getattr(self.app, "show_geometry", None)
+        if show_geometry is not None:
+            try:
+                if not show_geometry.get():
+                    return
+            except Exception:
+                if not show_geometry:
+                    return
         if not self.app.selected_polygons:
             return
         g = self.app.model

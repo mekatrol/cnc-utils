@@ -47,8 +47,10 @@ class AppView(tk.Tk):
         self.hatch_angle_deg = 45.0
         self.hatch_spacing_px = 0.25
         self.show_generated_paths = tk.BooleanVar(value=True)
+        self.show_geometry = tk.BooleanVar(value=True)
         self.properties_var = tk.StringVar(value="No selection")
         self._tree_item_info = {}
+        self._tree_item_action = {}
         self._startup_load_params: Optional[tuple[str, int, float]] = None
         self._startup_export_json: Optional[str] = None
 
@@ -99,6 +101,7 @@ class AppView(tk.Tk):
         )
         self.scene_tree.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
         self.scene_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+        self.scene_tree.bind("<Button-3>", self._on_tree_right_click)
 
         self.tree_geometry_id = self.scene_tree.insert(
             "", "end", text="Geometry", open=True
@@ -106,6 +109,7 @@ class AppView(tk.Tk):
         self.tree_paths_id = self.scene_tree.insert(
             "", "end", text="Generated Paths", open=True
         )
+        self._tree_menu = tk.Menu(self, tearoff=False)
 
     def _build_right_sidebar(self) -> None:
         self.right_sidebar = ttk.Frame(self.main_frame, width=260)
@@ -145,20 +149,81 @@ class AppView(tk.Tk):
         if info:
             self.properties_var.set(info)
 
+    def _on_tree_right_click(self, event) -> None:
+        row_id = self.scene_tree.identify_row(event.y)
+        if not row_id:
+            return
+        self.scene_tree.selection_set(row_id)
+        action = self._tree_item_action.get(row_id)
+        if not action:
+            return
+        self._tree_menu.delete(0, "end")
+        kind, payload = action
+        if kind == "geometry":
+            is_visible = self.show_geometry.get()
+            label = "Hide" if is_visible else "Show"
+            self._tree_menu.add_command(
+                label=label, command=self._toggle_geometry_visibility
+            )
+        elif kind == "path":
+            entry = self._get_path_entry(payload)
+            if entry is None:
+                return
+            is_visible = entry.get("visible", True)
+            label = "Hide" if is_visible else "Show"
+            self._tree_menu.add_command(
+                label=label, command=lambda idx=payload: self._toggle_path_visibility(idx)
+            )
+        else:
+            return
+        try:
+            self._tree_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self._tree_menu.grab_release()
+
+    def _get_path_entry(self, index: int):
+        if index < 0:
+            return None
+        if index >= len(self.generated_paths):
+            return None
+        return self.generated_paths[index]
+
+    def _toggle_geometry_visibility(self) -> None:
+        self.show_geometry.set(not self.show_geometry.get())
+        if not self.show_geometry.get():
+            self.selected_polygons = []
+        self._refresh_tree()
+        self.update_properties()
+        self.redraw_all()
+
+    def _toggle_path_visibility(self, index: int) -> None:
+        entry = self._get_path_entry(index)
+        if entry is None:
+            return
+        entry["visible"] = not entry.get("visible", True)
+        self._refresh_tree()
+        self.update_properties()
+        self.redraw_all()
+
     def _refresh_tree(self) -> None:
         if not hasattr(self, "scene_tree"):
             return
 
         self._tree_item_info = {}
+        self._tree_item_action = {}
         self.scene_tree.delete(*self.scene_tree.get_children(self.tree_geometry_id))
         self.scene_tree.delete(*self.scene_tree.get_children(self.tree_paths_id))
 
         if self.model and self.model.polylines:
             source = self.source_path or "in-memory geometry"
+            status = "shown" if self.show_geometry.get() else "hidden"
             geom_item = self.scene_tree.insert(
-                self.tree_geometry_id, "end", text=Path(source).name
+                self.tree_geometry_id,
+                "end",
+                text=f"{Path(source).name} ({status})",
             )
             self._tree_item_info[geom_item] = f"Source: {source}"
+            self._tree_item_action[geom_item] = ("geometry", None)
             count_item = self.scene_tree.insert(
                 self.tree_geometry_id,
                 "end",
@@ -174,21 +239,23 @@ class AppView(tk.Tk):
             self._tree_item_info[none_item] = "No geometry loaded"
 
         if self.generated_paths:
-            for entry in self.generated_paths:
+            for idx, entry in enumerate(self.generated_paths):
                 polygon_index = entry.get("polygon_index", "?")
                 lines = entry.get("lines", {})
                 primary = len(lines.get("primary", []))
                 secondary = len(lines.get("secondary", []))
+                status = "shown" if entry.get("visible", True) else "hidden"
                 item = self.scene_tree.insert(
                     self.tree_paths_id,
                     "end",
-                    text=f"Polygon {polygon_index}",
+                    text=f"Polygon {polygon_index} ({status})",
                 )
                 self._tree_item_info[item] = (
                     f"Polygon {polygon_index}\n"
                     f"Primary lines: {primary}\n"
                     f"Secondary lines: {secondary}"
                 )
+                self._tree_item_action[item] = ("path", idx)
         else:
             none_item = self.scene_tree.insert(
                 self.tree_paths_id, "end", text="No generated paths"
@@ -201,6 +268,9 @@ class AppView(tk.Tk):
             source = self.source_path or "(in-memory geometry)"
             lines.append(f"Source: {source}")
             lines.append(f"Polylines: {len(self.model.polylines)}")
+            lines.append(
+                "Geometry: shown" if self.show_geometry.get() else "Geometry: hidden"
+            )
         else:
             lines.append("No geometry loaded")
 
@@ -216,8 +286,13 @@ class AppView(tk.Tk):
             lines.append("Selected polygon: none")
 
         path_count = len(self.generated_paths)
+        visible_count = sum(
+            1 for entry in self.generated_paths if entry.get("visible", True)
+        )
         visibility = "shown" if self.show_generated_paths.get() else "hidden"
-        lines.append(f"Generated paths: {path_count} ({visibility})")
+        lines.append(
+            f"Generated paths: {visible_count}/{path_count} ({visibility})"
+        )
 
         self.properties_var.set("\n".join(lines))
 
@@ -658,6 +733,7 @@ class AppView(tk.Tk):
                         "polygon_index": entry["polygon_index"],
                         "hatch_angle_deg": hatch_angle,
                         "hatch_spacing": hatch_spacing,
+                        "visible": True,
                         "lines": {
                             "primary": primary,
                             "secondary": secondary,

@@ -215,20 +215,30 @@ class View3D(BaseView):
             )
             return
         s = g.scale if g.scale else 1
+        show_geometry = True
+        show_geometry_var = getattr(self.app, "show_geometry", None)
+        if show_geometry_var is not None:
+            try:
+                show_geometry = show_geometry_var.get()
+            except Exception:
+                show_geometry = bool(show_geometry_var)
 
-        # Draw lines RELATIVE to pivot so rotations happen about model center
-        for i, pl in enumerate(g.polylines):
-            if len(pl.points) < 2:
-                continue
-            last_pt = None
-            for p in pl.points:
-                x_rel = p.x / s - cx
-                y_rel = p.y / s - cy
-                xs, ys, _ = self._project_point(x_rel, y_rel, 0.0, w, h)
-                if last_pt is not None:
-                    color = COLORS[i % len(COLORS)]
-                    c.create_line(last_pt[0], last_pt[1], xs, ys, fill=color, width=1.5)
-                last_pt = (xs, ys)
+        if show_geometry:
+            # Draw lines RELATIVE to pivot so rotations happen about model center
+            for i, pl in enumerate(g.polylines):
+                if len(pl.points) < 2:
+                    continue
+                last_pt = None
+                for p in pl.points:
+                    x_rel = p.x / s - cx
+                    y_rel = p.y / s - cy
+                    xs, ys, _ = self._project_point(x_rel, y_rel, 0.0, w, h)
+                    if last_pt is not None:
+                        color = COLORS[i % len(COLORS)]
+                        c.create_line(
+                            last_pt[0], last_pt[1], xs, ys, fill=color, width=1.5
+                        )
+                    last_pt = (xs, ys)
 
         self._draw_generated_paths(w, h, cx, cy)
 
@@ -246,6 +256,8 @@ class View3D(BaseView):
             return
         c = self.canvas
         for entry in paths:
+            if not entry.get("visible", True):
+                continue
             lines = entry.get("lines", {})
             for key in ("primary", "secondary"):
                 for segment in lines.get(key, []):
@@ -304,6 +316,18 @@ class View3D(BaseView):
         )
 
     def _select_polygon(self, x: float, y: float) -> None:
+        show_geometry = getattr(self.app, "show_geometry", None)
+        if show_geometry is not None:
+            try:
+                if not show_geometry.get():
+                    self.app.selected_polygons = []
+                    self.app.update_properties()
+                    return
+            except Exception:
+                if not show_geometry:
+                    self.app.selected_polygons = []
+                    self.app.update_properties()
+                    return
         g = self.app.model
         if not g or not g.polylines:
             self.app.selected_polygons = []
@@ -401,6 +425,14 @@ class View3D(BaseView):
         return inside
 
     def _draw_selection(self, w: int, h: int, cx: float, cy: float) -> None:
+        show_geometry = getattr(self.app, "show_geometry", None)
+        if show_geometry is not None:
+            try:
+                if not show_geometry.get():
+                    return
+            except Exception:
+                if not show_geometry:
+                    return
         if not self.app.selected_polygons:
             return
         g = self.app.model
