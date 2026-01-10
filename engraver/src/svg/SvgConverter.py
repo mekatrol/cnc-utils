@@ -97,15 +97,25 @@ class SvgConverter:
             op: int,
         ) -> List[List[tuple[int, int]]]:
             pc = pyclipper.Pyclipper()
-            
+
             if subject:
                 pc.AddPaths(subject, pyclipper.PT_SUBJECT, True)  # type: ignore
             if clip:
                 pc.AddPaths(clip, pyclipper.PT_CLIP, True)  # type: ignore
 
-            return pc.Execute(
+            tree = pc.Execute2(
                 op, pyclipper.PFT_EVENODD, pyclipper.PFT_EVENODD
             )
+            out: List[List[tuple[int, int]]] = []
+
+            def walk(node) -> None:
+                for child in node.Childs:
+                    if not child.IsHole and child.Contour:
+                        out.append(child.Contour)
+                    walk(child)
+
+            walk(tree)
+            return out
 
         def bbox(path: List[tuple[int, int]]) -> tuple[int, int, int, int]:
             xs = [p[0] for p in path]
