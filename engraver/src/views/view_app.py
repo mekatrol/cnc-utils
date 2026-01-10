@@ -356,6 +356,7 @@ class AppView(tk.Tk):
         minx, miny, maxx, maxy = self.model.bounds()
 
         if minx == 0 and miny == 0:
+            self.fit_current()
             return
 
         midx = minx + (maxx - minx) / 2.0
@@ -382,6 +383,7 @@ class AppView(tk.Tk):
 
         self.menubar.files_dirty = True
         self.redraw_all()
+        self.fit_current()
 
     def _format_svg_number(self, value: float) -> str:
         text = f"{value:.6f}".rstrip("0").rstrip(".")
@@ -516,7 +518,7 @@ class AppView(tk.Tk):
         self._hide_spinner()
         self.generated_paths = paths
         self.menubar.files_dirty = True
-        self.redraw_all()
+        self.fit_current()
 
     def _generate_paths_failed(self, err: Exception):
         self._hide_spinner()
