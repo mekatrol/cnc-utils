@@ -29,7 +29,7 @@ SPINNER_BAR_COLOR = "#B0E0F3"
 SPINNER_DEFAULT_COLOR = "#ffffff"
 SPINNER_ACTIVE_COLOR = "#00428d"
 
-SVG_STROKE_COLOR = "#000"
+SVG_STROKE_COLOR = "#000000"
 
 # High-contrast on dark. >=12 colors. Ordered to avoid similar neighbors.
 COLORS = [

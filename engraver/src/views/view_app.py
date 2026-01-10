@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+import copy
 import sys
 import threading
 from typing import List, Optional
@@ -51,6 +52,9 @@ class AppView(tk.Tk):
         self._mapped = False
         self.bind("<Map>", self._on_map)
         self.bind("<Configure>", self._on_configure)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        self._settings_path = Path(__file__).resolve().parents[2] / "settings.json"
 
         # Shared state
         self.model: Optional[GeometryInt] = None
@@ -58,12 +62,18 @@ class AppView(tk.Tk):
         self.source_path: Optional[str] = None
         self.selected_polygons = []
         self.generated_paths = []
-        self.hatch_angle_deg = 45.0
-        self.hatch_spacing_px = 0.25
+        settings = self._load_settings()
+        path_settings = settings["path_generation"]
+        self.hatch_angle_deg = path_settings["hatch_angle_deg"]
+        self.hatch_spacing_px = path_settings["hatch_spacing_px"]
+        self._loaded_settings = copy.deepcopy(settings)
+        self._settings_dirty = False
         self.show_generated_paths = tk.BooleanVar(value=True)
         self.show_geometry = tk.BooleanVar(value=True)
-        self._hatch_angle_var = tk.DoubleVar(value=self.hatch_angle_deg)
-        self._hatch_spacing_var = tk.DoubleVar(value=self.hatch_spacing_px)
+        self._hatch_angle_var = tk.StringVar(value=str(self.hatch_angle_deg))
+        self._hatch_spacing_var = tk.StringVar(value=str(self.hatch_spacing_px))
+        self._hatch_angle_var.trace_add("write", self._on_settings_var_change)
+        self._hatch_spacing_var.trace_add("write", self._on_settings_var_change)
         self.properties_var = tk.StringVar(value="No selection")
         self._tree_item_info = {}
         self._tree_item_action = {}
@@ -96,6 +106,7 @@ class AppView(tk.Tk):
         self.notebook.grid(row=0, column=1, sticky="nsew")
 
         self._build_right_sidebar()
+        self._update_settings_dirty()
 
         # Default tabs
         self.add_view("3D")
@@ -104,6 +115,140 @@ class AppView(tk.Tk):
         self.maximize()
         self._refresh_tree()
         self.update_properties()
+
+    def _default_settings(self) -> dict:
+        return {
+            "app": {
+                "version": 1,
+            },
+            "path_generation": {
+                "hatch_angle_deg": 45.0,
+                "hatch_spacing_px": 0.25,
+            },
+        }
+
+    def _upgrade_settings(self, data: dict) -> dict:
+        upgraded = dict(data)
+        if "app" not in upgraded or not isinstance(upgraded.get("app"), dict):
+            upgraded["app"] = {}
+        app_settings = upgraded["app"]
+        if "path_generation" not in upgraded or not isinstance(
+            upgraded.get("path_generation"), dict
+        ):
+            upgraded["path_generation"] = {}
+        path_settings = upgraded["path_generation"]
+        if "hatch_angle_deg" in upgraded:
+            path_settings["hatch_angle_deg"] = upgraded["hatch_angle_deg"]
+        if "hatch_spacing_px" in upgraded:
+            path_settings["hatch_spacing_px"] = upgraded["hatch_spacing_px"]
+        if "version" in upgraded:
+            app_settings["version"] = upgraded["version"]
+        app_settings["version"] = 1
+        return upgraded
+
+    def _load_settings(self) -> dict:
+        settings = self._default_settings()
+        data: dict = {}
+        save_needed = False
+
+        if self._settings_path.exists():
+            try:
+                raw = self._settings_path.read_text(encoding="utf-8")
+                data = json.loads(raw)
+            except Exception:
+                data = {}
+                save_needed = True
+        else:
+            save_needed = True
+
+        if not isinstance(data, dict):
+            data = {}
+            save_needed = True
+
+        app_data = data.get("app")
+        app_version = None
+        if isinstance(app_data, dict):
+            app_version = app_data.get("version")
+
+        if app_version != settings["app"]["version"]:
+            data = self._upgrade_settings(data)
+            save_needed = True
+
+        path_data = data.get("path_generation")
+        if isinstance(path_data, dict):
+            for key in ("hatch_angle_deg", "hatch_spacing_px"):
+                if key in path_data:
+                    try:
+                        settings["path_generation"][key] = float(path_data[key])
+                    except Exception:
+                        save_needed = True
+        else:
+            save_needed = True
+
+        if save_needed:
+            self._save_settings(settings)
+
+        return settings
+
+    def _settings_from_vars(self) -> dict | None:
+        try:
+            angle = float(self._hatch_angle_var.get())
+            spacing = float(self._hatch_spacing_var.get())
+        except Exception:
+            return None
+        version = self._default_settings()["app"]["version"]
+        return {
+            "app": {
+                "version": version,
+            },
+            "path_generation": {
+                "hatch_angle_deg": angle,
+                "hatch_spacing_px": spacing,
+            },
+        }
+
+    def _save_settings(self, settings: dict | None = None) -> None:
+        if settings is None:
+            settings = self._settings_from_vars()
+            if settings is None:
+                messagebox.showerror(
+                    "Invalid settings",
+                    "Hatch angle and spacing must be numeric values.",
+                )
+                return
+            path_settings = settings["path_generation"]
+            self.hatch_angle_deg = path_settings["hatch_angle_deg"]
+            self.hatch_spacing_px = path_settings["hatch_spacing_px"]
+            self.update_properties()
+        try:
+            self._settings_path.write_text(
+                json.dumps(settings, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            if hasattr(self, "_loaded_settings"):
+                self._loaded_settings = copy.deepcopy(settings)
+                self._update_settings_dirty()
+        except Exception:
+            pass
+
+    def _update_settings_dirty(self) -> None:
+        current = self._settings_from_vars()
+        if current is None:
+            is_dirty = True
+        else:
+            is_dirty = current != self._loaded_settings
+        self._settings_dirty = is_dirty
+        if hasattr(self, "_save_button"):
+            if is_dirty:
+                self._save_button.state(["!disabled"])
+            else:
+                self._save_button.state(["disabled"])
+
+    def _on_settings_var_change(self, *_args) -> None:
+        self._update_settings_dirty()
+
+    def _on_save_settings(self) -> None:
+        self._save_settings()
 
     def _build_left_sidebar(self) -> None:
         self.left_sidebar = ttk.Frame(self.main_frame, width=240)
@@ -167,6 +312,13 @@ class AppView(tk.Tk):
         spacing_entry.bind("<Return>", self._apply_hatch_settings)
         angle_entry.bind("<FocusOut>", self._apply_hatch_settings)
         spacing_entry.bind("<FocusOut>", self._apply_hatch_settings)
+        self._save_button = ttk.Button(
+            self._path_settings, text="Save settings", command=self._on_save_settings
+        )
+        self._save_button.grid(
+            row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8)
+        )
+        self._save_button.state(["disabled"])
 
         label = ttk.Label(self.right_sidebar, text="Properties")
         label.grid(row=1, column=0, sticky="w", padx=8, pady=(8, 4))
@@ -178,6 +330,10 @@ class AppView(tk.Tk):
             wraplength=240,
         )
         props.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
+
+    def _on_close(self) -> None:
+        self._save_settings()
+        self.destroy()
 
     def _on_tree_select(self, _event) -> None:
         selection = self.scene_tree.selection()
@@ -221,8 +377,8 @@ class AppView(tk.Tk):
     def _show_path_settings(self) -> None:
         if not hasattr(self, "_path_settings"):
             return
-        self._hatch_angle_var.set(self.hatch_angle_deg)
-        self._hatch_spacing_var.set(self.hatch_spacing_px)
+        self._hatch_angle_var.set(str(self.hatch_angle_deg))
+        self._hatch_spacing_var.set(str(self.hatch_spacing_px))
         self._path_settings.grid(row=0, column=0, sticky="nsew", padx=0, pady=(0, 4))
 
     def _hide_path_settings(self) -> None:
@@ -239,6 +395,7 @@ class AppView(tk.Tk):
         self.hatch_angle_deg = angle
         self.hatch_spacing_px = spacing
         self.update_properties()
+        self._update_settings_dirty()
 
     def _on_tree_right_click(self, event) -> None:
         row_id = self.scene_tree.identify_row(event.y)
