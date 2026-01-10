@@ -63,6 +63,7 @@ class AppView(tk.Tk):
         self.source_path: Optional[str] = None
         self.selected_polygons = []
         self.selected_edge_polygons = []
+        self.selected_polylines = []
         self.generated_paths = []
         settings = self._load_settings()
         path_settings = settings["path_generation"]

@@ -169,6 +169,7 @@ class View2D(BaseView):
         if show_geometry:
             # Draw geometry polylines
             selected_indices = set(self.app.selected_edge_polygons)
+            selected_line_indices = set(self.app.selected_polylines)
             for i, polyline in enumerate(g.polylines):
                 # Must be at least 2 points to have any line segments
                 if len(polyline.points) < 2:
@@ -188,7 +189,14 @@ class View2D(BaseView):
                 # Batch draw this polyline as many segments
                 if coords:
                     color = COLORS[i % len(COLORS)]
-                    width = 1.5 * 2.0 if i in selected_indices else 1.5
+                    is_polygon = (
+                        len(polyline.points) >= 3
+                        and polyline.points[0] == polyline.points[-1]
+                    )
+                    is_selected = (
+                        i in selected_indices if is_polygon else i in selected_line_indices
+                    )
+                    width = 1.5 * 2.0 if is_selected else 1.5
                     c.create_line(*coords, fill=color, width=width)
 
         self._draw_generated_paths()
@@ -314,6 +322,12 @@ class View2D(BaseView):
         polygons = self._collect_polygons()
         s = g.scale or 1
 
+        def toggle_line_selection(index):
+            if index in self.app.selected_polylines:
+                self.app.selected_polylines.remove(index)
+            else:
+                self.app.selected_polylines.append(index)
+
         def toggle_selection(selected):
             holes = []
             for poly in polygons:
@@ -348,6 +362,11 @@ class View2D(BaseView):
         edge_hit = self._find_edge_hit_polygon(x, y, polygons, s)
         if edge_hit is not None:
             toggle_edge_selection(edge_hit)
+            return
+
+        line_hit = self._find_line_hit_polyline(x, y, g.polylines, s)
+        if line_hit is not None:
+            toggle_line_selection(line_hit)
             return
 
         query = self._screen_to_pointint(x, y, s)
@@ -451,6 +470,60 @@ class View2D(BaseView):
                     best_poly = poly
 
         return best_poly
+
+    def _find_line_hit_polyline(self, x: float, y: float, polylines, scale: int):
+        edge_tol = 5.0
+        edge_tol_sq = edge_tol * edge_tol
+        best_index = None
+        best_dist = None
+
+        for idx, polyline in enumerate(polylines):
+            points = polyline.points
+            if len(points) < 2:
+                continue
+            if len(points) >= 3 and points[0] == points[-1]:
+                continue
+
+            screen_points = []
+            minx = None
+            maxx = None
+            miny = None
+            maxy = None
+            for pt in points:
+                xw, yw = pt.x / scale, pt.y / scale
+                xs = xw * self.zoom + self.offset[0]
+                ys = -yw * self.zoom + self.offset[1]
+                screen_points.append((xs, ys))
+                if minx is None:
+                    minx = maxx = xs
+                    miny = maxy = ys
+                else:
+                    minx = min(minx, xs)
+                    maxx = max(maxx, xs)
+                    miny = min(miny, ys)
+                    maxy = max(maxy, ys)
+
+            if minx is None:
+                continue
+            if (
+                x < minx - edge_tol
+                or x > maxx + edge_tol
+                or y < miny - edge_tol
+                or y > maxy + edge_tol
+            ):
+                continue
+
+            for i in range(len(screen_points) - 1):
+                a = screen_points[i]
+                b = screen_points[i + 1]
+                dist_sq = self._point_segment_distance_sq((x, y), a, b)
+                if dist_sq <= edge_tol_sq and (
+                    best_dist is None or dist_sq < best_dist
+                ):
+                    best_dist = dist_sq
+                    best_index = idx
+
+        return best_index
 
     def _draw_selection(self) -> None:
         show_geometry = getattr(self.app, "show_geometry", None)
