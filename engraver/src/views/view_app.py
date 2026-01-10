@@ -161,6 +161,9 @@ class AppView(tk.Tk):
             self._tree_menu.add_command(
                 label=label, command=self._toggle_all_paths_visibility
             )
+            self._tree_menu.add_command(
+                label="Remove All", command=self._remove_all_paths
+            )
         elif kind == "path":
             entry = self._get_path_entry(payload)
             if entry is None:
@@ -169,6 +172,9 @@ class AppView(tk.Tk):
             label = "Hide" if is_visible else "Show"
             self._tree_menu.add_command(
                 label=label, command=lambda idx=payload: self._toggle_path_visibility(idx)
+            )
+            self._tree_menu.add_command(
+                label="Remove", command=lambda idx=payload: self._remove_path(idx)
             )
         else:
             return
@@ -194,6 +200,23 @@ class AppView(tk.Tk):
 
     def _toggle_all_paths_visibility(self) -> None:
         self.show_generated_paths.set(not self.show_generated_paths.get())
+        self._refresh_tree()
+        self.update_properties()
+        self.redraw_all()
+
+    def _remove_all_paths(self) -> None:
+        if not self.generated_paths:
+            return
+        self.generated_paths = []
+        self._refresh_tree()
+        self.update_properties()
+        self.redraw_all()
+
+    def _remove_path(self, index: int) -> None:
+        entry = self._get_path_entry(index)
+        if entry is None:
+            return
+        self.generated_paths.pop(index)
         self._refresh_tree()
         self.update_properties()
         self.redraw_all()
