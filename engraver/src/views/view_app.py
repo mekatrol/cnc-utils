@@ -186,13 +186,13 @@ class AppView(tk.Tk):
                 label="Centre to origin (all)", command=self.centre_to_origin
             )
         elif kind == "paths_root":
-            label = "Hide All" if self.show_generated_paths.get() else "Show All"
-            self._tree_menu.add_command(
-                label=label, command=self._toggle_all_paths_visibility
-            )
             self._tree_menu.add_command(
                 label="Generate paths for selected polygons",
                 command=lambda: self.generate_paths_for_selection(append=True),
+            )
+            label = "Hide All" if self.show_generated_paths.get() else "Show All"
+            self._tree_menu.add_command(
+                label=label, command=self._toggle_all_paths_visibility
             )
             self._tree_menu.add_command(
                 label="Remove All", command=self._remove_all_paths
@@ -204,7 +204,8 @@ class AppView(tk.Tk):
             is_visible = entry.get("visible", True)
             label = "Hide" if is_visible else "Show"
             self._tree_menu.add_command(
-                label=label, command=lambda idx=payload: self._toggle_path_visibility(idx)
+                label=label,
+                command=lambda idx=payload: self._toggle_path_visibility(idx),
             )
             self._tree_menu.add_command(
                 label="Remove", command=lambda idx=payload: self._remove_path(idx)
@@ -294,9 +295,7 @@ class AppView(tk.Tk):
                 "end",
                 text=f"Polylines: {len(self.model.polylines)}",
             )
-            self._tree_item_info[count_item] = (
-                f"Polylines: {len(self.model.polylines)}"
-            )
+            self._tree_item_info[count_item] = f"Polylines: {len(self.model.polylines)}"
         else:
             none_item = self.scene_tree.insert(
                 self.tree_geometry_id,
@@ -315,10 +314,10 @@ class AppView(tk.Tk):
                 status = "shown" if entry.get("visible", True) else "hidden"
                 if not self.show_generated_paths.get():
                     status = "hidden"
-                is_visible = self.show_generated_paths.get() and entry.get("visible", True)
-                icon = (
-                    self._tree_icon_shown if is_visible else self._tree_icon_hidden
+                is_visible = self.show_generated_paths.get() and entry.get(
+                    "visible", True
                 )
+                icon = self._tree_icon_shown if is_visible else self._tree_icon_hidden
                 item = self.scene_tree.insert(
                     self.tree_paths_id,
                     "end",
@@ -368,9 +367,7 @@ class AppView(tk.Tk):
             1 for entry in self.generated_paths if entry.get("visible", True)
         )
         visibility = "shown" if self.show_generated_paths.get() else "hidden"
-        lines.append(
-            f"Generated paths: {visible_count}/{path_count} ({visibility})"
-        )
+        lines.append(f"Generated paths: {visible_count}/{path_count} ({visibility})")
 
         self.properties_var.set("\n".join(lines))
 
@@ -767,9 +764,7 @@ class AppView(tk.Tk):
                 {
                     "polygon_index": polygon["index"],
                     "polygon_points": [(p.x, p.y) for p in polygon["points"]],
-                    "holes": [
-                        [(p.x, p.y) for p in hole["points"]] for hole in holes
-                    ],
+                    "holes": [[(p.x, p.y) for p in hole["points"]] for hole in holes],
                 }
             )
 
@@ -792,9 +787,7 @@ class AppView(tk.Tk):
             paths = []
             for entry in selection:
                 polygon_points = [PointInt(x, y) for x, y in entry["polygon_points"]]
-                holes = [
-                    [PointInt(x, y) for x, y in hole] for hole in entry["holes"]
-                ]
+                holes = [[PointInt(x, y) for x, y in hole] for hole in entry["holes"]]
                 primary = self._hatch_lines_for_polygon(
                     polygon_points,
                     holes,
@@ -877,9 +870,7 @@ class AppView(tk.Tk):
         for i in range(len(points)):
             p0 = points[i]
             p1 = points[(i + 1) % len(points)]
-            hit = AppView._line_segment_intersection(
-                direction, normal, offset, p0, p1
-            )
+            hit = AppView._line_segment_intersection(direction, normal, offset, p0, p1)
             if hit is not None:
                 intersections.append(hit)
 
@@ -992,7 +983,10 @@ class AppView(tk.Tk):
             return []
 
         spacing = max(1.0, spacing_world * scale)
-        direction = (math.cos(math.radians(angle_deg)), math.sin(math.radians(angle_deg)))
+        direction = (
+            math.cos(math.radians(angle_deg)),
+            math.sin(math.radians(angle_deg)),
+        )
         normal = (-direction[1], direction[0])
 
         points = [(p.x, p.y) for p in polygon_points]
@@ -1023,9 +1017,7 @@ class AppView(tk.Tk):
         steps = int(math.floor((end - start) / spacing + 1.0 + 1e-6))
         for step in range(steps):
             offset = start + step * spacing
-            outer_intervals = self._polygon_line_intervals_cached(
-                outer_edges, offset
-            )
+            outer_intervals = self._polygon_line_intervals_cached(outer_edges, offset)
             if not outer_intervals:
                 continue
             hole_intervals = []
