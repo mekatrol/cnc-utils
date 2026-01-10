@@ -226,6 +226,8 @@ class View3D(BaseView):
 
         if show_geometry:
             # Draw lines RELATIVE to pivot so rotations happen about model center
+            selected_indices = set(self.app.selected_edge_polygons)
+            selected_line_indices = set(self.app.selected_polylines)
             for i, pl in enumerate(g.polylines):
                 if len(pl.points) < 2:
                     continue
@@ -236,8 +238,17 @@ class View3D(BaseView):
                     xs, ys, _ = self._project_point(x_rel, y_rel, 0.0, w, h)
                     if last_pt is not None:
                         color = COLORS[i % len(COLORS)]
+                        is_polygon = (
+                            len(pl.points) >= 3 and pl.points[0] == pl.points[-1]
+                        )
+                        is_selected = (
+                            i in selected_indices
+                            if is_polygon
+                            else i in selected_line_indices
+                        )
+                        width = 1.5 * 2.0 if is_selected else 1.5
                         c.create_line(
-                            last_pt[0], last_pt[1], xs, ys, fill=color, width=1.5
+                            last_pt[0], last_pt[1], xs, ys, fill=color, width=width
                         )
                     last_pt = (xs, ys)
 
@@ -375,6 +386,32 @@ class View3D(BaseView):
         s = g.scale if g.scale else 1
         cx, cy = self._get_pivot_center()
         polygons = self._collect_polygons()
+
+        def toggle_line_selection(index):
+            if index in self.app.selected_polylines:
+                self.app.selected_polylines.remove(index)
+            else:
+                self.app.selected_polylines.append(index)
+
+        def toggle_edge_selection(selected):
+            idx = selected["index"]
+            if idx in self.app.selected_edge_polygons:
+                self.app.selected_edge_polygons.remove(idx)
+            else:
+                self.app.selected_edge_polygons.append(idx)
+
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+        edge_hit = self._find_edge_hit_polygon(x, y, polygons, w, h, cx, cy, s)
+        if edge_hit is not None:
+            toggle_edge_selection(edge_hit)
+            return
+
+        line_hit = self._find_line_hit_polyline(x, y, g.polylines, w, h, cx, cy, s)
+        if line_hit is not None:
+            toggle_line_selection(line_hit)
+            return
+
         containing = []
         query = self._screen_to_pointint(x, y, s, cx, cy)
         if query is not None:
@@ -443,6 +480,25 @@ class View3D(BaseView):
         seg_len = (bx - ax) * (bx - ax) + (by - ay) * (by - ay)
         return dot <= seg_len + eps
 
+    @staticmethod
+    def _point_segment_distance_sq(point, a, b) -> float:
+        px, py = point
+        ax, ay = a
+        bx, by = b
+        dx = bx - ax
+        dy = by - ay
+        if dx == 0.0 and dy == 0.0:
+            return (px - ax) ** 2 + (py - ay) ** 2
+        t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+        if t <= 0.0:
+            cx, cy = ax, ay
+        elif t >= 1.0:
+            cx, cy = bx, by
+        else:
+            cx = ax + t * dx
+            cy = ay + t * dy
+        return (px - cx) ** 2 + (py - cy) ** 2
+
     def _point_in_polygon_screen(self, point, polygon_points) -> bool:
         if not polygon_points:
             return False
@@ -461,6 +517,89 @@ class View3D(BaseView):
                 if x_intersect > x:
                     inside = not inside
         return inside
+
+    def _find_edge_hit_polygon(
+        self, x: float, y: float, polygons, w: int, h: int, cx: float, cy: float, scale: int
+    ):
+        edge_tol = 5.0
+        edge_tol_sq = edge_tol * edge_tol
+        best_poly = None
+        best_dist = None
+
+        for poly in polygons:
+            screen_points = self._project_polygon(poly["points"], w, h, cx, cy, scale)
+            if not screen_points:
+                continue
+            xs = [pt[0] for pt in screen_points]
+            ys = [pt[1] for pt in screen_points]
+            minx, maxx = min(xs), max(xs)
+            miny, maxy = min(ys), max(ys)
+            if (
+                x < minx - edge_tol
+                or x > maxx + edge_tol
+                or y < miny - edge_tol
+                or y > maxy + edge_tol
+            ):
+                continue
+
+            count = len(screen_points)
+            for i in range(count):
+                a = screen_points[i]
+                b = screen_points[(i + 1) % count]
+                dist_sq = self._point_segment_distance_sq((x, y), a, b)
+                if dist_sq <= edge_tol_sq and (
+                    best_dist is None or dist_sq < best_dist
+                ):
+                    best_dist = dist_sq
+                    best_poly = poly
+
+        return best_poly
+
+    def _find_line_hit_polyline(
+        self, x: float, y: float, polylines, w: int, h: int, cx: float, cy: float, scale: int
+    ):
+        edge_tol = 5.0
+        edge_tol_sq = edge_tol * edge_tol
+        best_index = None
+        best_dist = None
+
+        for idx, polyline in enumerate(polylines):
+            points = polyline.points
+            if len(points) < 2:
+                continue
+            if len(points) >= 3 and points[0] == points[-1]:
+                continue
+
+            screen_points = []
+            for pt in points:
+                x_rel = pt.x / scale - cx
+                y_rel = pt.y / scale - cy
+                xs, ys, _ = self._project_point(x_rel, y_rel, 0.0, w, h)
+                screen_points.append((xs, ys))
+
+            xs = [pt[0] for pt in screen_points]
+            ys = [pt[1] for pt in screen_points]
+            minx, maxx = min(xs), max(xs)
+            miny, maxy = min(ys), max(ys)
+            if (
+                x < minx - edge_tol
+                or x > maxx + edge_tol
+                or y < miny - edge_tol
+                or y > maxy + edge_tol
+            ):
+                continue
+
+            for i in range(len(screen_points) - 1):
+                a = screen_points[i]
+                b = screen_points[i + 1]
+                dist_sq = self._point_segment_distance_sq((x, y), a, b)
+                if dist_sq <= edge_tol_sq and (
+                    best_dist is None or dist_sq < best_dist
+                ):
+                    best_dist = dist_sq
+                    best_index = idx
+
+        return best_index
 
     def _draw_selection(self, w: int, h: int, cx: float, cy: float) -> None:
         show_geometry = getattr(self.app, "show_geometry", None)
