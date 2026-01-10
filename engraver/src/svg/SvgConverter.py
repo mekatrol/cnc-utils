@@ -71,6 +71,171 @@ class SvgConverter:
         return out
 
     @staticmethod
+    def _split_intersections_between_polygons(
+        polylines: List[PolylineInt],
+        scale: int,
+    ) -> List[PolylineInt]:
+        closed: List[PolylineInt] = []
+        open_polylines: List[PolylineInt] = []
+        for poly in polylines:
+            pts = poly.points
+            if len(pts) >= 4 and pts[0] == pts[-1]:
+                closed.append(poly)
+            else:
+                open_polylines.append(poly)
+
+        cut_delta = max(2, int(round(scale * 1e-3)))
+
+        if len(closed) < 2 and not open_polylines:
+            return polylines
+
+        disjoint_paths: List[List[tuple[int, int]]] = []
+
+        def clip_paths(
+            subject: List[List[tuple[int, int]]],
+            clip: List[List[tuple[int, int]]],
+            op: int,
+        ) -> List[List[tuple[int, int]]]:
+            pc = pyclipper.Pyclipper()
+            
+            if subject:
+                pc.AddPaths(subject, pyclipper.PT_SUBJECT, True)  # type: ignore
+            if clip:
+                pc.AddPaths(clip, pyclipper.PT_CLIP, True)  # type: ignore
+
+            return pc.Execute(
+                op, pyclipper.PFT_EVENODD, pyclipper.PFT_EVENODD
+            )
+
+        def bbox(path: List[tuple[int, int]]) -> tuple[int, int, int, int]:
+            xs = [p[0] for p in path]
+            ys = [p[1] for p in path]
+            return min(xs), min(ys), max(xs), max(ys)
+
+        def bboxes_overlap(
+            a: tuple[int, int, int, int], b: tuple[int, int, int, int]
+        ) -> bool:
+            ax0, ay0, ax1, ay1 = a
+            bx0, by0, bx1, by1 = b
+            return not (ax1 < bx0 or bx1 < ax0 or ay1 < by0 or by1 < ay0)
+
+        def is_proper_overlap(
+            path_a: List[tuple[int, int]],
+            path_b: List[tuple[int, int]],
+        ) -> bool:
+            if len(path_a) < 3 or len(path_b) < 3:
+                return False
+            if not bboxes_overlap(bbox(path_a), bbox(path_b)):
+                return False
+            intersection = clip_paths(
+                [path_a], [path_b], pyclipper.CT_INTERSECTION
+            )
+            if not intersection:
+                return False
+            area_a = abs(pyclipper.Area(path_a))
+            area_b = abs(pyclipper.Area(path_b))
+            area_i = sum(abs(pyclipper.Area(p)) for p in intersection)
+            if area_i == 0:
+                return False
+            # Containment or identical shapes should not trigger splitting.
+            if area_i >= min(area_a, area_b):
+                return False
+            return True
+
+        for poly in closed:
+            pts = poly.points
+            if len(pts) >= 2 and pts[0] == pts[-1]:
+                pts = pts[:-1]
+            if len(pts) < 3:
+                continue
+            path = [(p.x, p.y) for p in pts]
+            if not disjoint_paths:
+                disjoint_paths.append(path)
+                continue
+
+            intersecting_paths: List[List[tuple[int, int]]] = []
+            non_intersecting_paths: List[List[tuple[int, int]]] = []
+            for existing in disjoint_paths:
+                if is_proper_overlap(path, existing):
+                    intersecting_paths.append(existing)
+                else:
+                    non_intersecting_paths.append(existing)
+
+            if not intersecting_paths:
+                disjoint_paths.append(path)
+                continue
+
+            intersections = clip_paths(
+                [path], intersecting_paths, pyclipper.CT_INTERSECTION
+            )
+            new_only = clip_paths(
+                [path], intersecting_paths, pyclipper.CT_DIFFERENCE
+            )
+            existing_minus_new = clip_paths(
+                intersecting_paths, [path], pyclipper.CT_DIFFERENCE
+            )
+
+            disjoint_paths = (
+                non_intersecting_paths
+                + existing_minus_new
+                + intersections
+                + new_only
+            )
+
+        if open_polylines and disjoint_paths:
+            cutter_paths: List[List[tuple[int, int]]] = []
+
+            def segment_strip(
+                p0: PointInt, p1: PointInt, delta: int
+            ) -> Optional[List[tuple[int, int]]]:
+                dx = p1.x - p0.x
+                dy = p1.y - p0.y
+                if dx == 0 and dy == 0:
+                    return None
+                length = math.hypot(dx, dy)
+                if length == 0.0:
+                    return None
+                nx = -dy / length
+                ny = dx / length
+                ox = int(round(nx * delta))
+                oy = int(round(ny * delta))
+                if ox == 0 and oy == 0:
+                    ox = 0
+                    oy = 1 if delta > 0 else -1
+                return [
+                    (p0.x + ox, p0.y + oy),
+                    (p0.x - ox, p0.y - oy),
+                    (p1.x - ox, p1.y - oy),
+                    (p1.x + ox, p1.y + oy),
+                ]
+
+            for poly in open_polylines:
+                pts = poly.points
+                if len(pts) < 2:
+                    continue
+                for i in range(len(pts) - 1):
+                    strip = segment_strip(pts[i], pts[i + 1], cut_delta)
+                    if strip:
+                        cutter_paths.append(strip)
+
+            if cutter_paths:
+                disjoint_paths = clip_paths(
+                    disjoint_paths, cutter_paths, pyclipper.CT_DIFFERENCE
+                )
+
+        out: List[PolylineInt] = []
+        out.extend(open_polylines)
+        for path in disjoint_paths:
+            if len(path) < 3:
+                continue
+            points = [PointInt(int(x), int(y)) for (x, y) in path]
+            if points[0] != points[-1]:
+                points.append(points[0])
+            out.append(PolylineInt(points=points))
+
+        return out
+
+    @staticmethod
     def _walk_with_matrix(node: Any, parent: Optional[Matrix] = None):
         """Yield (leaf, parent_matrix_without_leaf)."""
         parent_matrix = Matrix() if parent is None else parent
@@ -362,7 +527,12 @@ class SvgConverter:
 
         # Integerize (and flip Y)
         polylines_int: List[PolylineInt] = []
+        close_tol = max(1e-6, tol)
         for poly in polylines_float:
+            is_closed = (
+                len(poly) >= 3
+                and GeoUtil.equal_with_tolerance(poly[0], poly[-1], close_tol)
+            )
             pts_i = [
                 PointInt(
                     GeoUtil.float_to_int(pt.x, scale),
@@ -371,8 +541,13 @@ class SvgConverter:
                 for pt in poly
             ]
             if len(pts_i) >= 2:
+                if is_closed:
+                    pts_i[-1] = pts_i[0]
                 polylines_int.append(PolylineInt(points=pts_i))
 
         polylines_int = SvgConverter._split_self_intersections(polylines_int)
+        polylines_int = SvgConverter._split_intersections_between_polygons(
+            polylines_int, scale
+        )
 
         return GeometryInt(polylines=polylines_int, points=[], scale=scale)
