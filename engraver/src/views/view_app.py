@@ -57,6 +57,8 @@ class AppView(tk.Tk):
         self.properties_var = tk.StringVar(value="No selection")
         self._tree_item_info = {}
         self._tree_item_action = {}
+        self._tree_icon_shown = None
+        self._tree_icon_hidden = None
         self._startup_load_params: Optional[tuple[str, int, float]] = None
         self._startup_export_json: Optional[str] = None
 
@@ -78,6 +80,7 @@ class AppView(tk.Tk):
         self.main_frame.columnconfigure(2, weight=0)
 
         self._build_left_sidebar()
+        self._init_tree_icons()
 
         self.notebook = ttk.Notebook(self.main_frame)
         self.notebook.grid(row=0, column=1, sticky="nsew")
@@ -116,6 +119,17 @@ class AppView(tk.Tk):
             "", "end", text="Generated Paths", open=True
         )
         self._tree_menu = tk.Menu(self, tearoff=False)
+
+    def _init_tree_icons(self) -> None:
+        size = 12
+        pad = 6
+        width = size + pad
+        shown = tk.PhotoImage(width=width, height=size)
+        hidden = tk.PhotoImage(width=width, height=size)
+        shown.put("#3FA34D", to=(0, 0, size, size))
+        hidden.put("#9AA0A6", to=(0, 0, size, size))
+        self._tree_icon_shown = shown
+        self._tree_icon_hidden = hidden
 
     def _build_right_sidebar(self) -> None:
         self.right_sidebar = ttk.Frame(self.main_frame, width=260)
@@ -261,11 +275,17 @@ class AppView(tk.Tk):
         if self.model and self.model.polylines:
             source = self.source_path or "in-memory geometry"
             status = "shown" if self.show_geometry.get() else "hidden"
+            icon = (
+                self._tree_icon_shown
+                if self.show_geometry.get()
+                else self._tree_icon_hidden
+            )
             geom_item = self.scene_tree.insert(
                 self.tree_geometry_id,
                 "end",
                 text=f"{Path(source).name} ({status})",
                 open=True,
+                image=icon,
             )
             self._tree_item_info[geom_item] = f"Source: {source}"
             self._tree_item_action[geom_item] = ("geometry", None)
@@ -279,7 +299,10 @@ class AppView(tk.Tk):
             )
         else:
             none_item = self.scene_tree.insert(
-                self.tree_geometry_id, "end", text="No geometry loaded"
+                self.tree_geometry_id,
+                "end",
+                text="No geometry loaded",
+                image=self._tree_icon_hidden,
             )
             self._tree_item_info[none_item] = "No geometry loaded"
 
@@ -292,10 +315,15 @@ class AppView(tk.Tk):
                 status = "shown" if entry.get("visible", True) else "hidden"
                 if not self.show_generated_paths.get():
                     status = "hidden"
+                is_visible = self.show_generated_paths.get() and entry.get("visible", True)
+                icon = (
+                    self._tree_icon_shown if is_visible else self._tree_icon_hidden
+                )
                 item = self.scene_tree.insert(
                     self.tree_paths_id,
                     "end",
                     text=f"Polygon {polygon_index} ({status})",
+                    image=icon,
                 )
                 self._tree_item_info[item] = (
                     f"Polygon {polygon_index}\n"
@@ -305,7 +333,10 @@ class AppView(tk.Tk):
                 self._tree_item_action[item] = ("path", idx)
         else:
             none_item = self.scene_tree.insert(
-                self.tree_paths_id, "end", text="No generated paths"
+                self.tree_paths_id,
+                "end",
+                text="No generated paths",
+                image=self._tree_icon_hidden,
             )
             self._tree_item_info[none_item] = "No generated paths"
 
