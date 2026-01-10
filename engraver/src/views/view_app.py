@@ -54,6 +54,8 @@ class AppView(tk.Tk):
         self.hatch_spacing_px = 0.25
         self.show_generated_paths = tk.BooleanVar(value=True)
         self.show_geometry = tk.BooleanVar(value=True)
+        self._hatch_angle_var = tk.DoubleVar(value=self.hatch_angle_deg)
+        self._hatch_spacing_var = tk.DoubleVar(value=self.hatch_spacing_px)
         self.properties_var = tk.StringVar(value="No selection")
         self._tree_item_info = {}
         self._tree_item_action = {}
@@ -116,10 +118,10 @@ class AppView(tk.Tk):
         self.scene_tree.bind("<<TreeviewClose>>", self._on_tree_close)
 
         self.tree_geometry_id = self.scene_tree.insert(
-            "", "end", text="Geometry", open=True
+            "", "end", text="Geometries", open=True
         )
         self.tree_paths_id = self.scene_tree.insert(
-            "", "end", text="Generated Paths", open=True
+            "", "end", text="Paths", open=True
         )
         self._tree_menu = tk.Menu(self, tearoff=False)
 
@@ -141,8 +143,25 @@ class AppView(tk.Tk):
         self.right_sidebar.rowconfigure(1, weight=1)
         self.right_sidebar.columnconfigure(0, weight=1)
 
+        self._path_settings = ttk.Frame(self.right_sidebar)
+        self._path_settings.columnconfigure(1, weight=1)
+        angle_label = ttk.Label(self._path_settings, text="Hatch angle (deg)")
+        angle_label.grid(row=0, column=0, sticky="w", padx=8, pady=(8, 4))
+        angle_entry = ttk.Entry(self._path_settings, textvariable=self._hatch_angle_var)
+        angle_entry.grid(row=0, column=1, sticky="ew", padx=8, pady=(8, 4))
+        spacing_label = ttk.Label(self._path_settings, text="Hatch spacing")
+        spacing_label.grid(row=1, column=0, sticky="w", padx=8, pady=(0, 4))
+        spacing_entry = ttk.Entry(
+            self._path_settings, textvariable=self._hatch_spacing_var
+        )
+        spacing_entry.grid(row=1, column=1, sticky="ew", padx=8, pady=(0, 4))
+        angle_entry.bind("<Return>", self._apply_hatch_settings)
+        spacing_entry.bind("<Return>", self._apply_hatch_settings)
+        angle_entry.bind("<FocusOut>", self._apply_hatch_settings)
+        spacing_entry.bind("<FocusOut>", self._apply_hatch_settings)
+
         label = ttk.Label(self.right_sidebar, text="Properties")
-        label.grid(row=0, column=0, sticky="w", padx=8, pady=(8, 4))
+        label.grid(row=1, column=0, sticky="w", padx=8, pady=(8, 4))
 
         props = ttk.Label(
             self.right_sidebar,
@@ -150,7 +169,7 @@ class AppView(tk.Tk):
             justify="left",
             wraplength=240,
         )
-        props.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        props.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
 
     def _on_tree_select(self, _event) -> None:
         selection = self.scene_tree.selection()
@@ -159,6 +178,10 @@ class AppView(tk.Tk):
         info = self._tree_item_info.get(selection[0])
         if info:
             self.properties_var.set(info)
+        if selection[0] == self.tree_paths_id:
+            self._show_path_settings()
+        else:
+            self._hide_path_settings()
 
     def _on_tree_left_click(self, event) -> str | None:
         row_id = self.scene_tree.identify_row(event.y)
@@ -186,6 +209,28 @@ class AppView(tk.Tk):
             self._toggle_path_child_visibility(path_index, key)
             return "break"
         return "break"
+
+    def _show_path_settings(self) -> None:
+        if not hasattr(self, "_path_settings"):
+            return
+        self._hatch_angle_var.set(self.hatch_angle_deg)
+        self._hatch_spacing_var.set(self.hatch_spacing_px)
+        self._path_settings.grid(row=0, column=0, sticky="nsew", padx=0, pady=(0, 4))
+
+    def _hide_path_settings(self) -> None:
+        if not hasattr(self, "_path_settings"):
+            return
+        self._path_settings.grid_remove()
+
+    def _apply_hatch_settings(self, _event=None) -> None:
+        try:
+            angle = float(self._hatch_angle_var.get())
+            spacing = float(self._hatch_spacing_var.get())
+        except Exception:
+            return
+        self.hatch_angle_deg = angle
+        self.hatch_spacing_px = spacing
+        self.update_properties()
 
     def _on_tree_right_click(self, event) -> None:
         row_id = self.scene_tree.identify_row(event.y)
@@ -377,10 +422,13 @@ class AppView(tk.Tk):
         if not hasattr(self, "scene_tree"):
             return
 
+        self._hide_path_settings()
         self._tree_item_info = {}
         self._tree_item_action = {}
         self.scene_tree.delete(*self.scene_tree.get_children(self.tree_geometry_id))
         self.scene_tree.delete(*self.scene_tree.get_children(self.tree_paths_id))
+        self._tree_item_info[self.tree_paths_id] = "Generated paths"
+        self._tree_item_action[self.tree_paths_id] = ("paths_root", None)
 
         if self.model and self.model.polylines:
             source = self.source_path or "in-memory geometry"
