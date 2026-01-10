@@ -11,6 +11,7 @@ from tkinter import ttk, filedialog, messagebox
 from geometry.PointInt import PointInt
 from geometry.PolylineInt import PolylineInt
 from geometry.GeometryInt import GeometryInt
+from geometry.GeoUtil import GeoUtil
 from export.JsonExporter import JsonExporter
 from svg.SvgConverter import SvgConverter
 
@@ -45,6 +46,9 @@ class AppView(tk.Tk):
         self.generated_paths = []
         self.hatch_angle_deg = 45.0
         self.hatch_spacing_px = 0.25
+        self.show_generated_paths = tk.BooleanVar(value=True)
+        self.properties_var = tk.StringVar(value="No selection")
+        self._tree_item_info = {}
         self._startup_load_params: Optional[tuple[str, int, float]] = None
         self._startup_export_json: Optional[str] = None
 
@@ -58,14 +62,164 @@ class AppView(tk.Tk):
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
 
-        self.notebook = ttk.Notebook(self)
-        self.notebook.grid(row=0, column=0, sticky="nsew")
+        self.main_frame = ttk.Frame(self)
+        self.main_frame.grid(row=0, column=0, sticky="nsew")
+        self.main_frame.rowconfigure(0, weight=1)
+        self.main_frame.columnconfigure(0, weight=0)
+        self.main_frame.columnconfigure(1, weight=1)
+        self.main_frame.columnconfigure(2, weight=0)
+
+        self._build_left_sidebar()
+
+        self.notebook = ttk.Notebook(self.main_frame)
+        self.notebook.grid(row=0, column=1, sticky="nsew")
+
+        self._build_right_sidebar()
 
         # Default tabs
         self.add_view("3D")
         self.add_view("2D")
 
         self.maximize()
+        self._refresh_tree()
+        self.update_properties()
+
+    def _build_left_sidebar(self) -> None:
+        self.left_sidebar = ttk.Frame(self.main_frame, width=240)
+        self.left_sidebar.grid(row=0, column=0, sticky="nsew")
+        self.left_sidebar.grid_propagate(False)
+        self.left_sidebar.rowconfigure(1, weight=1)
+        self.left_sidebar.columnconfigure(0, weight=1)
+
+        label = ttk.Label(self.left_sidebar, text="Scene")
+        label.grid(row=0, column=0, sticky="w", padx=8, pady=(8, 4))
+
+        self.scene_tree = ttk.Treeview(
+            self.left_sidebar, show="tree", selectmode="browse"
+        )
+        self.scene_tree.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self.scene_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+
+        self.tree_geometry_id = self.scene_tree.insert(
+            "", "end", text="Geometry", open=True
+        )
+        self.tree_paths_id = self.scene_tree.insert(
+            "", "end", text="Generated Paths", open=True
+        )
+
+    def _build_right_sidebar(self) -> None:
+        self.right_sidebar = ttk.Frame(self.main_frame, width=260)
+        self.right_sidebar.grid(row=0, column=2, sticky="nsew")
+        self.right_sidebar.grid_propagate(False)
+        self.right_sidebar.rowconfigure(2, weight=1)
+        self.right_sidebar.columnconfigure(0, weight=1)
+
+        label = ttk.Label(self.right_sidebar, text="Properties")
+        label.grid(row=0, column=0, sticky="w", padx=8, pady=(8, 4))
+
+        show_paths = ttk.Checkbutton(
+            self.right_sidebar,
+            text="Show generated paths",
+            variable=self.show_generated_paths,
+            command=self._on_toggle_generated_paths,
+        )
+        show_paths.grid(row=1, column=0, sticky="w", padx=8, pady=(0, 8))
+
+        props = ttk.Label(
+            self.right_sidebar,
+            textvariable=self.properties_var,
+            justify="left",
+            wraplength=240,
+        )
+        props.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
+
+    def _on_toggle_generated_paths(self) -> None:
+        self.redraw_all()
+        self.update_properties()
+
+    def _on_tree_select(self, _event) -> None:
+        selection = self.scene_tree.selection()
+        if not selection:
+            return
+        info = self._tree_item_info.get(selection[0])
+        if info:
+            self.properties_var.set(info)
+
+    def _refresh_tree(self) -> None:
+        if not hasattr(self, "scene_tree"):
+            return
+
+        self._tree_item_info = {}
+        self.scene_tree.delete(*self.scene_tree.get_children(self.tree_geometry_id))
+        self.scene_tree.delete(*self.scene_tree.get_children(self.tree_paths_id))
+
+        if self.model and self.model.polylines:
+            source = self.source_path or "in-memory geometry"
+            geom_item = self.scene_tree.insert(
+                self.tree_geometry_id, "end", text=Path(source).name
+            )
+            self._tree_item_info[geom_item] = f"Source: {source}"
+            count_item = self.scene_tree.insert(
+                self.tree_geometry_id,
+                "end",
+                text=f"Polylines: {len(self.model.polylines)}",
+            )
+            self._tree_item_info[count_item] = (
+                f"Polylines: {len(self.model.polylines)}"
+            )
+        else:
+            none_item = self.scene_tree.insert(
+                self.tree_geometry_id, "end", text="No geometry loaded"
+            )
+            self._tree_item_info[none_item] = "No geometry loaded"
+
+        if self.generated_paths:
+            for entry in self.generated_paths:
+                polygon_index = entry.get("polygon_index", "?")
+                lines = entry.get("lines", {})
+                primary = len(lines.get("primary", []))
+                secondary = len(lines.get("secondary", []))
+                item = self.scene_tree.insert(
+                    self.tree_paths_id,
+                    "end",
+                    text=f"Polygon {polygon_index}",
+                )
+                self._tree_item_info[item] = (
+                    f"Polygon {polygon_index}\n"
+                    f"Primary lines: {primary}\n"
+                    f"Secondary lines: {secondary}"
+                )
+        else:
+            none_item = self.scene_tree.insert(
+                self.tree_paths_id, "end", text="No generated paths"
+            )
+            self._tree_item_info[none_item] = "No generated paths"
+
+    def update_properties(self) -> None:
+        lines = []
+        if self.model and self.model.polylines:
+            source = self.source_path or "(in-memory geometry)"
+            lines.append(f"Source: {source}")
+            lines.append(f"Polylines: {len(self.model.polylines)}")
+        else:
+            lines.append("No geometry loaded")
+
+        if self.selected_polygons:
+            selected = self.selected_polygons[0]["polygon"]
+            holes = self.selected_polygons[0]["holes"]
+            scale = self.model.scale if self.model and self.model.scale else 1
+            area = abs(GeoUtil.area(selected["points"])) / (scale * scale)
+            lines.append(f"Selected polygon: {selected['index']}")
+            lines.append(f"Holes: {len(holes)}")
+            lines.append(f"Area: {area:.3f}")
+        else:
+            lines.append("Selected polygon: none")
+
+        path_count = len(self.generated_paths)
+        visibility = "shown" if self.show_generated_paths.get() else "hidden"
+        lines.append(f"Generated paths: {path_count} ({visibility})")
+
+        self.properties_var.set("\n".join(lines))
 
     def _on_map(self, _):
         self._mapped = True
@@ -167,6 +321,8 @@ class AppView(tk.Tk):
             widget = self.notebook.nametowidget(self.notebook.tabs()[i])
             if isinstance(widget, View3D):
                 widget.fit_to_view_pending = True
+        self._refresh_tree()
+        self.update_properties()
         self._maybe_export_startup(geom)
         self.redraw_all()
 
@@ -518,6 +674,8 @@ class AppView(tk.Tk):
         self._hide_spinner()
         self.generated_paths = paths
         self.menubar.files_dirty = True
+        self._refresh_tree()
+        self.update_properties()
         self.fit_current()
 
     def _generate_paths_failed(self, err: Exception):
@@ -741,4 +899,6 @@ class AppView(tk.Tk):
             return
         self.generated_paths = []
         self.menubar.files_dirty = True
+        self._refresh_tree()
+        self.update_properties()
         self.redraw_all()

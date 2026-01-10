@@ -191,6 +191,14 @@ class View2D(BaseView):
             c.create_oval(xs - r, ys - r, xs + r, ys + r, outline=color, fill=color)
 
     def _draw_generated_paths(self) -> None:
+        show_paths = getattr(self.app, "show_generated_paths", None)
+        if show_paths is not None:
+            try:
+                if not show_paths.get():
+                    return
+            except Exception:
+                if not show_paths:
+                    return
         paths = getattr(self.app, "generated_paths", [])
         if not paths:
             return
@@ -238,6 +246,7 @@ class View2D(BaseView):
         g = self.app.model
         if not g or not g.polylines:
             self.app.selected_polygons = []
+            self.app.update_properties()
             return
 
         query = self._screen_to_pointint(x, y, g.scale or 1)
@@ -254,6 +263,7 @@ class View2D(BaseView):
 
         if not containing:
             self.app.selected_polygons = []
+            self.app.update_properties()
             return
 
         selected = min(
@@ -282,6 +292,7 @@ class View2D(BaseView):
             self.app.selected_polygons.append(selected_entry)
         else:
             self.app.selected_polygons.pop(existing_idx)
+        self.app.update_properties()
 
     def _draw_selection(self) -> None:
         if not self.app.selected_polygons:

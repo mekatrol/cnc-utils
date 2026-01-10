@@ -233,6 +233,14 @@ class View3D(BaseView):
         self._draw_generated_paths(w, h, cx, cy)
 
     def _draw_generated_paths(self, w: int, h: int, cx: float, cy: float) -> None:
+        show_paths = getattr(self.app, "show_generated_paths", None)
+        if show_paths is not None:
+            try:
+                if not show_paths.get():
+                    return
+            except Exception:
+                if not show_paths:
+                    return
         paths = getattr(self.app, "generated_paths", [])
         if not paths:
             return
@@ -299,6 +307,7 @@ class View3D(BaseView):
         g = self.app.model
         if not g or not g.polylines:
             self.app.selected_polygons = []
+            self.app.update_properties()
             return
 
         s = g.scale if g.scale else 1
@@ -327,6 +336,7 @@ class View3D(BaseView):
 
         if not containing:
             self.app.selected_polygons = []
+            self.app.update_properties()
             return
 
         selected = min(
@@ -355,6 +365,7 @@ class View3D(BaseView):
             self.app.selected_polygons.append(selected_entry)
         else:
             self.app.selected_polygons.pop(existing_idx)
+        self.app.update_properties()
 
     @staticmethod
     def _point_on_segment(point, a, b, eps: float = 1e-6) -> bool:
