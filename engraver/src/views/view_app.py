@@ -365,6 +365,14 @@ class AppView(tk.Tk):
             )
         new_points = [PointInt(p.x - midx, p.y - midy) for p in self.model.points]
         self.model = GeometryInt(new_polylines, new_points, self.model.scale)
+
+        for i in range(self.notebook.index("end")):
+            widget = self.notebook.nametowidget(self.notebook.tabs()[i])
+            if hasattr(widget, "_rebuild_selected_polygons"):
+                widget._rebuild_selected_polygons()
+            if hasattr(widget, "_pivot_center"):
+                widget._pivot_center = None
+
         self.menubar.files_dirty = True
         self.redraw_all()
 
