@@ -10,6 +10,7 @@ from tkinter import ttk, filedialog, messagebox
 from geometry.PointInt import PointInt
 from geometry.PolylineInt import PolylineInt
 from geometry.GeometryInt import GeometryInt
+from export.JsonExporter import JsonExporter
 from svg.SvgConverter import SvgConverter
 
 from views.view_2d import View2D
@@ -40,6 +41,8 @@ class AppView(tk.Tk):
         self.source_label_var = tk.StringVar(value="No file loaded")
         self.source_path: Optional[str] = None
         self.selected_polygons = []
+        self._startup_load_params: Optional[tuple[str, int, float]] = None
+        self._startup_export_json: Optional[str] = None
 
         style = ttk.Style(self)
         if "clam" in style.theme_names():
@@ -159,6 +162,7 @@ class AppView(tk.Tk):
             widget = self.notebook.nametowidget(self.notebook.tabs()[i])
             if isinstance(widget, View3D):
                 widget.fit_to_view_pending = True
+        self._maybe_export_startup(geom)
         self.redraw_all()
 
     def redraw_all(self):
@@ -192,6 +196,39 @@ class AppView(tk.Tk):
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load {path}:\n{e}")
             return
+
+    def queue_startup_load(
+        self,
+        input_path: str,
+        scale: int = 10000,
+        tol: float = 0.25,
+        export_json: str | None = None,
+    ):
+        self._startup_load_params = (input_path, scale, tol)
+        self._startup_export_json = export_json
+        self.after(0, self._run_startup_load)
+
+    def _run_startup_load(self):
+        if not self._startup_load_params:
+            return
+        path, scale, tol = self._startup_load_params
+        self._startup_load_params = None
+        try:
+            file_path = Path(path)
+            if not file_path.exists():
+                messagebox.showerror("Load failed", f"File not found:\n{path}")
+                return
+            ext = file_path.suffix.lower()
+            if ext == ".json":
+                geom = AppView.load_geometry_from_json(file_path)
+                self.set_geometry(geom, source=str(file_path))
+                self.fit_current()
+            elif ext == ".svg":
+                self.open_svg_async(str(file_path), scale=scale, tol=tol)
+            else:
+                messagebox.showerror("Load failed", f"Unsupported file type:\n{path}")
+        except Exception as e:
+            messagebox.showerror("Load failed", f"{path}\n\n{e}")
 
     def _center_in_parent(self, win: tk.Toplevel):
         win.update_idletasks()  # ensure geometry is calculated
@@ -233,15 +270,15 @@ class AppView(tk.Tk):
         sp.start()
         self._center_in_parent(self.spinner)
 
-    def open_svg_async(self, path: str):
+    def open_svg_async(self, path: str, scale: int = 10000, tol: float = 0.25):
         self._show_spinner("Processing…")
         threading.Thread(
-            target=self._load_svg_worker, args=(path,), daemon=True
+            target=self._load_svg_worker, args=(path, scale, tol), daemon=True
         ).start()
 
-    def _load_svg_worker(self, path: str):
+    def _load_svg_worker(self, path: str, scale: int, tol: float):
         try:
-            geom = SvgConverter.svg_to_geometry_int(path, scale=10000, tol=0.25)
+            geom = SvgConverter.svg_to_geometry_int(path, scale=scale, tol=tol)
         except Exception as e:
             # report back to UI thread
             self.after(0, self._load_svg_failed, path, e)
@@ -264,6 +301,17 @@ class AppView(tk.Tk):
     def _hide_spinner(self):
         if self.spinner and self.spinner.winfo_exists():
             self.spinner.destroy()
+
+    def _maybe_export_startup(self, geom: GeometryInt):
+        if not self._startup_export_json:
+            return
+        export_path = Path(self._startup_export_json)
+        self._startup_export_json = None
+        try:
+            export_path.parent.mkdir(parents=True, exist_ok=True)
+            JsonExporter.export(geom, str(export_path))
+        except Exception as e:
+            messagebox.showerror("Export failed", f"{export_path}\n\n{e}")
 
     def add_view(self, kind: str):
         if kind == "2D":
