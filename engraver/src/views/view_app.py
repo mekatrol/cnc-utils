@@ -223,11 +223,12 @@ class AppView(tk.Tk):
                 self.tree_geometry_id,
                 "end",
                 text=f"{Path(source).name} ({status})",
+                open=True,
             )
             self._tree_item_info[geom_item] = f"Source: {source}"
             self._tree_item_action[geom_item] = ("geometry", None)
             count_item = self.scene_tree.insert(
-                self.tree_geometry_id,
+                geom_item,
                 "end",
                 text=f"Polylines: {len(self.model.polylines)}",
             )
@@ -486,6 +487,7 @@ class AppView(tk.Tk):
     def _show_spinner(self, message):
         # show spinner dialog
         self.spinner = tk.Toplevel(self)
+        self.spinner.withdraw()
         self.spinner.overrideredirect(True)
 
         frame = tk.Frame(self.spinner, bg="#B0E0F3", padx=15, pady=15)
@@ -509,6 +511,7 @@ class AppView(tk.Tk):
         sp.pack()
         sp.start()
         self._center_in_parent(self.spinner)
+        self.spinner.deiconify()
 
     def open_svg_async(self, path: str, scale: int = 10000, tol: float = 0.25):
         self._show_spinner("Processing…")
