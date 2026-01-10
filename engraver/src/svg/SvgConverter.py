@@ -119,29 +119,6 @@ class SvgConverter:
             bx0, by0, bx1, by1 = b
             return not (ax1 < bx0 or bx1 < ax0 or ay1 < by0 or by1 < ay0)
 
-        def is_proper_overlap(
-            path_a: List[tuple[int, int]],
-            path_b: List[tuple[int, int]],
-        ) -> bool:
-            if len(path_a) < 3 or len(path_b) < 3:
-                return False
-            if not bboxes_overlap(bbox(path_a), bbox(path_b)):
-                return False
-            intersection = clip_paths(
-                [path_a], [path_b], pyclipper.CT_INTERSECTION
-            )
-            if not intersection:
-                return False
-            area_a = abs(pyclipper.Area(path_a))
-            area_b = abs(pyclipper.Area(path_b))
-            area_i = sum(abs(pyclipper.Area(p)) for p in intersection)
-            if area_i == 0:
-                return False
-            # Containment or identical shapes should not trigger splitting.
-            if area_i >= min(area_a, area_b):
-                return False
-            return True
-
         for poly in closed:
             pts = poly.points
             if len(pts) >= 2 and pts[0] == pts[-1]:
@@ -152,35 +129,39 @@ class SvgConverter:
             if not disjoint_paths:
                 disjoint_paths.append(path)
                 continue
+            remaining_new: List[List[tuple[int, int]]] = [path]
+            next_disjoint: List[List[tuple[int, int]]] = []
 
-            intersecting_paths: List[List[tuple[int, int]]] = []
-            non_intersecting_paths: List[List[tuple[int, int]]] = []
             for existing in disjoint_paths:
-                if is_proper_overlap(path, existing):
-                    intersecting_paths.append(existing)
-                else:
-                    non_intersecting_paths.append(existing)
+                if not remaining_new:
+                    next_disjoint.append(existing)
+                    continue
+                if not bboxes_overlap(bbox(existing), bbox(path)):
+                    next_disjoint.append(existing)
+                    continue
 
-            if not intersecting_paths:
-                disjoint_paths.append(path)
-                continue
+                intersections = clip_paths(
+                    remaining_new, [existing], pyclipper.CT_INTERSECTION
+                )
+                if not intersections:
+                    next_disjoint.append(existing)
+                    continue
 
-            intersections = clip_paths(
-                [path], intersecting_paths, pyclipper.CT_INTERSECTION
-            )
-            new_only = clip_paths(
-                [path], intersecting_paths, pyclipper.CT_DIFFERENCE
-            )
-            existing_minus_new = clip_paths(
-                intersecting_paths, [path], pyclipper.CT_DIFFERENCE
-            )
+                existing_minus_new = clip_paths(
+                    [existing], remaining_new, pyclipper.CT_DIFFERENCE
+                )
+                if existing_minus_new:
+                    next_disjoint.extend(existing_minus_new)
+                next_disjoint.extend(intersections)
 
-            disjoint_paths = (
-                non_intersecting_paths
-                + existing_minus_new
-                + intersections
-                + new_only
-            )
+                remaining_new = clip_paths(
+                    remaining_new, [existing], pyclipper.CT_DIFFERENCE
+                )
+
+            if remaining_new:
+                next_disjoint.extend(remaining_new)
+
+            disjoint_paths = next_disjoint
 
         if open_polylines and disjoint_paths:
             cutter_paths: List[List[tuple[int, int]]] = []
