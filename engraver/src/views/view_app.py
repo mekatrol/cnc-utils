@@ -250,6 +250,19 @@ class AppView(tk.Tk):
     def _on_save_settings(self) -> None:
         self._save_settings()
 
+    def _on_restore_defaults(self) -> None:
+        defaults = self._default_settings()["path_generation"]
+        self._hatch_angle_var.set(str(defaults["hatch_angle_deg"]))
+        self._hatch_spacing_var.set(str(defaults["hatch_spacing_px"]))
+        self._update_settings_dirty()
+
+    def _on_reset_settings(self) -> None:
+        settings = self._load_settings()
+        path_settings = settings["path_generation"]
+        self._hatch_angle_var.set(str(path_settings["hatch_angle_deg"]))
+        self._hatch_spacing_var.set(str(path_settings["hatch_spacing_px"]))
+        self._update_settings_dirty()
+
     def _build_left_sidebar(self) -> None:
         self.left_sidebar = ttk.Frame(self.main_frame, width=240)
         self.left_sidebar.grid(row=0, column=0, sticky="nsew")
@@ -319,6 +332,20 @@ class AppView(tk.Tk):
             row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8)
         )
         self._save_button.state(["disabled"])
+        self._restore_defaults_button = ttk.Button(
+            self._path_settings,
+            text="Reset to defaults",
+            command=self._on_restore_defaults,
+        )
+        self._restore_defaults_button.grid(
+            row=3, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8)
+        )
+        self._reset_button = ttk.Button(
+            self._path_settings, text="Reload settings", command=self._on_reset_settings
+        )
+        self._reset_button.grid(
+            row=4, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8)
+        )
 
         label = ttk.Label(self.right_sidebar, text="Properties")
         label.grid(row=1, column=0, sticky="w", padx=8, pady=(8, 4))
