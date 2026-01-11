@@ -66,6 +66,7 @@ class AppView(tk.Tk):
         self.selected_edge_polygons = []
         self.selected_polylines = []
         self.generated_paths = []
+        self.generated_gcode = None
         settings = self._load_settings()
         path_settings = settings["path_generation"]
         self.hatch_angle_deg = path_settings["hatch_angle_deg"]
@@ -481,6 +482,10 @@ class AppView(tk.Tk):
                 label="Generate paths for selected polygons",
                 command=lambda: self.generate_paths_for_selection(append=True),
             )
+            self._tree_menu.add_command(
+                label="Generate G-code...",
+                command=self.generate_gcode_for_all_paths,
+            )
             label = "Hide All" if self.show_generated_paths.get() else "Show All"
             self._tree_menu.add_command(
                 label=label, command=self._toggle_all_paths_visibility
@@ -497,6 +502,10 @@ class AppView(tk.Tk):
             self._tree_menu.add_command(
                 label=label,
                 command=lambda idx=payload: self._toggle_path_visibility(idx),
+            )
+            self._tree_menu.add_command(
+                label="Generate G-code...",
+                command=lambda idx=payload: self.generate_gcode_for_path(idx),
             )
             self._tree_menu.add_command(
                 label="Remove", command=lambda idx=payload: self._remove_path(idx)
@@ -623,6 +632,7 @@ class AppView(tk.Tk):
             return
         self.generated_paths = []
         self.show_generated_paths.set(True)
+        self._clear_gcode_cache()
         self._refresh_tree()
         self.update_properties()
         self.redraw_all()
@@ -632,6 +642,7 @@ class AppView(tk.Tk):
         if entry is None:
             return
         self.generated_paths.pop(index)
+        self._clear_gcode_cache()
         self._refresh_tree()
         self.update_properties()
         self.redraw_all()
@@ -911,6 +922,7 @@ class AppView(tk.Tk):
         self.source_path = source or None
         self.selected_polygons = []
         self.generated_paths = []
+        self._clear_gcode_cache()
         for i in range(self.notebook.index("end")):
             widget = self.notebook.nametowidget(self.notebook.tabs()[i])
             if isinstance(widget, View3D):
@@ -1271,6 +1283,162 @@ class AppView(tk.Tk):
             return
         self.menubar.files_dirty = False
 
+    def generate_gcode_for_all_paths(self) -> None:
+        if not self.generated_paths:
+            messagebox.showinfo("Generate G-code", "No generated paths.")
+            return
+        gcode = self._build_gcode_for_entries(self.generated_paths)
+        if not gcode:
+            messagebox.showinfo("Generate G-code", "No path segments to export.")
+            return
+        self.generated_gcode = gcode
+        store = self._ensure_model_gcode_store()
+        if store is not None:
+            store["all"] = gcode
+        self._prompt_save_gcode(gcode)
+
+    def generate_gcode_for_path(self, index: int) -> None:
+        entry = self._get_path_entry(index)
+        if entry is None:
+            return
+        gcode = self._build_gcode_for_entries([entry])
+        if not gcode:
+            messagebox.showinfo("Generate G-code", "No path segments to export.")
+            return
+        entry["gcode"] = gcode
+        store = self._ensure_model_gcode_store()
+        if store is not None:
+            paths = store.get("paths")
+            if not isinstance(paths, dict):
+                paths = {}
+            polygon_index = entry.get("polygon_index", index)
+            paths[polygon_index] = gcode
+            store["paths"] = paths
+        self._prompt_save_gcode(gcode)
+
+    def _prompt_save_gcode(self, gcode: str) -> None:
+        default_path = self._default_gcode_path()
+        options = {
+            "title": "Save G-code As",
+            "defaultextension": ".nc",
+            "filetypes": [("G-code Files", "*.nc"), ("All Files", "*.*")],
+        }
+        if default_path:
+            options["initialdir"] = str(default_path.parent)
+            options["initialfile"] = default_path.name
+        path = filedialog.asksaveasfilename(**options)
+        if not path:
+            return
+        target = Path(path)
+        if target.exists():
+            overwrite = messagebox.askyesno(
+                "Overwrite?",
+                f"{target}\n\nFile already exists. Overwrite?",
+            )
+            if not overwrite:
+                return
+        try:
+            target.write_text(gcode, encoding="utf-8")
+        except Exception as e:
+            messagebox.showerror("Save failed", f"{target}\n\n{e}")
+
+    def _ensure_model_gcode_store(self) -> dict | None:
+        if not self.model:
+            return None
+        store = getattr(self.model, "generated_gcode", None)
+        if not isinstance(store, dict):
+            store = {}
+            self.model.generated_gcode = store
+        return store
+
+    def _clear_gcode_cache(self) -> None:
+        self.generated_gcode = None
+        if self.model:
+            self.model.generated_gcode = {}
+
+    def _default_gcode_path(self) -> Path | None:
+        if self.source_path:
+            source = Path(self.source_path)
+            if source.suffix:
+                return source.with_suffix(".nc")
+            return Path(f"{source}.nc")
+        return Path("paths.nc")
+
+    @staticmethod
+    def _format_gcode_value(value: float) -> str:
+        return f"{value:.4f}"
+
+    @staticmethod
+    def _normalize_segments(
+        segments,
+    ) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+        normalized = []
+        if not isinstance(segments, list):
+            return normalized
+        for segment in segments:
+            if not isinstance(segment, (list, tuple)) or len(segment) < 2:
+                continue
+            p0, p1 = segment[0], segment[1]
+            if not isinstance(p0, (list, tuple)) or not isinstance(p1, (list, tuple)):
+                continue
+            if len(p0) < 2 or len(p1) < 2:
+                continue
+            try:
+                x0, y0 = float(p0[0]), float(p0[1])
+                x1, y1 = float(p1[0]), float(p1[1])
+            except Exception:
+                continue
+            normalized.append(((x0, y0), (x1, y1)))
+        return normalized
+
+    def _collect_path_segments(
+        self, entry: dict
+    ) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+        if not isinstance(entry, dict):
+            return []
+        lines = entry.get("lines", {})
+        if not isinstance(lines, dict):
+            return []
+        segments = []
+        ordered_keys = []
+        for child in self._ensure_path_children(entry):
+            key = child.get("key")
+            if key:
+                ordered_keys.append(key)
+        seen = set()
+        for key in ordered_keys:
+            segments.extend(self._normalize_segments(lines.get(key, [])))
+            seen.add(key)
+        for key, segs in lines.items():
+            if key in seen:
+                continue
+            segments.extend(self._normalize_segments(segs))
+        return segments
+
+    def _build_gcode_for_entries(self, entries: list[dict]) -> str | None:
+        if not entries:
+            return None
+        gcode_lines = ["G21", "G90"]
+        has_segments = False
+        for entry in entries:
+            segments = self._collect_path_segments(entry)
+            if not segments:
+                continue
+            has_segments = True
+            polygon_index = entry.get("polygon_index", "?")
+            gcode_lines.append(f"; Path {polygon_index}")
+            for (x0, y0), (x1, y1) in segments:
+                gcode_lines.append(
+                    f"G0 X{self._format_gcode_value(x0)} Y{self._format_gcode_value(y0)}"
+                )
+                gcode_lines.append(
+                    f"G1 X{self._format_gcode_value(x1)} Y{self._format_gcode_value(y1)}"
+                )
+        if not has_segments:
+            return None
+        gcode_lines.append("M2")
+        return "\n".join(gcode_lines) + "\n"
+
     def _collect_polygons_for_paths(self) -> list[dict]:
         g = self.model
         if not g or not g.polylines:
@@ -1452,6 +1620,7 @@ class AppView(tk.Tk):
             self.generated_paths.extend(paths)
         else:
             self.generated_paths = paths
+        self._clear_gcode_cache()
         self.menubar.files_dirty = True
         self._refresh_tree()
         self.update_properties()
@@ -1694,6 +1863,7 @@ class AppView(tk.Tk):
             return
         self.generated_paths = []
         self.show_generated_paths.set(True)
+        self._clear_gcode_cache()
         self.menubar.files_dirty = True
         self._refresh_tree()
         self.update_properties()

@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 from geometry.PointInt import PointInt
 from geometry.PolylineInt import PolylineInt
 
@@ -10,6 +10,7 @@ class GeometryInt:
     points: List[PointInt]
     scale: int = 1
     degenerate_polylines: List[PolylineInt] = field(default_factory=list)
+    generated_gcode: Dict = field(default_factory=dict)
 
     def bounds(self) -> Tuple[int, int, int, int]:
         # Get super set of all points
