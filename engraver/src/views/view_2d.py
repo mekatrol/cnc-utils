@@ -42,10 +42,15 @@ class View2D(BaseView):
         self.hatch_color = HATCH_COLOR
         self.fill_color = FILL_COLOR_2D
         self.fill_stipple = "gray12"
+        self.hover_fill_color = FILL_COLOR_2D
+        self.hover_fill_stipple = ""
+        self._hovered_polygon = None
 
         self.canvas.bind("<ButtonPress-1>", self._on_press)
         self.canvas.bind("<B1-Motion>", self._on_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_release)
+        self.canvas.bind("<Motion>", self._on_motion)
+        self.canvas.bind("<Leave>", self._on_leave)
         self.canvas.bind("<MouseWheel>", self._on_wheel)
         # Linux/Mac wheel events
         self.canvas.bind("<Button-4>", lambda e: self._zoom_at(e, 1))
@@ -122,6 +127,27 @@ class View2D(BaseView):
             self._select_polygon(event.x, event.y)
             self.app.redraw_all()
 
+    def _on_motion(self, event):
+        if self._dragging:
+            return
+        hovered = self._hover_polygon(event.x, event.y)
+        if hovered is None and self._hovered_polygon is None:
+            return
+        if (
+            hovered is not None
+            and self._hovered_polygon is not None
+            and hovered["polygon"]["index"] == self._hovered_polygon["polygon"]["index"]
+        ):
+            return
+        self._hovered_polygon = hovered
+        self.redraw()
+
+    def _on_leave(self, event):
+        if self._hovered_polygon is None:
+            return
+        self._hovered_polygon = None
+        self.redraw()
+
     def _on_wheel(self, event):
         direction = 1 if event.delta > 0 else -1
         self._zoom_at(event, direction)
@@ -150,6 +176,7 @@ class View2D(BaseView):
         # Grid
         self._draw_grid(w, h)
         self._draw_axis_gizmo(w, h)
+        self._draw_hover()
         self._draw_selection()
         # Geometry
         g = self.app.model
@@ -353,15 +380,7 @@ class View2D(BaseView):
                 self.app.selected_polylines.append(index)
 
         def toggle_selection(selected):
-            holes = []
-            for poly in polygons:
-                if poly is selected:
-                    continue
-                result = GeoUtil.point_in_polygon(poly["points"][0], selected["points"])
-                if result == PointInPolygonResult.Inside:
-                    holes.append(poly)
-
-            selected_entry = {"polygon": selected, "holes": holes}
+            selected_entry = self._build_polygon_entry(selected, polygons)
             existing_idx = next(
                 (
                     idx
@@ -418,6 +437,55 @@ class View2D(BaseView):
             key=lambda poly: abs(GeoUtil.area(poly["points"])),
         )
         toggle_selection(selected)
+
+    def _build_polygon_entry(self, selected, polygons):
+        holes = []
+        for poly in polygons:
+            if poly is selected:
+                continue
+            result = GeoUtil.point_in_polygon(poly["points"][0], selected["points"])
+            if result == PointInPolygonResult.Inside:
+                holes.append(poly)
+        return {"polygon": selected, "holes": holes}
+
+    def _hover_polygon(self, x: float, y: float):
+        show_geometry = getattr(self.app, "show_geometry", None)
+        if show_geometry is not None:
+            try:
+                if not show_geometry.get():
+                    return None
+            except Exception:
+                if not show_geometry:
+                    return None
+        g = self.app.model
+        if not g or not g.polylines:
+            return None
+
+        polygons = self._collect_polygons()
+        s = g.scale or 1
+        query = self._screen_to_pointint(x, y, s)
+        containing = []
+        qx, qy = query.x, query.y
+        for poly in polygons:
+            minx, miny, maxx, maxy = self._polygon_bbox(poly["points"])
+            if qx < minx or qx > maxx or qy < miny or qy > maxy:
+                continue
+            result = GeoUtil.point_in_polygon(query, poly["points"])
+            if result in (
+                PointInPolygonResult.Inside,
+                PointInPolygonResult.Edge,
+                PointInPolygonResult.Vertex,
+            ):
+                containing.append(poly)
+
+        if not containing:
+            return None
+
+        selected = min(
+            containing,
+            key=lambda poly: abs(GeoUtil.area(poly["points"])),
+        )
+        return self._build_polygon_entry(selected, polygons)
 
     @staticmethod
     def _polygon_bbox(points) -> tuple[int, int, int, int]:
@@ -621,6 +689,77 @@ class View2D(BaseView):
                     if hole_points:
                         hole_coords = [coord for pt in hole_points for coord in pt]
                         c.create_polygon(*hole_coords, fill=bg, outline="")
+
+    def _draw_hover(self) -> None:
+        show_geometry = getattr(self.app, "show_geometry", None)
+        if show_geometry is not None:
+            try:
+                if not show_geometry.get():
+                    return
+            except Exception:
+                if not show_geometry:
+                    return
+        if not self._hovered_polygon:
+            return
+        g = self.app.model
+        if not g:
+            return
+        s = g.scale or 1
+        c = self.canvas
+        bg = c.cget("background") or BACKGROUND_COLOR
+
+        selected_indices = {
+            entry["polygon"]["index"] for entry in self.app.selected_polygons
+        }
+        hover_polygon = self._hovered_polygon["polygon"]
+        if hover_polygon["index"] in selected_indices:
+            return
+
+        def to_screen(points):
+            coords = []
+            for pt in points:
+                xw, yw = pt.x / s, pt.y / s
+                xs = xw * self.zoom + self.offset[0]
+                ys = -yw * self.zoom + self.offset[1]
+                coords.extend([xs, ys])
+            return coords
+
+        def to_screen_points(points):
+            coords = []
+            for pt in points:
+                xw, yw = pt.x / s, pt.y / s
+                xs = xw * self.zoom + self.offset[0]
+                ys = -yw * self.zoom + self.offset[1]
+                coords.append((xs, ys))
+            return coords
+
+        hover_holes = self._hovered_polygon["holes"]
+        if self._selected_polygon_solid_fill:
+            coords = to_screen(hover_polygon["points"])
+            if coords:
+                c.create_polygon(
+                    *coords,
+                    fill=self.hover_fill_color,
+                    outline="",
+                    stipple=self.hover_fill_stipple,
+                )
+            for hole in hover_holes:
+                if hole["index"] in selected_indices:
+                    continue
+                hole_coords = to_screen(hole["points"])
+                if hole_coords:
+                    c.create_polygon(*hole_coords, fill=bg, outline="")
+        else:
+            polygon_points = to_screen_points(hover_polygon["points"])
+            if polygon_points:
+                self._draw_hatch_polygon(polygon_points)
+            for hole in hover_holes:
+                if hole["index"] in selected_indices:
+                    continue
+                hole_points = to_screen_points(hole["points"])
+                if hole_points:
+                    hole_coords = [coord for pt in hole_points for coord in pt]
+                    c.create_polygon(*hole_coords, fill=bg, outline="")
 
     def _draw_grid(self, w: int, h: int):
         c = self.canvas
