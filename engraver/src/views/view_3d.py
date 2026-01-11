@@ -51,6 +51,9 @@ class View3D(BaseView):
         self.hatch_color = HATCH_COLOR
         self.fill_color = FILL_COLOR_3D
         self.fill_stipple = "gray12"
+        self.hover_fill_color = FILL_COLOR_3D
+        self.hover_fill_stipple = ""
+        self._hovered_polygon = None
 
         # Bindings
         self.canvas.bind("<ButtonPress-1>", self._on_press_left)
@@ -59,6 +62,8 @@ class View3D(BaseView):
         self.canvas.bind("<B3-Motion>", self._on_drag_right)
         self.canvas.bind("<ButtonRelease-1>", self._on_release)
         self.canvas.bind("<ButtonRelease-3>", self._on_release)
+        self.canvas.bind("<Motion>", self._on_motion)
+        self.canvas.bind("<Leave>", self._on_leave)
         self.canvas.bind("<MouseWheel>", self._on_wheel)
         self.canvas.bind("<Button-4>", lambda e: self._zoom(1))  # Linux
         self.canvas.bind("<Button-5>", lambda e: self._zoom(-1))  # Linux
@@ -156,6 +161,27 @@ class View3D(BaseView):
             self._select_polygon(event.x, event.y)
             self.app.redraw_all()
 
+    def _on_motion(self, event):
+        if self._rotating or self._panning:
+            return
+        hovered = self._hover_polygon(event.x, event.y)
+        if hovered is None and self._hovered_polygon is None:
+            return
+        if (
+            hovered is not None
+            and self._hovered_polygon is not None
+            and hovered["polygon"]["index"] == self._hovered_polygon["polygon"]["index"]
+        ):
+            return
+        self._hovered_polygon = hovered
+        self.redraw()
+
+    def _on_leave(self, event):
+        if self._hovered_polygon is None:
+            return
+        self._hovered_polygon = None
+        self.redraw()
+
     def _on_wheel(self, event):
         self._zoom(1 if event.delta > 0 else -1)
 
@@ -207,6 +233,7 @@ class View3D(BaseView):
         # Grid plane (drawn around pivot)
         self._draw_grid_3d(w, h)
         self._draw_axis_gizmo(w, h, cx, cy)
+        self._draw_hover(w, h, cx, cy)
         self._draw_selection(w, h, cx, cy)
 
         g = self.app.model
@@ -469,18 +496,10 @@ class View3D(BaseView):
 
         selected = min(
             containing,
-            key=lambda poly: abs(GeoUtil.area(poly["points"])),
+            key=lambda poly: abs(poly["area"]) if "area" in poly else abs(GeoUtil.area(poly["points"])),
         )
 
-        holes = []
-        for poly in polygons:
-            if poly is selected:
-                continue
-            result = GeoUtil.point_in_polygon(poly["points"][0], selected["points"])
-            if result == PointInPolygonResult.Inside:
-                holes.append(poly)
-
-        selected_entry = {"polygon": selected, "holes": holes}
+        selected_entry = self._build_polygon_entry(selected, polygons)
         existing_idx = next(
             (
                 idx
@@ -494,6 +513,81 @@ class View3D(BaseView):
         else:
             self.app.selected_polygons.pop(existing_idx)
         self.app.update_properties()
+
+    def _build_polygon_entry(self, selected, polygons):
+        holes = []
+        selected_bbox = selected.get("bbox")
+        for poly in polygons:
+            if poly is selected:
+                continue
+            if selected_bbox and poly.get("bbox"):
+                sminx, sminy, smaxx, smaxy = selected_bbox
+                pminx, pminy, pmaxx, pmaxy = poly["bbox"]
+                if pminx < sminx or pmaxx > smaxx or pminy < sminy or pmaxy > smaxy:
+                    continue
+            result = GeoUtil.point_in_polygon(poly["points"][0], selected["points"])
+            if result == PointInPolygonResult.Inside:
+                holes.append(poly)
+        return {"polygon": selected, "holes": holes}
+
+    def _hover_polygon(self, x: float, y: float):
+        show_geometry = getattr(self.app, "show_geometry", None)
+        if show_geometry is not None:
+            try:
+                if not show_geometry.get():
+                    return None
+            except Exception:
+                if not show_geometry:
+                    return None
+        g = self.app.model
+        if not g or not g.polylines:
+            return None
+
+        s = g.scale if g.scale else 1
+        cx, cy = self._get_pivot_center()
+        polygons = self._collect_polygons()
+
+        containing = []
+        query = self._screen_to_pointint(x, y, s, cx, cy)
+        if query is not None:
+            qx, qy = query.x, query.y
+            for poly in polygons:
+                bbox = poly.get("bbox")
+                if bbox is None:
+                    bbox = (
+                        min(pt.x for pt in poly["points"]),
+                        min(pt.y for pt in poly["points"]),
+                        max(pt.x for pt in poly["points"]),
+                        max(pt.y for pt in poly["points"]),
+                    )
+                minx, miny, maxx, maxy = bbox
+                if qx < minx or qx > maxx or qy < miny or qy > maxy:
+                    continue
+                result = GeoUtil.point_in_polygon(query, poly["points"])
+                if result in (
+                    PointInPolygonResult.Inside,
+                    PointInPolygonResult.Edge,
+                    PointInPolygonResult.Vertex,
+                ):
+                    containing.append(poly)
+        else:
+            w = self.canvas.winfo_width()
+            h = self.canvas.winfo_height()
+            if w <= 1 or h <= 1:
+                return None
+            for poly in polygons:
+                proj = self._project_polygon(poly["points"], w, h, cx, cy, s)
+                if self._point_in_polygon_screen((x, y), proj):
+                    containing.append(poly)
+
+        if not containing:
+            return None
+
+        selected = min(
+            containing,
+            key=lambda poly: abs(poly["area"]) if "area" in poly else abs(GeoUtil.area(poly["points"])),
+        )
+        return self._build_polygon_entry(selected, polygons)
 
     @staticmethod
     def _point_on_segment(point, a, b, eps: float = 1e-6) -> bool:
@@ -673,6 +767,61 @@ class View3D(BaseView):
                 self._draw_hatch_polygon(polygon_points)
 
             for hole in selected_holes:
+                if hole["index"] in selected_indices:
+                    continue
+                hole_points = self._project_polygon(hole["points"], w, h, cx, cy, s)
+                if hole_points:
+                    hole_coords = [coord for pt in hole_points for coord in pt]
+                    c.create_polygon(*hole_coords, fill=bg, outline="")
+
+    def _draw_hover(self, w: int, h: int, cx: float, cy: float) -> None:
+        show_geometry = getattr(self.app, "show_geometry", None)
+        if show_geometry is not None:
+            try:
+                if not show_geometry.get():
+                    return
+            except Exception:
+                if not show_geometry:
+                    return
+        if not self._hovered_polygon:
+            return
+        g = self.app.model
+        if not g:
+            return
+        s = g.scale if g.scale else 1
+        c = self.canvas
+        bg = c.cget("background") or BACKGROUND_COLOR
+
+        selected_indices = {
+            entry["polygon"]["index"] for entry in self.app.selected_polygons
+        }
+        hover_polygon = self._hovered_polygon["polygon"]
+        if hover_polygon["index"] in selected_indices:
+            return
+
+        hover_points = self._project_polygon(hover_polygon["points"], w, h, cx, cy, s)
+        if not hover_points:
+            return
+
+        hover_holes = self._hovered_polygon["holes"]
+        if self._selected_polygon_solid_fill:
+            coords = [coord for pt in hover_points for coord in pt]
+            c.create_polygon(
+                *coords,
+                fill=self.hover_fill_color,
+                outline="",
+                stipple=self.hover_fill_stipple,
+            )
+            for hole in hover_holes:
+                if hole["index"] in selected_indices:
+                    continue
+                hole_points = self._project_polygon(hole["points"], w, h, cx, cy, s)
+                if hole_points:
+                    hole_coords = [coord for pt in hole_points for coord in pt]
+                    c.create_polygon(*hole_coords, fill=bg, outline="")
+        else:
+            self._draw_hatch_polygon(hover_points)
+            for hole in hover_holes:
                 if hole["index"] in selected_indices:
                     continue
                 hole_points = self._project_polygon(hole["points"], w, h, cx, cy, s)
