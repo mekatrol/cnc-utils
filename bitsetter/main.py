@@ -465,6 +465,12 @@ def main() -> int:
         print(f"  X: {result.x:.3f} mm")
         print(f"  Y: {result.y:.3f} mm")
         print(f"  Z: {result.z:.3f} mm")
+
+        # "Tool length" (useful value) = Z machine position when the probe triggered on the final (slow) probe.
+        # This is the BitSetter probe trigger reading for this tool in machine coordinates.
+        print("\nTool length reading (probe trigger):")
+        print(f"  Trigger MPos Z: {result.z:.3f} mm")
+
         return 0
 
     except serial.SerialException as ex:
