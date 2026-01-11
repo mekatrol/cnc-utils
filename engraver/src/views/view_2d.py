@@ -199,6 +199,30 @@ class View2D(BaseView):
                     width = 1.5 * 2.0 if is_selected else 1.5
                     c.create_line(*coords, fill=color, width=width)
 
+            show_degenerate = True
+            show_degenerate_var = getattr(self.app, "show_degenerate", None)
+            if show_degenerate_var is not None:
+                try:
+                    show_degenerate = show_degenerate_var.get()
+                except Exception:
+                    show_degenerate = bool(show_degenerate_var)
+            degenerates = getattr(g, "degenerate_polylines", [])
+            if show_degenerate and degenerates:
+                for polyline in degenerates:
+                    if len(polyline.points) < 2:
+                        continue
+                    coords = []
+                    last = None
+                    for poly_point in polyline.points:
+                        xw, yw = poly_point.x / s, poly_point.y / s
+                        xs = xw * self.zoom + self.offset[0]
+                        ys = -yw * self.zoom + self.offset[1]
+                        if last is not None:
+                            coords.extend([last[0], last[1], xs, ys])
+                        last = (xs, ys)
+                    if coords:
+                        c.create_line(*coords, fill="#777777", width=1.0, dash=(3, 3))
+
         self._draw_generated_paths()
 
         if show_geometry:

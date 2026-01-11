@@ -73,6 +73,7 @@ class AppView(tk.Tk):
         self._settings_dirty = False
         self.show_generated_paths = tk.BooleanVar(value=True)
         self.show_geometry = tk.BooleanVar(value=True)
+        self.show_degenerate = tk.BooleanVar(value=True)
         self._hatch_angle_var = tk.StringVar(value=str(self.hatch_angle_deg))
         self._hatch_spacing_var = tk.StringVar(value=str(self.hatch_spacing_px))
         self._hatch_angle_var.trace_add("write", self._on_settings_var_change)
@@ -462,6 +463,11 @@ class AppView(tk.Tk):
             self._tree_menu.add_command(
                 label="Extract Faces", command=self.extract_faces
             )
+            deg_visible = self.show_degenerate.get()
+            deg_label = "Hide Degenerate" if deg_visible else "Show Degenerate"
+            self._tree_menu.add_command(
+                label=deg_label, command=self._toggle_degenerate_visibility
+            )
         elif kind == "geometry_root":
             self._tree_menu.add_command(
                 label="Centre to origin (all)", command=self.centre_to_origin
@@ -579,6 +585,12 @@ class AppView(tk.Tk):
         self.update_properties()
         self.redraw_all()
 
+    def _toggle_degenerate_visibility(self) -> None:
+        self.show_degenerate.set(not self.show_degenerate.get())
+        self._refresh_tree()
+        self.update_properties()
+        self.redraw_all()
+
     def _toggle_all_paths_visibility(self) -> None:
         self.show_generated_paths.set(not self.show_generated_paths.get())
         self._refresh_tree()
@@ -659,6 +671,13 @@ class AppView(tk.Tk):
                 text=f"Polylines: {len(self.model.polylines)}",
             )
             self._tree_item_info[count_item] = f"Polylines: {len(self.model.polylines)}"
+            degenerate_count = len(getattr(self.model, "degenerate_polylines", []))
+            deg_item = self.scene_tree.insert(
+                geom_item,
+                "end",
+                text=f"Degenerate: {degenerate_count}",
+            )
+            self._tree_item_info[deg_item] = f"Degenerate: {degenerate_count}"
         else:
             none_item = self.scene_tree.insert(
                 self.tree_geometry_id,
@@ -742,8 +761,15 @@ class AppView(tk.Tk):
             source = self.source_path or "(in-memory geometry)"
             lines.append(f"Source: {source}")
             lines.append(f"Polylines: {len(self.model.polylines)}")
+            degenerate_count = len(getattr(self.model, "degenerate_polylines", []))
+            lines.append(f"Degenerate: {degenerate_count}")
             lines.append(
                 "Geometry: shown" if self.show_geometry.get() else "Geometry: hidden"
+            )
+            lines.append(
+                "Degenerate: shown"
+                if self.show_degenerate.get()
+                else "Degenerate: hidden"
             )
         else:
             lines.append("No geometry loaded")
@@ -1141,11 +1167,20 @@ class AppView(tk.Tk):
             return
         self.after(0, lambda: self._polygon_processing_done(result))
 
-    def _polygon_processing_done(self, polylines: List[PolylineInt]) -> None:
+    def _polygon_processing_done(self, result) -> None:
         self._hide_spinner()
         if not self.model:
             return
-        self.model = GeometryInt(polylines, self.model.points, self.model.scale)
+        polylines = result
+        degenerate_polylines: List[PolylineInt] = []
+        if isinstance(result, tuple) and len(result) == 2:
+            polylines, degenerate_polylines = result
+        self.model = GeometryInt(
+            polylines,
+            self.model.points,
+            self.model.scale,
+            degenerate_polylines=degenerate_polylines,
+        )
         self.selected_polygons = []
         self.generated_paths = []
         self.show_generated_paths.set(True)

@@ -546,6 +546,7 @@ class PolyProcessor:
 
         unique_edges: Set[Tuple[Tuple[int, int], Tuple[int, int]]] = set()
         adjacency: Dict[PointInt, Set[PointInt]] = {}
+        point_map: Dict[Tuple[int, int], PointInt] = {}
 
         for (a, b), keys in zip(segments, split_points):
             pts = sort_points_on_segment(a, b, keys)
@@ -562,6 +563,8 @@ class PolyProcessor:
                 if edge_key in unique_edges:
                     continue
                 unique_edges.add(edge_key)
+                point_map.setdefault(k0, p0)
+                point_map.setdefault(k1, p1)
                 adjacency.setdefault(p0, set()).add(p1)
                 adjacency.setdefault(p1, set()).add(p0)
 
@@ -592,6 +595,8 @@ class PolyProcessor:
                 area2 += p0.x * p1.y - p1.x * p0.y
             return area2
 
+        degenerate_faces: List[List[PointInt]] = []
+
         for u, nbrs in neighbors.items():
             for v in nbrs:
                 if (u, v) in visited:
@@ -619,8 +624,9 @@ class PolyProcessor:
                 if len(face) < 3:
                     continue
                 if polygon_area(face) == 0:
-                    continue
-                faces.append(face)
+                    degenerate_faces.append(face)
+                else:
+                    faces.append(face)
 
         out: List[PolylineInt] = []
         for face in faces:
@@ -628,4 +634,99 @@ class PolyProcessor:
                 face = face + [face[0]]
             out.append(PolylineInt(points=face))
 
-        return out
+        degenerate_out: List[PolylineInt] = []
+        for face in degenerate_faces:
+            if len(face) < 2:
+                continue
+            if face[0] != face[-1]:
+                face = face + [face[0]]
+            degenerate_out.append(PolylineInt(points=face))
+
+        used_undirected: Set[Tuple[Tuple[int, int], Tuple[int, int]]] = set()
+        for u, v in visited:
+            k0 = point_key(u)
+            k1 = point_key(v)
+            edge_key = (k0, k1) if k0 <= k1 else (k1, k0)
+            used_undirected.add(edge_key)
+
+        unused_edges = unique_edges - used_undirected
+        unused_adj: Dict[PointInt, Set[PointInt]] = {}
+
+        for k0, k1 in unused_edges:
+            p0 = point_map.get(k0)
+            p1 = point_map.get(k1)
+            if not p0 or not p1:
+                continue
+            unused_adj.setdefault(p0, set()).add(p1)
+            unused_adj.setdefault(p1, set()).add(p0)
+
+        def undirected_key(
+            a: PointInt, b: PointInt
+        ) -> Tuple[Tuple[int, int], Tuple[int, int]]:
+            k0 = point_key(a)
+            k1 = point_key(b)
+            return (k0, k1) if k0 <= k1 else (k1, k0)
+
+        used_unused_edges: Set[Tuple[Tuple[int, int], Tuple[int, int]]] = set()
+        degrees = {node: len(nbrs) for node, nbrs in unused_adj.items()}
+
+        for node, deg in degrees.items():
+            if deg == 2:
+                continue
+            for nbr in list(unused_adj.get(node, set())):
+                edge_key = undirected_key(node, nbr)
+                if edge_key in used_unused_edges:
+                    continue
+                path = [node]
+                prev = node
+                curr = nbr
+                used_unused_edges.add(edge_key)
+                while True:
+                    path.append(curr)
+                    if degrees.get(curr, 0) != 2:
+                        break
+                    next_candidates = [
+                        n
+                        for n in unused_adj.get(curr, set())
+                        if n != prev
+                        and undirected_key(curr, n) not in used_unused_edges
+                    ]
+                    if not next_candidates:
+                        break
+                    next_node = next_candidates[0]
+                    used_unused_edges.add(undirected_key(curr, next_node))
+                    prev, curr = curr, next_node
+                if len(path) >= 2:
+                    degenerate_out.append(PolylineInt(points=path))
+
+        for k0, k1 in unused_edges:
+            edge_key = (k0, k1)
+            if edge_key in used_unused_edges:
+                continue
+            start = point_map.get(k0)
+            nxt = point_map.get(k1)
+            if not start or not nxt:
+                continue
+            path = [start]
+            prev = start
+            curr = nxt
+            used_unused_edges.add(edge_key)
+            while True:
+                path.append(curr)
+                next_candidates = [
+                    n
+                    for n in unused_adj.get(curr, set())
+                    if undirected_key(curr, n) not in used_unused_edges
+                ]
+                if not next_candidates:
+                    break
+                next_node = next_candidates[0]
+                used_unused_edges.add(undirected_key(curr, next_node))
+                prev, curr = curr, next_node
+                if curr == start:
+                    path.append(start)
+                    break
+            if len(path) >= 2:
+                degenerate_out.append(PolylineInt(points=path))
+
+        return out, degenerate_out

@@ -252,6 +252,35 @@ class View3D(BaseView):
                         )
                     last_pt = (xs, ys)
 
+            show_degenerate = True
+            show_degenerate_var = getattr(self.app, "show_degenerate", None)
+            if show_degenerate_var is not None:
+                try:
+                    show_degenerate = show_degenerate_var.get()
+                except Exception:
+                    show_degenerate = bool(show_degenerate_var)
+            degenerates = getattr(g, "degenerate_polylines", [])
+            if show_degenerate and degenerates:
+                for pl in degenerates:
+                    if len(pl.points) < 2:
+                        continue
+                    last_pt = None
+                    for p in pl.points:
+                        x_rel = p.x / s - cx
+                        y_rel = p.y / s - cy
+                        xs, ys, _ = self._project_point(x_rel, y_rel, 0.0, w, h)
+                        if last_pt is not None:
+                            c.create_line(
+                                last_pt[0],
+                                last_pt[1],
+                                xs,
+                                ys,
+                                fill="#777777",
+                                width=1.0,
+                                dash=(3, 3),
+                            )
+                        last_pt = (xs, ys)
+
         self._draw_generated_paths(w, h, cx, cy)
 
     def _draw_generated_paths(self, w: int, h: int, cx: float, cy: float) -> None:
