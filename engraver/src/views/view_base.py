@@ -23,6 +23,8 @@ class BaseView(ttk.Frame):
         self.canvas.bind("<Configure>", self._on_resize)
         self.canvas.bind("<Expose>", lambda e: self.redraw())
         self.fit_to_view_pending = False
+        self._polygon_cache = []
+        self._polygon_cache_geom_id = None
 
     @property
     def hatch_angle_deg(self) -> float:
@@ -41,7 +43,12 @@ class BaseView(ttk.Frame):
     def _collect_polygons(self):
         g = self.app.model
         if not g or not g.polylines:
+            self._polygon_cache = []
+            self._polygon_cache_geom_id = None
             return []
+        geom_id = id(g)
+        if self._polygon_cache_geom_id == geom_id:
+            return self._polygon_cache
         polygons = []
         for idx, polyline in enumerate(g.polylines):
             points = polyline.points
@@ -52,8 +59,25 @@ class BaseView(ttk.Frame):
             points = points[:-1]
             if len(points) < 3:
                 continue
-            polygons.append({"index": idx, "points": points})
-        return polygons
+            minx = min(pt.x for pt in points)
+            maxx = max(pt.x for pt in points)
+            miny = min(pt.y for pt in points)
+            maxy = max(pt.y for pt in points)
+            polygons.append(
+                {
+                    "index": idx,
+                    "points": points,
+                    "bbox": (minx, miny, maxx, maxy),
+                    "area": GeoUtil.area(points),
+                }
+            )
+        self._polygon_cache = polygons
+        self._polygon_cache_geom_id = geom_id
+        return self._polygon_cache
+
+    def _invalidate_polygon_cache(self) -> None:
+        self._polygon_cache = []
+        self._polygon_cache_geom_id = None
 
     def _rebuild_selected_polygons(self) -> None:
         if not self.app.selected_polygons:

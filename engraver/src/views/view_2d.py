@@ -413,10 +413,14 @@ class View2D(BaseView):
             return
 
         query = self._screen_to_pointint(x, y, s)
-        containing = []
+        selected = None
+        selected_area = None
         qx, qy = query.x, query.y
         for poly in polygons:
-            minx, miny, maxx, maxy = self._polygon_bbox(poly["points"])
+            bbox = poly.get("bbox")
+            if bbox is None:
+                bbox = self._polygon_bbox(poly["points"])
+            minx, miny, maxx, maxy = bbox
             if qx < minx or qx > maxx or qy < miny or qy > maxy:
                 continue
             result = GeoUtil.point_in_polygon(query, poly["points"])
@@ -425,24 +429,30 @@ class View2D(BaseView):
                 PointInPolygonResult.Edge,
                 PointInPolygonResult.Vertex,
             ):
-                containing.append(poly)
+                area = abs(poly["area"]) if "area" in poly else abs(
+                    GeoUtil.area(poly["points"])
+                )
+                if selected is None or area < selected_area:
+                    selected = poly
+                    selected_area = area
 
-        if not containing:
+        if not selected:
             self.app.selected_polygons = []
             self.app.update_properties()
             return
-
-        selected = min(
-            containing,
-            key=lambda poly: abs(GeoUtil.area(poly["points"])),
-        )
         toggle_selection(selected)
 
     def _build_polygon_entry(self, selected, polygons):
         holes = []
+        selected_bbox = selected.get("bbox")
         for poly in polygons:
             if poly is selected:
                 continue
+            if selected_bbox and poly.get("bbox"):
+                sminx, sminy, smaxx, smaxy = selected_bbox
+                pminx, pminy, pmaxx, pmaxy = poly["bbox"]
+                if pminx < sminx or pmaxx > smaxx or pminy < sminy or pmaxy > smaxy:
+                    continue
             result = GeoUtil.point_in_polygon(poly["points"][0], selected["points"])
             if result == PointInPolygonResult.Inside:
                 holes.append(poly)
@@ -464,10 +474,14 @@ class View2D(BaseView):
         polygons = self._collect_polygons()
         s = g.scale or 1
         query = self._screen_to_pointint(x, y, s)
-        containing = []
+        selected = None
+        selected_area = None
         qx, qy = query.x, query.y
         for poly in polygons:
-            minx, miny, maxx, maxy = self._polygon_bbox(poly["points"])
+            bbox = poly.get("bbox")
+            if bbox is None:
+                bbox = self._polygon_bbox(poly["points"])
+            minx, miny, maxx, maxy = bbox
             if qx < minx or qx > maxx or qy < miny or qy > maxy:
                 continue
             result = GeoUtil.point_in_polygon(query, poly["points"])
@@ -476,15 +490,15 @@ class View2D(BaseView):
                 PointInPolygonResult.Edge,
                 PointInPolygonResult.Vertex,
             ):
-                containing.append(poly)
+                area = abs(poly["area"]) if "area" in poly else abs(
+                    GeoUtil.area(poly["points"])
+                )
+                if selected is None or area < selected_area:
+                    selected = poly
+                    selected_area = area
 
-        if not containing:
+        if not selected:
             return None
-
-        selected = min(
-            containing,
-            key=lambda poly: abs(GeoUtil.area(poly["points"])),
-        )
         return self._build_polygon_entry(selected, polygons)
 
     @staticmethod
