@@ -33,6 +33,8 @@ from views.view_spinner import Spinner
 
 
 class AppView(tk.Tk):
+    DEFAULT_FEED_RATE = 200.0
+
     def __init__(self):
         super().__init__()
         self.spinner: tk.Toplevel | None = None
@@ -677,7 +679,16 @@ class AppView(tk.Tk):
         self._tree_item_action = {}
         self.scene_tree.delete(*self.scene_tree.get_children(self.tree_geometry_id))
         self.scene_tree.delete(*self.scene_tree.get_children(self.tree_paths_id))
-        self._tree_item_info[self.tree_paths_id] = "Generated paths"
+        paths_info = "Generated paths"
+        if self.generated_paths:
+            estimate = self._estimate_gcode_for_entries(self.generated_paths)
+            if estimate:
+                paths_info = (
+                    f"Generated paths\n"
+                    f"Estimated time: {self._format_duration(estimate['total_seconds'])}\n"
+                    f"Travel: {estimate['total_distance']:.2f}"
+                )
+        self._tree_item_info[self.tree_paths_id] = paths_info
         self._tree_item_action[self.tree_paths_id] = ("paths_root", None)
 
         if self.model and self.model.polylines:
@@ -744,11 +755,18 @@ class AppView(tk.Tk):
                     image=icon,
                     open=entry.get("expanded", True),
                 )
+                estimate = self._estimate_gcode_for_entries([entry])
+                estimate_info = ""
+                if estimate:
+                    estimate_info = (
+                        f"\nEstimated time: {self._format_duration(estimate['total_seconds'])}"
+                    )
                 self._tree_item_info[item] = (
                     f"Path {polygon_index}\n"
                     f"Primary lines: {primary}\n"
                     f"Secondary lines: {secondary}\n"
                     f"Boundary segments: {boundary}"
+                    f"{estimate_info}"
                 )
                 self._tree_item_action[item] = ("path", idx)
                 children = self._ensure_path_children(entry)
@@ -823,6 +841,18 @@ class AppView(tk.Tk):
         )
         visibility = "shown" if self.show_generated_paths.get() else "hidden"
         lines.append(f"Generated paths: {visible_count}/{path_count} ({visibility})")
+        if self.generated_paths:
+            estimate = self._estimate_gcode_for_entries(self.generated_paths)
+            if estimate:
+                lines.append(
+                    f"Estimated time: {self._format_duration(estimate['total_seconds'])}"
+                )
+                lines.append(
+                    "Travel: "
+                    f"{estimate['total_distance']:.2f} "
+                    f"(feed {estimate['feed_distance']:.2f}, "
+                    f"rapid {estimate['rapid_distance']:.2f})"
+                )
 
         self.properties_var.set("\n".join(lines))
 
@@ -1369,6 +1399,117 @@ class AppView(tk.Tk):
         return f"{value:.4f}"
 
     @staticmethod
+    def _format_duration(seconds: float) -> str:
+        seconds = max(0, int(round(seconds)))
+        minutes, secs = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours:d}:{minutes:02d}:{secs:02d}"
+        return f"{minutes:d}:{secs:02d}"
+
+    @classmethod
+    def _estimate_gcode_time(cls, gcode: str) -> dict[str, float]:
+        pos_x = 0.0
+        pos_y = 0.0
+        feed_rate = cls.DEFAULT_FEED_RATE
+        active_motion = None
+        abs_mode = True
+        units_scale = 1.0
+        feed_distance = 0.0
+        rapid_distance = 0.0
+        feed_seconds = 0.0
+        rapid_seconds = 0.0
+
+        for raw_line in gcode.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if ";" in line:
+                line = line.split(";", 1)[0].strip()
+            if not line:
+                continue
+            if line.startswith("("):
+                continue
+            tokens = line.split()
+            motion_in_line = None
+            x_val = None
+            y_val = None
+            for token in tokens:
+                if not token:
+                    continue
+                prefix = token[0].upper()
+                value = token[1:]
+                if not value:
+                    continue
+                if prefix == "G":
+                    try:
+                        g_code = int(float(value))
+                    except Exception:
+                        continue
+                    if g_code in (0, 1):
+                        motion_in_line = g_code
+                    elif g_code == 90:
+                        abs_mode = True
+                    elif g_code == 91:
+                        abs_mode = False
+                    elif g_code == 20:
+                        units_scale = 25.4
+                    elif g_code == 21:
+                        units_scale = 1.0
+                elif prefix == "X":
+                    try:
+                        x_val = float(value) * units_scale
+                    except Exception:
+                        continue
+                elif prefix == "Y":
+                    try:
+                        y_val = float(value) * units_scale
+                    except Exception:
+                        continue
+                elif prefix == "F":
+                    try:
+                        feed_rate = float(value)
+                    except Exception:
+                        continue
+            if motion_in_line is not None:
+                active_motion = motion_in_line
+            if active_motion not in (0, 1):
+                continue
+            if x_val is None and y_val is None:
+                continue
+
+            if abs_mode:
+                target_x = pos_x if x_val is None else x_val
+                target_y = pos_y if y_val is None else y_val
+            else:
+                target_x = pos_x if x_val is None else pos_x + x_val
+                target_y = pos_y if y_val is None else pos_y + y_val
+
+            distance = math.hypot(target_x - pos_x, target_y - pos_y)
+            if active_motion == 0:
+                rapid_distance += distance
+                if feed_rate > 0:
+                    rapid_seconds += (distance / feed_rate) * 60.0
+            else:
+                feed_distance += distance
+                if feed_rate > 0:
+                    feed_seconds += (distance / feed_rate) * 60.0
+
+            pos_x = target_x
+            pos_y = target_y
+
+        total_distance = feed_distance + rapid_distance
+        total_seconds = feed_seconds + rapid_seconds
+        return {
+            "total_seconds": total_seconds,
+            "feed_seconds": feed_seconds,
+            "rapid_seconds": rapid_seconds,
+            "total_distance": total_distance,
+            "feed_distance": feed_distance,
+            "rapid_distance": rapid_distance,
+        }
+
+    @staticmethod
     def _normalize_segments(
         segments,
     ) -> list[tuple[tuple[float, float], tuple[float, float]]]:
@@ -1420,7 +1561,7 @@ class AppView(tk.Tk):
             return None
         gcode_lines = ["G21", "G90"]
         has_segments = False
-        feed_rate = 200.0
+        feed_rate = self.DEFAULT_FEED_RATE
         feed_set = False
         for entry in entries:
             segments = self._collect_path_segments(entry)
@@ -1448,6 +1589,12 @@ class AppView(tk.Tk):
             return None
         gcode_lines.append("M2")
         return "\n".join(gcode_lines) + "\n"
+
+    def _estimate_gcode_for_entries(self, entries: list[dict]) -> dict[str, float] | None:
+        gcode = self._build_gcode_for_entries(entries)
+        if not gcode:
+            return None
+        return self._estimate_gcode_time(gcode)
 
     def _collect_polygons_for_paths(self) -> list[dict]:
         g = self.model
