@@ -1420,6 +1420,8 @@ class AppView(tk.Tk):
             return None
         gcode_lines = ["G21", "G90"]
         has_segments = False
+        feed_rate = 200.0
+        feed_set = False
         for entry in entries:
             segments = self._collect_path_segments(entry)
             if not segments:
@@ -1431,9 +1433,17 @@ class AppView(tk.Tk):
                 gcode_lines.append(
                     f"G0 X{self._format_gcode_value(x0)} Y{self._format_gcode_value(y0)}"
                 )
-                gcode_lines.append(
-                    f"G1 X{self._format_gcode_value(x1)} Y{self._format_gcode_value(y1)}"
-                )
+                if not feed_set:
+                    gcode_lines.append(
+                        f"G1 X{self._format_gcode_value(x1)} "
+                        f"Y{self._format_gcode_value(y1)} F{feed_rate:.1f}"
+                    )
+                    feed_set = True
+                else:
+                    gcode_lines.append(
+                        f"G1 X{self._format_gcode_value(x1)} "
+                        f"Y{self._format_gcode_value(y1)}"
+                    )
         if not has_segments:
             return None
         gcode_lines.append("M2")
