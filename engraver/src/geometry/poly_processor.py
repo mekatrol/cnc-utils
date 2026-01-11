@@ -642,6 +642,38 @@ class PolyProcessor:
                 face = face + [face[0]]
             degenerate_out.append(PolylineInt(points=face))
 
+        def is_collinear_polyline(points: List[PointInt]) -> bool:
+            if len(points) < 2:
+                return False
+            if len(points) == 2:
+                return True
+            a = points[0]
+            b = points[-1]
+            if a == b:
+                for candidate in points:
+                    if candidate != a:
+                        b = candidate
+                        break
+            if a == b:
+                return True
+            for p in points[1:-1]:
+                if orientation(a, b, p) != 0:
+                    return False
+            return True
+
+        collinear_seen: Set[Tuple[Tuple[int, int], ...]] = set()
+        for poly in polylines:
+            pts = poly.points
+            if len(pts) < 2:
+                continue
+            if not is_collinear_polyline(pts):
+                continue
+            key = tuple(point_key(p) for p in pts)
+            if key in collinear_seen:
+                continue
+            collinear_seen.add(key)
+            degenerate_out.append(PolylineInt(points=list(pts)))
+
         used_undirected: Set[Tuple[Tuple[int, int], Tuple[int, int]]] = set()
         for u, v in visited:
             k0 = point_key(u)
