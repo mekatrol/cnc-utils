@@ -56,6 +56,7 @@ class View3D(BaseView):
         self._hovered_polygon = None
         self._projected_polygon_cache = []
         self._projected_polygon_cache_key = None
+        self._redraw_job = None
 
         # Bindings
         self.canvas.bind("<ButtonPress-1>", self._on_press_left)
@@ -191,6 +192,15 @@ class View3D(BaseView):
         factor = 1.1 if direction > 0 else 1.0 / 1.1
         self.zoom *= factor
         self.zoom = max(1e-3, min(1e6, self.zoom))
+        self._request_redraw()
+
+    def _request_redraw(self) -> None:
+        if self._redraw_job is not None:
+            return
+        self._redraw_job = self.after_idle(self._deferred_redraw)
+
+    def _deferred_redraw(self) -> None:
+        self._redraw_job = None
         self.redraw()
 
     # Math helpers
