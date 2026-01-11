@@ -175,13 +175,13 @@ class View2D(BaseView):
         h = c.winfo_height()
         # Grid
         self._draw_grid(w, h)
-        self._draw_axis_gizmo(w, h)
         self._draw_hover()
         self._draw_selection()
         # Geometry
         g = self.app.model
         if not g or not g.polylines:
             self._draw_center_cross(w, h)
+            self._draw_axis_gizmo(w, h)
             return
         s = g.scale if g.scale else 1
 
@@ -263,6 +263,7 @@ class View2D(BaseView):
                 c.create_oval(
                     xs - r, ys - r, xs + r, ys + r, outline=color, fill=color
                 )
+        self._draw_axis_gizmo(w, h)
 
     def _draw_generated_paths(self) -> None:
         show_paths = getattr(self.app, "show_generated_paths", None)

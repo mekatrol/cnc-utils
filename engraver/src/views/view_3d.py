@@ -244,7 +244,6 @@ class View3D(BaseView):
 
         # Grid plane (drawn around pivot)
         self._draw_grid_3d(w, h)
-        self._draw_axis_gizmo(w, h, cx, cy)
         self._draw_hover(w, h, cx, cy)
         self._draw_selection(w, h, cx, cy)
 
@@ -253,6 +252,7 @@ class View3D(BaseView):
             c.create_text(
                 w // 2, h // 2, text="No geometry loaded", fill=EMPTY_TEXT_COLOR
             )
+            self._draw_axis_gizmo(w, h, cx, cy)
             return
         s = g.scale if g.scale else 1
         show_geometry = True
@@ -321,6 +321,7 @@ class View3D(BaseView):
                         last_pt = (xs, ys)
 
         self._draw_generated_paths(w, h, cx, cy)
+        self._draw_axis_gizmo(w, h, cx, cy)
 
     def _draw_generated_paths(self, w: int, h: int, cx: float, cy: float) -> None:
         show_paths = getattr(self.app, "show_generated_paths", None)
