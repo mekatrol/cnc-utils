@@ -1,6 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 260">
   <!-- stroke styles and rounded joins/caps to test rendering -->
   <g stroke="#fff" stroke-width="1" fill="none" stroke-linejoin="round" stroke-linecap="round">
+    <!-- background rect -->
+    <rect x="10" y="10" width="790" height="300" fill="#000"/>
+
     <!-- line -->
     <line x1="40" y1="40" x2="160" y2="40"/>
 

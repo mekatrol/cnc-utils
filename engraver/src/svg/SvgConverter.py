@@ -10,9 +10,23 @@ from svgelements import (
     Ellipse,
     Polyline,
     Polygon,
+    Text,
     Matrix,
+    Move,
     Close,
+    Length,
 )
+try:
+    from svgelements import TSpan, TextPath
+except Exception:
+    TSpan = None
+    TextPath = None
+try:
+    from matplotlib.font_manager import FontProperties
+    from matplotlib.textpath import TextPath as MplTextPath
+except Exception:
+    FontProperties = None
+    MplTextPath = None
 from geometry.GeoUtil import GeoUtil
 from geometry.GeometryInt import GeometryInt
 from geometry.PolylineInt import PolylineInt
@@ -24,16 +38,51 @@ class SvgConverter:
     """SVG -> integer-scaled polylines (GeometryInt)."""
 
     @staticmethod
+    def _text_has_direct_text(elem: Any) -> bool:
+        text = getattr(elem, "text", None)
+        if text is None:
+            return False
+        return str(text).strip() != ""
+
+    @staticmethod
+    def _text_types() -> tuple:
+        types = [Text]
+        if TSpan is not None:
+            types.append(TSpan)
+        if TextPath is not None:
+            types.append(TextPath)
+        return tuple(types)
+
+    @staticmethod
+    def _text_leaf_types() -> tuple:
+        types: List[Any] = []
+        if TSpan is not None:
+            types.append(TSpan)
+        if TextPath is not None:
+            types.append(TextPath)
+        return tuple(types)
+
+    @staticmethod
     def _walk_with_matrix(node: Any, parent: Optional[Matrix] = None):
         """Yield (leaf, parent_matrix_without_leaf)."""
         parent_matrix = Matrix() if parent is None else parent
         node_matrix = getattr(node, "transform", None)
         node_matrix = node_matrix if isinstance(node_matrix, Matrix) else Matrix()
 
-        is_leaf = isinstance(
+        if isinstance(node, SvgConverter._text_leaf_types()):
+            # important: do NOT fold the leaf's own transform here
+            yield node, parent_matrix
+            return
+        if isinstance(node, Text):
+            if SvgConverter._text_has_direct_text(node) or (
+                SvgConverter._element_to_path(node) is not None
+            ):
+                # important: do NOT fold the leaf's own transform here
+                yield node, parent_matrix
+                return
+        elif isinstance(
             node, (Path, Line, SimpleLine, Rect, Circle, Ellipse, Polyline, Polygon)
-        )
-        if is_leaf:
+        ):
             # important: do NOT fold the leaf's own transform here
             yield node, parent_matrix
             return
@@ -65,6 +114,12 @@ class SvgConverter:
         abs_tol = max(1e-6, chord_tol)
 
         for seg in path:
+            if isinstance(seg, Move):
+                if len(current) >= 2:
+                    polylines.append(current)
+                current = []
+                last_end = None
+                continue
             if isinstance(seg, Close):
                 pts = [seg.start, seg.end]
             else:
@@ -73,7 +128,11 @@ class SvgConverter:
                 pts = [seg.point(i / (n - 1)) for i in range(n)]
             if len(pts) < 2:
                 continue
-            if current and GeoUtil.equal_with_tolerance(last_end, pts[0], abs_tol):
+            if (
+                current
+                and last_end
+                and GeoUtil.equal_with_tolerance(last_end, pts[0], abs_tol)
+            ):
                 current.extend(pts[1:])
             else:
                 if len(current) >= 2:
@@ -83,6 +142,219 @@ class SvgConverter:
 
         if len(current) >= 2:
             polylines.append(current)
+        return polylines
+
+    @staticmethod
+    def _element_to_path(elem: Any) -> Optional[Path]:
+        path = None
+        as_path = getattr(elem, "as_path", None)
+        if callable(as_path):
+            try:
+                path = as_path()
+            except Exception:
+                path = None
+        if path is None and hasattr(elem, "path"):
+            try:
+                path_attr = getattr(elem, "path")
+                path = path_attr() if callable(path_attr) else path_attr
+            except Exception:
+                path = None
+        if path is None and hasattr(elem, "d"):
+            d = getattr(elem, "d")
+            if d:
+                try:
+                    path = Path(d)
+                except Exception:
+                    path = None
+        if isinstance(path, Path):
+            return path
+        if path is not None:
+            try:
+                return Path(path)
+            except Exception:
+                return None
+        return None
+
+    @staticmethod
+    def _length_to_float(value: Any, font_size: float) -> Optional[float]:
+        if value is None:
+            return None
+        if isinstance(value, Length):
+            try:
+                computed = value.value(
+                    font_size=font_size,
+                    font_height=font_size,
+                    relative_length=font_size,
+                )
+                return float(computed) if computed is not None else None
+            except Exception:
+                return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, (list, tuple)) and value:
+            return SvgConverter._length_to_float(value[0], font_size)
+        if hasattr(value, "value") and hasattr(value, "units"):
+            try:
+                computed = value.value(
+                    font_size=font_size,
+                    font_height=font_size,
+                    relative_length=font_size,
+                )
+                return float(computed) if computed is not None else None
+            except Exception:
+                return None
+        try:
+            return float(value)
+        except Exception:
+            pass
+        text = str(value).strip()
+        if not text:
+            return None
+        if text.endswith("em"):
+            try:
+                return float(text[:-2].strip()) * font_size
+            except Exception:
+                return None
+        if text.endswith("px"):
+            try:
+                return float(text[:-2].strip())
+            except Exception:
+                return None
+        if text.endswith("%"):
+            try:
+                return float(text[:-1].strip()) * font_size / 100.0
+            except Exception:
+                return None
+        try:
+            return float(text)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _font_size(elem: Any, default: float = 16.0) -> float:
+        size = SvgConverter._length_to_float(
+            SvgConverter._get_attr(elem, "font_size", "font-size"), default
+        )
+        if size is not None:
+            return size
+        parent = getattr(elem, "parent", None) or getattr(elem, "parent_node", None)
+        if parent is not None:
+            size = SvgConverter._length_to_float(
+                SvgConverter._get_attr(parent, "font_size", "font-size"), default
+            )
+            if size is not None:
+                return size
+        return default
+
+    @staticmethod
+    def _font_family(elem: Any) -> Optional[str]:
+        family = SvgConverter._get_attr(elem, "font_family", "font-family")
+        if family is None:
+            parent = getattr(elem, "parent", None) or getattr(elem, "parent_node", None)
+            if parent is None:
+                return None
+            family = SvgConverter._get_attr(parent, "font_family", "font-family")
+            if family is None:
+                return None
+        if isinstance(family, (list, tuple)) and family:
+            return str(family[0])
+        return str(family)
+
+    @staticmethod
+    def _text_to_polylines(
+        elem: Any, chord_tol: float
+    ) -> List[List[PointFloat]]:
+        if MplTextPath is None:
+            return []
+        if not SvgConverter._text_has_direct_text(elem):
+            return []
+        text = str(getattr(elem, "text", "")).strip()
+        if not text:
+            return []
+
+        font_size = SvgConverter._font_size(elem)
+        font_family = SvgConverter._font_family(elem)
+        fp = FontProperties(family=font_family) if font_family else None
+
+        x = SvgConverter._length_to_float(getattr(elem, "x", None), font_size)
+        y = SvgConverter._length_to_float(getattr(elem, "y", None), font_size)
+        dx = SvgConverter._length_to_float(getattr(elem, "dx", None), font_size)
+        dy = SvgConverter._length_to_float(getattr(elem, "dy", None), font_size)
+
+        parent = getattr(elem, "parent", None) or getattr(elem, "parent_node", None)
+        if parent is not None:
+            if x is None:
+                x = SvgConverter._length_to_float(
+                    getattr(parent, "x", None), font_size
+                )
+            if y is None:
+                y = SvgConverter._length_to_float(
+                    getattr(parent, "y", None), font_size
+                )
+
+        x = x or 0.0
+        y = y or 0.0
+        dx = dx or 0.0
+        dy = dy or 0.0
+
+        text_anchor = SvgConverter._get_attr(elem, "text_anchor", "text-anchor")
+        dominant_baseline = SvgConverter._get_attr(
+            elem, "dominant_baseline", "dominant-baseline", "alignment_baseline"
+        )
+        if parent is not None:
+            if text_anchor is None:
+                text_anchor = SvgConverter._get_attr(
+                    parent, "text_anchor", "text-anchor"
+                )
+            if dominant_baseline is None:
+                dominant_baseline = SvgConverter._get_attr(
+                    parent,
+                    "dominant_baseline",
+                    "dominant-baseline",
+                    "alignment_baseline",
+                )
+        anchor = str(text_anchor).lower() if text_anchor else ""
+        baseline = str(dominant_baseline).lower() if dominant_baseline else ""
+
+        try:
+            path = MplTextPath((0.0, 0.0), text, size=font_size, prop=fp)
+        except Exception:
+            return []
+
+        polys = path.to_polygons()
+        if not polys:
+            return []
+
+        min_x = min(poly[:, 0].min() for poly in polys if len(poly) > 0)
+        max_x = max(poly[:, 0].max() for poly in polys if len(poly) > 0)
+        min_y = min(poly[:, 1].min() for poly in polys if len(poly) > 0)
+        max_y = max(poly[:, 1].max() for poly in polys if len(poly) > 0)
+        width = max_x - min_x
+
+        dx_anchor = 0.0
+        if anchor in ("middle", "center"):
+            dx_anchor = -0.5 * width
+        elif anchor in ("end", "right"):
+            dx_anchor = -width
+
+        dy_anchor = 0.0
+        if baseline in ("middle", "central"):
+            dy_anchor = -0.5 * (min_y + max_y)
+        elif baseline in ("hanging", "text-before-edge"):
+            dy_anchor = -max_y
+
+        polylines: List[List[PointFloat]] = []
+        for poly in polys:
+            if len(poly) < 2:
+                continue
+            pts: List[PointFloat] = []
+            for px, py in poly:
+                px_mpl = px + dx_anchor
+                py_mpl = py + dy_anchor
+                pts.append(PointFloat(px_mpl + x + dx, -py_mpl + y + dy))
+            if pts[0] != pts[-1]:
+                pts.append(pts[0])
+            polylines.append(pts)
         return polylines
 
     @staticmethod
@@ -318,6 +590,18 @@ class SvgConverter:
                 pts = [p for p in (GeoUtil.safe_to_point(p) for p in raw) if p]
                 if len(pts) >= 2:
                     polylines_float.append(SvgConverter._apply_matrix_to_points(pts, M))
+
+            elif isinstance(elem, SvgConverter._text_types()):
+                path = SvgConverter._element_to_path(elem)
+                polylines = []
+                if path is not None:
+                    polylines = SvgConverter._path_to_polylines(path, chord_tol=tol)
+                else:
+                    polylines = SvgConverter._text_to_polylines(elem, chord_tol=tol)
+                for poly in polylines:
+                    polylines_float.append(
+                        SvgConverter._apply_matrix_to_points(poly, M)
+                    )
 
         # Integerize (and flip Y)
         polylines_int: List[PolylineInt] = []
