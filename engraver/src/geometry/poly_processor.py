@@ -1,8 +1,10 @@
-from typing import List, Optional
+from fractions import Fraction
+from typing import Dict, List, Optional, Set, Tuple
 import math
 import pyclipper
 from geometry.PointInt import PointInt
 from geometry.PolylineInt import PolylineInt
+from geometry.Polygon import do_segments_intersect, is_point_on_segment, orientation
 
 
 class PolyProcessor:
@@ -376,5 +378,254 @@ class PolyProcessor:
             if points[0] != points[-1]:
                 points.append(points[0])
             out.append(PolylineInt(points=points))
+
+        return out
+
+    @staticmethod
+    def extract_faces_from_polylines(
+        polylines: List[PolylineInt],
+        snap_tol: int = 0,
+    ) -> List[PolylineInt]:
+        segments: List[Tuple[PointInt, PointInt]] = []
+        for poly in polylines:
+            pts = poly.points
+            if len(pts) < 2:
+                continue
+            for i in range(len(pts) - 1):
+                a = pts[i]
+                b = pts[i + 1]
+                if a != b:
+                    segments.append((a, b))
+
+        if len(segments) < 3:
+            return []
+
+        def point_key(p: PointInt) -> Tuple[int, int]:
+            return (p.x, p.y)
+
+        def round_fraction(fr: Fraction) -> int:
+            num = fr.numerator
+            den = fr.denominator
+            if den == 0:
+                return 0
+            if num >= 0:
+                return (num + den // 2) // den
+            return -((-num + den // 2) // den)
+
+        def point_on_segment_tol(
+            p: PointInt, a: PointInt, b: PointInt, tol: int
+        ) -> bool:
+            ax, ay = a.x, a.y
+            bx, by = b.x, b.y
+            px, py = p.x, p.y
+            dx = bx - ax
+            dy = by - ay
+            if dx == 0 and dy == 0:
+                return px == ax and py == ay
+            cross = (px - ax) * dy - (py - ay) * dx
+            if abs(cross) > tol * max(abs(dx), abs(dy), 1):
+                return False
+            minx = min(ax, bx) - tol
+            maxx = max(ax, bx) + tol
+            miny = min(ay, by) - tol
+            maxy = max(ay, by) + tol
+            return minx <= px <= maxx and miny <= py <= maxy
+
+        def line_intersection(
+            a: PointInt, b: PointInt, c: PointInt, d: PointInt
+        ) -> Optional[PointInt]:
+            ax, ay = a.x, a.y
+            bx, by = b.x, b.y
+            cx, cy = c.x, c.y
+            dx, dy = d.x, d.y
+            denom = (ax - bx) * (cy - dy) - (ay - by) * (cx - dx)
+            if denom == 0:
+                return None
+            det_ab = ax * by - ay * bx
+            det_cd = cx * dy - cy * dx
+            x = Fraction(det_ab * (cx - dx) - (ax - bx) * det_cd, denom)
+            y = Fraction(det_ab * (cy - dy) - (ay - by) * det_cd, denom)
+            return PointInt(round_fraction(x), round_fraction(y))
+
+        def intersection_points(
+            a: PointInt, b: PointInt, c: PointInt, d: PointInt
+        ) -> List[PointInt]:
+            if not do_segments_intersect(a, b, c, d):
+                return []
+            o1 = orientation(a, b, c)
+            o2 = orientation(a, b, d)
+            o3 = orientation(c, d, a)
+            o4 = orientation(c, d, b)
+            if o1 == 0 and o2 == 0 and o3 == 0 and o4 == 0:
+                hits: List[PointInt] = []
+                for p in (a, b, c, d):
+                    if is_point_on_segment(a, b, p) and is_point_on_segment(c, d, p):
+                        hits.append(p)
+                return hits
+            hit = line_intersection(a, b, c, d)
+            if not hit:
+                return []
+            tol = max(0, snap_tol)
+            if point_on_segment_tol(hit, a, b, tol) and point_on_segment_tol(
+                hit, c, d, tol
+            ):
+                return [hit]
+            return []
+
+        split_points: List[Set[Tuple[int, int]]] = [
+            {point_key(seg[0]), point_key(seg[1])} for seg in segments
+        ]
+
+        seg_bboxes: List[Tuple[int, int, int, int]] = []
+        seg_lengths: List[float] = []
+        for a, b in segments:
+            seg_bboxes.append(
+                (min(a.x, b.x), min(a.y, b.y), max(a.x, b.x), max(a.y, b.y))
+            )
+            seg_lengths.append(math.hypot(b.x - a.x, b.y - a.y))
+
+        avg_len = sum(seg_lengths) / max(1, len(seg_lengths))
+        grid_size = max(1, int(round(avg_len * 0.5)))
+        if snap_tol > 0:
+            grid_size = max(grid_size, snap_tol * 8)
+
+        def grid_index(value: int) -> int:
+            return math.floor(value / grid_size)
+
+        grid: Dict[Tuple[int, int], List[int]] = {}
+        for idx, (minx, miny, maxx, maxy) in enumerate(seg_bboxes):
+            gx0 = grid_index(minx)
+            gx1 = grid_index(maxx)
+            gy0 = grid_index(miny)
+            gy1 = grid_index(maxy)
+            for gx in range(gx0, gx1 + 1):
+                for gy in range(gy0, gy1 + 1):
+                    grid.setdefault((gx, gy), []).append(idx)
+
+        seen_pairs: Set[Tuple[int, int]] = set()
+        for cell_indices in grid.values():
+            count = len(cell_indices)
+            if count < 2:
+                continue
+            for ii in range(count):
+                for jj in range(ii + 1, count):
+                    i = cell_indices[ii]
+                    j = cell_indices[jj]
+                    key = (i, j) if i < j else (j, i)
+                    if key in seen_pairs:
+                        continue
+                    seen_pairs.add(key)
+                    a, b = segments[i]
+                    c, d = segments[j]
+                    hits = intersection_points(a, b, c, d)
+                    if not hits:
+                        continue
+                    for p in hits:
+                        key_pt = point_key(p)
+                        split_points[i].add(key_pt)
+                        split_points[j].add(key_pt)
+
+        def sort_points_on_segment(
+            a: PointInt, b: PointInt, keys: Set[Tuple[int, int]]
+        ) -> List[PointInt]:
+            dx = b.x - a.x
+            dy = b.y - a.y
+            if dx == 0 and dy == 0:
+                return [a]
+            if abs(dx) >= abs(dy):
+                denom = dx if dx != 0 else 1
+                items = sorted(
+                    keys, key=lambda p: (p[0] - a.x) / denom
+                )
+            else:
+                denom = dy if dy != 0 else 1
+                items = sorted(
+                    keys, key=lambda p: (p[1] - a.y) / denom
+                )
+            return [PointInt(x, y) for (x, y) in items]
+
+        unique_edges: Set[Tuple[Tuple[int, int], Tuple[int, int]]] = set()
+        adjacency: Dict[PointInt, Set[PointInt]] = {}
+
+        for (a, b), keys in zip(segments, split_points):
+            pts = sort_points_on_segment(a, b, keys)
+            if len(pts) < 2:
+                continue
+            for i in range(len(pts) - 1):
+                p0 = pts[i]
+                p1 = pts[i + 1]
+                if p0 == p1:
+                    continue
+                k0 = point_key(p0)
+                k1 = point_key(p1)
+                edge_key = (k0, k1) if k0 <= k1 else (k1, k0)
+                if edge_key in unique_edges:
+                    continue
+                unique_edges.add(edge_key)
+                adjacency.setdefault(p0, set()).add(p1)
+                adjacency.setdefault(p1, set()).add(p0)
+
+        if not adjacency:
+            return []
+
+        def angle(from_pt: PointInt, to_pt: PointInt) -> float:
+            return math.atan2(to_pt.y - from_pt.y, to_pt.x - from_pt.x)
+
+        neighbors: Dict[PointInt, List[PointInt]] = {}
+        neighbor_index: Dict[Tuple[PointInt, PointInt], int] = {}
+        for node, nbrs in adjacency.items():
+            ordered = sorted(nbrs, key=lambda p: angle(node, p))
+            neighbors[node] = ordered
+            for idx, nbr in enumerate(ordered):
+                neighbor_index[(node, nbr)] = idx
+
+        visited: Set[Tuple[PointInt, PointInt]] = set()
+        faces: List[List[PointInt]] = []
+        max_steps = max(1, len(unique_edges) * 2 + 1)
+
+        def polygon_area(points: List[PointInt]) -> int:
+            area2 = 0
+            n = len(points)
+            for i in range(n):
+                p0 = points[i]
+                p1 = points[(i + 1) % n]
+                area2 += p0.x * p1.y - p1.x * p0.y
+            return area2
+
+        for u, nbrs in neighbors.items():
+            for v in nbrs:
+                if (u, v) in visited:
+                    continue
+                face: List[PointInt] = []
+                curr_u, curr_v = u, v
+                steps = 0
+                while True:
+                    visited.add((curr_u, curr_v))
+                    face.append(curr_u)
+                    next_candidates = neighbors.get(curr_v)
+                    if not next_candidates:
+                        break
+                    idx = neighbor_index.get((curr_v, curr_u))
+                    if idx is None:
+                        break
+                    next_idx = (idx + 1) % len(next_candidates)
+                    next_v = next_candidates[next_idx]
+                    curr_u, curr_v = curr_v, next_v
+                    steps += 1
+                    if curr_u == u and curr_v == v:
+                        break
+                    if steps > max_steps:
+                        break
+                if len(face) < 3:
+                    continue
+                if polygon_area(face) == 0:
+                    continue
+                faces.append(face)
+
+        out: List[PolylineInt] = []
+        for face in faces:
+            if face[0] != face[-1]:
+                face = face + [face[0]]
+            out.append(PolylineInt(points=face))
 
         return out

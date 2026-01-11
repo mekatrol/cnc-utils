@@ -13,7 +13,7 @@
       },
       "args": [
         "--input",
-        "samples/six.svg",
+        "samples/geometry.svg",
         "--scale",
         "10000",
         "--tol",

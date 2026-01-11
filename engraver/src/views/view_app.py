@@ -459,6 +459,9 @@ class AppView(tk.Tk):
                 label="Close Polygons", command=self.close_polygons
             )
             self._tree_menu.add_command(label="Clip All", command=self.clip_all)
+            self._tree_menu.add_command(
+                label="Extract Faces", command=self.extract_faces
+            )
         elif kind == "geometry_root":
             self._tree_menu.add_command(
                 label="Centre to origin (all)", command=self.centre_to_origin
@@ -1106,6 +1109,14 @@ class AppView(tk.Tk):
             "Clipping polygons…",
             lambda polylines, scale: PolyProcessor.split_intersections_between_polygons(
                 polylines, scale
+            ),
+        )
+
+    def extract_faces(self) -> None:
+        self._run_polygon_processing(
+            "Extracting faces…",
+            lambda polylines, scale: PolyProcessor.extract_faces_from_polylines(
+                polylines, snap_tol=max(1, int(round(scale * 1e-4)))
             ),
         )
 
