@@ -13,6 +13,7 @@ from geometry.PointInt import PointInt
 from geometry.PolylineInt import PolylineInt
 from geometry.GeometryInt import GeometryInt
 from geometry.GeoUtil import GeoUtil
+from geometry.PointInPolygonResult import PointInPolygonResult
 from geometry.poly_processor import PolyProcessor
 from export.JsonExporter import JsonExporter
 from svg.SvgConverter import SvgConverter
@@ -1136,6 +1137,8 @@ class AppView(tk.Tk):
 
         self.menubar.files_dirty = True
         self.redraw_all()
+        if self._regenerate_paths_after_geometry_change():
+            return
         self.fit_current()
 
     def simplify_polygons(self) -> None:
@@ -1268,16 +1271,64 @@ class AppView(tk.Tk):
             return
         self.menubar.files_dirty = False
 
-    def generate_paths_for_selection(self, append: bool = False) -> None:
-        if not self.selected_polygons:
-            messagebox.showinfo("Generate Paths", "No polygons selected.")
-            return
+    def _collect_polygons_for_paths(self) -> list[dict]:
+        g = self.model
+        if not g or not g.polylines:
+            return []
+        polygons = []
+        for idx, polyline in enumerate(g.polylines):
+            points = polyline.points
+            if len(points) < 3:
+                continue
+            if len(points) < 2 or points[0] != points[-1]:
+                continue
+            points = points[:-1]
+            if len(points) < 3:
+                continue
+            polygons.append(
+                {
+                    "index": idx,
+                    "points": points,
+                }
+            )
+        return polygons
 
-        hatch_angle = float(self.hatch_angle_deg)
-        hatch_spacing = max(1e-6, float(self.hatch_spacing_px))
-        scale = int(self.model.scale) if self.model and self.model.scale else 1
+    def _selection_entries_from_indices(self, indices: list[int]) -> list[dict]:
+        polygons = self._collect_polygons_for_paths()
+        if not polygons:
+            return []
+        polygons_by_index = {poly["index"]: poly for poly in polygons}
         selection = []
-        for entry in self.selected_polygons:
+        for idx in indices:
+            poly = polygons_by_index.get(idx)
+            if not poly:
+                continue
+            holes = []
+            for candidate in polygons:
+                if candidate is poly:
+                    continue
+                result = GeoUtil.point_in_polygon(
+                    candidate["points"][0], poly["points"]
+                )
+                if result == PointInPolygonResult.Inside:
+                    holes.append(candidate)
+            selection.append({"polygon": poly, "holes": holes})
+        return selection
+
+    def _selection_entries_from_generated_paths(self) -> list[dict]:
+        indices = []
+        seen = set()
+        for entry in self.generated_paths:
+            idx = entry.get("polygon_index")
+            if idx is None or idx in seen:
+                continue
+            seen.add(idx)
+            indices.append(idx)
+        return self._selection_entries_from_indices(indices)
+
+    def _build_path_generation_selection(self, entries: list[dict]) -> list[dict]:
+        selection = []
+        for entry in entries:
             polygon = entry["polygon"]
             holes = entry["holes"]
             selection.append(
@@ -1287,13 +1338,42 @@ class AppView(tk.Tk):
                     "holes": [[(p.x, p.y) for p in hole["points"]] for hole in holes],
                 }
             )
+        return selection
 
+    def _generate_paths_from_selection(self, selection, append: bool = False) -> None:
+        if not selection:
+            return
+        hatch_angle = float(self.hatch_angle_deg)
+        hatch_spacing = max(1e-6, float(self.hatch_spacing_px))
+        scale = int(self.model.scale) if self.model and self.model.scale else 1
         self._show_spinner("Generating paths…")
         threading.Thread(
             target=self._generate_paths_worker,
             args=(selection, hatch_angle, hatch_spacing, scale, append),
             daemon=True,
         ).start()
+
+    def _regenerate_paths_after_geometry_change(self) -> bool:
+        if not self.generated_paths:
+            return False
+        selection_entries = self.selected_polygons
+        if not selection_entries:
+            selection_entries = self._selection_entries_from_generated_paths()
+            if selection_entries:
+                self.selected_polygons = selection_entries
+        selection = self._build_path_generation_selection(selection_entries)
+        if not selection:
+            return False
+        self._generate_paths_from_selection(selection, append=False)
+        return True
+
+    def generate_paths_for_selection(self, append: bool = False) -> None:
+        if not self.selected_polygons:
+            messagebox.showinfo("Generate Paths", "No polygons selected.")
+            return
+
+        selection = self._build_path_generation_selection(self.selected_polygons)
+        self._generate_paths_from_selection(selection, append=append)
 
     def _generate_paths_worker(
         self,
