@@ -297,14 +297,14 @@ class SvgConverter:
         dx = dx or 0.0
         dy = dy or 0.0
 
-        text_anchor = SvgConverter._get_attr(elem, "text_anchor", "text-anchor")
+        text_anchor = SvgConverter._get_attr(elem, "text_anchor", "text-anchor", "anchor")
         dominant_baseline = SvgConverter._get_attr(
             elem, "dominant_baseline", "dominant-baseline", "alignment_baseline"
         )
         if parent is not None:
             if text_anchor is None:
                 text_anchor = SvgConverter._get_attr(
-                    parent, "text_anchor", "text-anchor"
+                    parent, "text_anchor", "text-anchor", "anchor"
                 )
             if dominant_baseline is None:
                 dominant_baseline = SvgConverter._get_attr(
@@ -438,10 +438,17 @@ class SvgConverter:
 
     @staticmethod
     def _get_attr(o, *names):
+        values = getattr(o, "values", None)
         for n in names:
             v = getattr(o, n, None)
             if v is not None:
                 return v
+            if isinstance(values, dict):
+                if n in values:
+                    return values.get(n)
+                dash_name = n.replace("_", "-")
+                if dash_name in values:
+                    return values.get(dash_name)
         return None
 
     @staticmethod
