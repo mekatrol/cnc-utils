@@ -1,3 +1,4 @@
+import logging
 import math
 from typing import Any, Iterable, List, Optional, cast
 from svgelements import (
@@ -33,6 +34,8 @@ from geometry.PolylineInt import PolylineInt
 from geometry.PointInt import PointInt
 from geometry.PointFloat import PointFloat
 
+logger = logging.getLogger(__name__)
+
 
 class SvgConverter:
     """SVG -> integer-scaled polylines (GeometryInt)."""
@@ -52,6 +55,61 @@ class SvgConverter:
         if TextPath is not None:
             types.append(TextPath)
         return tuple(types)
+
+    @staticmethod
+    def _supported_types() -> tuple:
+        types = [
+            Path,
+            Line,
+            SimpleLine,
+            Rect,
+            Circle,
+            Ellipse,
+            Polyline,
+            Polygon,
+            Text,
+        ]
+        if TSpan is not None:
+            types.append(TSpan)
+        if TextPath is not None:
+            types.append(TextPath)
+        return tuple(types)
+
+    @staticmethod
+    def _iter_children(node: Any) -> List[Any]:
+        if isinstance(node, SvgConverter._supported_types()):
+            return []
+        if not hasattr(node, "__iter__"):
+            return []
+        try:
+            return list(node)
+        except Exception:
+            return []
+
+    @staticmethod
+    def _collect_unsupported_elements(doc: Any) -> dict:
+        supported = SvgConverter._supported_types()
+        counts: dict = {}
+
+        def walk(node: Any) -> None:
+            if isinstance(node, supported):
+                return
+            if isinstance(node, SVG):
+                for ch in SvgConverter._iter_children(node):
+                    walk(ch)
+                return
+
+            children = SvgConverter._iter_children(node)
+            if children:
+                for ch in children:
+                    walk(ch)
+                return
+
+            name = getattr(node, "tag", None) or type(node).__name__
+            counts[name] = counts.get(name, 0) + 1
+
+        walk(doc)
+        return counts
 
     @staticmethod
     def _text_leaf_types() -> tuple:
@@ -493,6 +551,10 @@ class SvgConverter:
         svg_path: str, scale: int = 10000, tol: float = 0.25
     ) -> GeometryInt:
         doc = SVG.parse(svg_path)
+        unsupported = SvgConverter._collect_unsupported_elements(doc)
+        if unsupported:
+            parts = [f"{k} x{v}" for k, v in sorted(unsupported.items())]
+            logger.warning("Unsupported SVG elements (ignored): %s", ", ".join(parts))
         viewbox_matrix = SvgConverter._viewbox_matrix(doc)
 
         polylines_float: List[List[PointFloat]] = []
