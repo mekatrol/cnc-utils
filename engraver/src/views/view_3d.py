@@ -54,6 +54,8 @@ class View3D(BaseView):
         self.hover_fill_color = FILL_COLOR_3D
         self.hover_fill_stipple = ""
         self._hovered_polygon = None
+        self._projected_polygon_cache = []
+        self._projected_polygon_cache_key = None
 
         # Bindings
         self.canvas.bind("<ButtonPress-1>", self._on_press_left)
@@ -388,6 +390,48 @@ class View3D(BaseView):
             coords.append((xs, ys))
         return coords
 
+    def _get_projected_polygons(
+        self, w: int, h: int, cx: float, cy: float, scale: int
+    ):
+        g = self.app.model
+        if not g or not g.polylines:
+            self._projected_polygon_cache = []
+            self._projected_polygon_cache_key = None
+            return []
+        key = (
+            id(g),
+            w,
+            h,
+            cx,
+            cy,
+            scale,
+            self.yaw,
+            self.pitch,
+            self.zoom,
+            self.pan[0],
+            self.pan[1],
+        )
+        if key == self._projected_polygon_cache_key:
+            return self._projected_polygon_cache
+        polygons = self._collect_polygons()
+        projected = []
+        for poly in polygons:
+            screen_points = self._project_polygon(poly["points"], w, h, cx, cy, scale)
+            if not screen_points:
+                continue
+            xs = [pt[0] for pt in screen_points]
+            ys = [pt[1] for pt in screen_points]
+            projected.append(
+                {
+                    "polygon": poly,
+                    "screen_points": screen_points,
+                    "screen_bbox": (min(xs), min(ys), max(xs), max(ys)),
+                }
+            )
+        self._projected_polygon_cache = projected
+        self._projected_polygon_cache_key = key
+        return projected
+
     def _screen_to_world(
         self, x: float, y: float, center_x: float, center_y: float
     ) -> tuple[float, float] | None:
@@ -575,10 +619,13 @@ class View3D(BaseView):
             h = self.canvas.winfo_height()
             if w <= 1 or h <= 1:
                 return None
-            for poly in polygons:
-                proj = self._project_polygon(poly["points"], w, h, cx, cy, s)
-                if self._point_in_polygon_screen((x, y), proj):
-                    containing.append(poly)
+            projected = self._get_projected_polygons(w, h, cx, cy, s)
+            for entry in projected:
+                minx, miny, maxx, maxy = entry["screen_bbox"]
+                if x < minx or x > maxx or y < miny or y > maxy:
+                    continue
+                if self._point_in_polygon_screen((x, y), entry["screen_points"]):
+                    containing.append(entry["polygon"])
 
         if not containing:
             return None
