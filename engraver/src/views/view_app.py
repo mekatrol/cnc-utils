@@ -105,6 +105,9 @@ class AppView(tk.Tk):
 
         self._build_left_sidebar()
         self._init_tree_icons()
+        self._tree_menu_posted = False
+        self.bind_all("<Button-1>", self._on_global_left_click, add="+")
+        self.bind_all("<Escape>", self._on_global_escape, add="+")
 
         self.notebook = ttk.Notebook(self.main_frame)
         self.notebook.grid(row=0, column=1, sticky="nsew")
@@ -515,10 +518,27 @@ class AppView(tk.Tk):
             )
         else:
             return
+        self._tree_menu_posted = True
         try:
             self._tree_menu.tk_popup(event.x_root, event.y_root)
         finally:
             self._tree_menu.grab_release()
+
+    def _on_global_left_click(self, event) -> None:
+        if not self._tree_menu_posted:
+            return
+        if event.widget == self._tree_menu:
+            return
+        self._dismiss_tree_menu()
+
+    def _on_global_escape(self, _event) -> None:
+        self._dismiss_tree_menu()
+
+    def _dismiss_tree_menu(self) -> None:
+        if not self._tree_menu_posted:
+            return
+        self._tree_menu.unpost()
+        self._tree_menu_posted = False
 
     def _on_tree_open(self, event) -> None:
         row_id = event.widget.focus()
