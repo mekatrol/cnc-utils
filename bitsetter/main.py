@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
 """
 BitSetter-like routine for GRBL (e.g., Shapeoko/Carbide Motion machines)
-
-Changes vs your version:
-- Grbl.send() now returns List[str] (never Optional) and does NOT swallow exceptions.
-- Added a small Result[T] type. Callers check ok/err and bail early.
-- All failures are printed to console (stderr) at the call site (and in main for unexpected exceptions).
-- Serial port is always closed before exiting (finally).
 """
 
 from __future__ import annotations
@@ -16,12 +10,41 @@ import re
 import sys
 import time
 from dataclasses import dataclass
-from typing import Generic, List, Optional, TypeVar
+from typing import Generic, List, Optional, TypeVar, Tuple
 
 import serial
 
-
+# Matches GRBL probe report lines, for example:
+#   PRB:123.456,78.900,-12.345:1
+#
+# Captures:
+#   group(1) -> X position at probe trigger
+#   group(2) -> Y position at probe trigger
+#   group(3) -> Z position at probe trigger
+#   group(4) -> Probe success flag:
+#               '1' = probe input triggered
+#               '0' = probe failed / did not trigger
+#
+# Emitted by GRBL after G38.x probing commands.
 PRB_RE = re.compile(r"PRB:([-\d.]+),([-\d.]+),([-\d.]+):([01])")
+
+
+# Matches the machine-position (MPos) field in a GRBL real-time status report, for example:
+#   <Idle|MPos:0.000,0.000,0.000|FS:0,0>
+#   <Run|MPos:-10.500,200.000,-45.000|WPos:0.000,0.000,0.000>
+#
+# Captures:
+#   group(1) -> Machine X position (mm)
+#   group(2) -> Machine Y position (mm)
+#   group(3) -> Machine Z position (mm)
+#
+# The non-capturing groups (?:...) allow matching whether MPos appears:
+#   - at the start of the status payload
+#   - or between '|' separators
+#   - and regardless of what fields follow it
+#
+# This regex is intentionally tolerant of additional GRBL status fields.
+STATUS_MPOS_RE = re.compile(r"(?:^|[|])MPos:([-\d.]+),([-\d.]+),([-\d.]+)(?:[|>]|$)")
 
 T = TypeVar("T")
 
@@ -34,11 +57,11 @@ class Result(Generic[T]):
 
     @staticmethod
     def success(value: T) -> "Result[T]":
-        return Result(ok=True, value=value, error=None)
+        return Result(ok=True, value=value)
 
     @staticmethod
     def fail(error: str) -> "Result[T]":
-        return Result(ok=False, value=None, error=error)
+        return Result(ok=False, error=error)
 
 
 @dataclass
@@ -49,12 +72,67 @@ class ProbeResult:
     success: bool
 
 
+def describe_command(cmd: str) -> List[str]:
+    """
+    Returns human-friendly descriptions for the tokens present in the command line.
+    """
+    # Tokenize roughly by spaces; keep things like "G38.2" intact.
+    tokens = cmd.strip().split()
+
+    # Also detect codes embedded with parameters (e.g. "G0", "G53", "G38.2", "M5")
+    # Some lines are like: "G53 G0 Z-45.000"
+    codes = []
+    for t in tokens:
+        if t.startswith(("G", "M", "$")):
+            # Strip any trailing punctuation (unlikely) but keep dot variants
+            codes.append(t)
+
+    # De-dupe while preserving order
+    seen = set()
+    ordered = []
+    for c in codes:
+        if c not in seen:
+            seen.add(c)
+            ordered.append(c)
+
+    desc = {
+        "$H": "($H) GRBL homing cycle: establishes machine zero using limit switches.",
+        "$X": "($X) GRBL unlock: clears an alarm lock so motion/G-code can run (does not home).",
+        "G90": "(G90) Absolute positioning: coordinates are interpreted as absolute in the active coordinate system.",
+        "G91": "(G91) Relative positioning: coordinates are interpreted as incremental moves from the current position.",
+        "G21": "(G21) Units to millimeters.",
+        "G94": "(G94) Feed rate mode: feed per minute.",
+        "G49": "(G49) Cancel tool length offset (TLO).",
+        "M5": "(M5) Spindle stop.",
+        "G0": "(G0) Rapid move: fastest non-cutting move (no feed rate).",
+        "G53": (
+            "(G53) Use machine coordinates for this line only (one-shot), "
+            "ignoring work offsets (G54–G59). Useful for fixed locations like tool change / BitSetter."
+        ),
+        "G38.2": (
+            "(G38.2) Probe toward the target: moves until the probe input triggers. "
+            "If it does not trigger within the commanded distance, GRBL raises an alarm."
+        ),
+    }
+
+    out: List[str] = []
+    for c in ordered:
+        # Normalize common “G38.2” token
+        key = c
+        if c.startswith("G38.2"):
+            key = "G38.2"
+        if key in desc:
+            out.append(desc[key])
+
+    return out
+
+
 class Grbl:
     def __init__(self, port: str, baud: int, timeout: float = 2.0) -> None:
         self.ser = serial.Serial(
             port=port,
             baudrate=baud,
-            timeout=timeout,
+            timeout=timeout,  # per-read timeout
             write_timeout=timeout,
         )
 
@@ -121,11 +199,31 @@ class Grbl:
 
             lines.append(line)
 
-    def soft_reset(self) -> None:
-        self.ser.write(b"\x18")  # Ctrl-X
+    def query_status(self, timeout_s: float = 2.0) -> str:
+        """
+        Sends '?' and returns the first status line like:
+        <Idle|MPos:0.000,0.000,0.000|FS:0,0|...>
+        """
+        deadline = time.monotonic() + float(timeout_s)
+        self.ser.write(b"?")
         self.ser.flush()
-        time.sleep(0.5)
-        self.ser.reset_input_buffer()
+
+        while True:
+            if time.monotonic() > deadline:
+                raise TimeoutError("Timed out waiting for status response to '?'")
+
+            line = self._readline()
+            if not line:
+                continue
+            if line.startswith("<") and line.endswith(">"):
+                return line
+
+    def get_mpos(self, timeout_s: float = 2.0) -> Tuple[float, float, float]:
+        status = self.query_status(timeout_s=timeout_s)
+        m = STATUS_MPOS_RE.search(status)
+        if not m:
+            raise RuntimeError(f"Status line did not contain MPos: {status}")
+        return float(m.group(1)), float(m.group(2)), float(m.group(3))
 
     def get_probe_result(self, response_lines: List[str]) -> Optional[ProbeResult]:
         for line in response_lines:
@@ -135,14 +233,31 @@ class Grbl:
                 return ProbeResult(float(x), float(y), float(z), s == "1")
         return None
 
+    def run_step(
+        self,
+        cmd: str,
+        context: str,
+        timeout_s: Optional[float] = None,
+        status_timeout_s: float = 2.0,
+    ) -> Result[List[str]]:
+        """
+        Callable method:
+          - prints current MPos (best effort, but treated as required; fails if status can't be read)
+          - prints descriptions of any G/M/$ codes on this line
+          - executes the command
+        """
+        try:
+            x, y, z = self.get_mpos(timeout_s=status_timeout_s)
+            print(f"Current MPos: X={x:.3f} Y={y:.3f} Z={z:.3f}")
 
-def _try_send(
-    grbl: Grbl, cmd: str, context: str, timeout_s: Optional[float] = None
-) -> Result[List[str]]:
-    try:
-        return Result.success(grbl.send(cmd, timeout_s=timeout_s))
-    except Exception as ex:
-        return Result.fail(f"{context}: {ex}")
+            for d in describe_command(cmd):
+                print(d)
+
+            print(f"Executing: {cmd}")
+            lines = self.send(cmd, timeout_s=timeout_s)
+            return Result.success(lines)
+        except Exception as ex:
+            return Result.fail(f"{context}: {ex}")
 
 
 def run_bitsetter_like(
@@ -156,45 +271,41 @@ def run_bitsetter_like(
     retract: float,
     settle_s: float,
 ) -> Result[ProbeResult]:
-    # 1) Home
-    print("Homing ($X)...")
-    r = _try_send(grbl, "$X", "Homing ($X)")
+    print("Unlocking ($X)...")
+    r = grbl.run_step("$X", "Unlock ($X)", timeout_s=10.0)
     if not r.ok:
         print(r.error, file=sys.stderr)
         return Result.fail(r.error)
 
-    # Ensure known state.
-    for cmd, ctx in [
-        ("G90", "Set absolute mode (G90)"),
-        ("G21", "Set mm units (G21)"),
-        ("G94", "Set feed per minute (G94)"),
-        ("G49", "Cancel tool length offsets (G49)"),
-        ("M5", "Spindle off (M5)"),
+    for cmd, ctx, tmo in [
+        ("G90", "Set absolute mode (G90)", 10.0),
+        ("G21", "Set mm units (G21)", 10.0),
+        ("G94", "Set feed/min (G94)", 10.0),
+        ("G49", "Cancel TLO (G49)", 10.0),
+        ("M5", "Spindle off (M5)", 10.0),
     ]:
-        r = _try_send(grbl, cmd, ctx)
+        r = grbl.run_step(cmd, ctx, timeout_s=tmo)
         if not r.ok:
             print(r.error, file=sys.stderr)
             return Result.fail(r.error)
 
-    # 1) Home
     print("Homing ($H)...")
-    r = _try_send(grbl, "$H", "Homing ($H)", timeout_s=180.0)
+    r = grbl.run_step("$H", "Homing ($H)", timeout_s=180.0)
     if not r.ok:
         print(r.error, file=sys.stderr)
         return Result.fail(r.error)
 
-    # 2) Move to safe Z then BitSetter XY (machine coords via G53)
     print(f"Moving to safe Z (G53 Z{safe_z})...")
-    r = _try_send(grbl, f"G53 G0 Z{safe_z:.3f}", "Move to safe Z (G53)")
+    r = grbl.run_step(f"G53 G0 Z{safe_z:.3f}", "Move to safe Z (G53)", timeout_s=30.0)
     if not r.ok:
         print(r.error, file=sys.stderr)
         return Result.fail(r.error)
 
     print(f"Moving to BitSetter XY (G53 X{bitsetter_x}, Y{bitsetter_y})...")
-    r = _try_send(
-        grbl,
+    r = grbl.run_step(
         f"G53 G0 X{bitsetter_x:.3f} Y{bitsetter_y:.3f}",
         "Move to BitSetter XY (G53)",
+        timeout_s=60.0,
     )
     if not r.ok:
         print(r.error, file=sys.stderr)
@@ -204,7 +315,9 @@ def run_bitsetter_like(
         time.sleep(settle_s)
 
     print("Pre-positioning Z to -45.0 mm (G53)...")
-    r = _try_send(grbl, "G53 G0 Z-45.000", "Pre-position Z to -45 mm (G53)")
+    r = grbl.run_step(
+        "G53 G0 Z-45.000", "Pre-position Z to -45 mm (G53)", timeout_s=30.0
+    )
     if not r.ok:
         print(r.error, file=sys.stderr)
         return Result.fail(r.error)
@@ -212,15 +325,13 @@ def run_bitsetter_like(
     if settle_s > 0:
         time.sleep(settle_s)
 
-    # 3) Two-stage probe
-    print(f"Probing fast: G91 G38.2 Z-{probe_distance} F{probe_fast_feed} ...")
-    r = _try_send(grbl, "G91", "Set relative mode (G91)")
+    r = grbl.run_step("G91", "Set relative mode (G91)", timeout_s=10.0)
     if not r.ok:
         print(r.error, file=sys.stderr)
         return Result.fail(r.error)
 
-    fast = _try_send(
-        grbl,
+    print(f"Probing fast: G38.2 Z-{probe_distance} F{probe_fast_feed} ...")
+    fast = grbl.run_step(
         f"G38.2 Z-{probe_distance:.3f} F{probe_fast_feed:.3f}",
         "Fast probe (G38.2)",
         timeout_s=180.0,
@@ -235,8 +346,9 @@ def run_bitsetter_like(
         print(msg, file=sys.stderr)
         return Result.fail(msg)
 
-    print(f"Retracting: G0 Z{retract} (relative)...")
-    r = _try_send(grbl, f"G0 Z{retract:.3f}", "Retract after fast probe (G0)")
+    r = grbl.run_step(
+        f"G0 Z{retract:.3f}", "Retract after fast probe (G0)", timeout_s=30.0
+    )
     if not r.ok:
         print(r.error, file=sys.stderr)
         return Result.fail(r.error)
@@ -246,8 +358,7 @@ def run_bitsetter_like(
 
     slow_dist = retract + 5.0
     print(f"Probing slow: G38.2 Z-{slow_dist} F{probe_slow_feed} ...")
-    slow = _try_send(
-        grbl,
+    slow = grbl.run_step(
         f"G38.2 Z-{slow_dist:.3f} F{probe_slow_feed:.3f}",
         "Slow probe (G38.2)",
         timeout_s=180.0,
@@ -262,13 +373,13 @@ def run_bitsetter_like(
         print(msg, file=sys.stderr)
         return Result.fail(msg)
 
-    r = _try_send(grbl, "G90", "Restore absolute mode (G90)")
+    r = grbl.run_step("G90", "Restore absolute mode (G90)", timeout_s=10.0)
     if not r.ok:
         print(r.error, file=sys.stderr)
         return Result.fail(r.error)
 
     print(f"Returning to safe Z (G53 Z{safe_z})...")
-    r = _try_send(grbl, f"G53 G0 Z{safe_z:.3f}", "Return to safe Z (G53)")
+    r = grbl.run_step(f"G53 G0 Z{safe_z:.3f}", "Return to safe Z (G53)", timeout_s=30.0)
     if not r.ok:
         print(r.error, file=sys.stderr)
         return Result.fail(r.error)
@@ -289,26 +400,20 @@ def main() -> int:
     ap.add_argument(
         "--bitsetter-x",
         type=float,
-        default=-1.0,
+        default=-4.0,
         help="BitSetter X in machine coords (mm)",
     )
     ap.add_argument(
         "--bitsetter-y",
         type=float,
-        default=-853.5,
+        default=-858.5,
         help="BitSetter Y in machine coords (mm)",
     )
     ap.add_argument(
-        "--safe-z",
-        type=float,
-        default=0.0,
-        help="Machine-coordinate Z clearance to move at (mm). Set this to a known-safe machine Z.",
+        "--safe-z", type=float, default=0.0, help="Machine-coordinate Z clearance (mm)."
     )
     ap.add_argument(
-        "--probe-distance",
-        type=float,
-        default=30.0,
-        help="Max Z distance to probe downward (mm) (relative). Must be safe for your setup.",
+        "--probe-distance", type=float, default=30.0, help="Probe travel distance (mm)."
     )
     ap.add_argument(
         "--probe-fast-feed", type=float, default=150.0, help="Fast probe feed (mm/min)"
@@ -330,7 +435,7 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    grbl = None
+    grbl: Optional[Grbl] = None
     try:
         grbl = Grbl(args.port, args.baud)
         grbl.wake()
@@ -348,7 +453,6 @@ def main() -> int:
         )
 
         if not res.ok:
-            # run_bitsetter_like already printed a specific error, but main returns failure.
             return 1
 
         result = res.value
