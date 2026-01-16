@@ -34,6 +34,8 @@ from views.view_spinner import Spinner
 
 class AppView(tk.Tk):
     DEFAULT_FEED_RATE = 200.0
+    TRAVEL_Z = 5.0
+    CUT_Z = 0.0
 
     def __init__(self):
         super().__init__()
@@ -297,9 +299,7 @@ class AppView(tk.Tk):
         self.tree_geometry_id = self.scene_tree.insert(
             "", "end", text="Geometries", open=True
         )
-        self.tree_paths_id = self.scene_tree.insert(
-            "", "end", text="Paths", open=True
-        )
+        self.tree_paths_id = self.scene_tree.insert("", "end", text="Paths", open=True)
         self._tree_menu = tk.Menu(self, tearoff=False)
 
     def _init_tree_icons(self) -> None:
@@ -524,9 +524,8 @@ class AppView(tk.Tk):
             label = "Hide" if is_visible else "Show"
             self._tree_menu.add_command(
                 label=label,
-                command=lambda idx=path_index, k=key: self._toggle_path_child_visibility(
-                    idx, k
-                ),
+                command=lambda idx=path_index,
+                k=key: self._toggle_path_child_visibility(idx, k),
             )
         else:
             return
@@ -758,9 +757,7 @@ class AppView(tk.Tk):
                 estimate = self._estimate_gcode_for_entries([entry])
                 estimate_info = ""
                 if estimate:
-                    estimate_info = (
-                        f"\nEstimated time: {self._format_duration(estimate['total_seconds'])}"
-                    )
+                    estimate_info = f"\nEstimated time: {self._format_duration(estimate['total_seconds'])}"
                 self._tree_item_info[item] = (
                     f"Path {polygon_index}\n"
                     f"Primary lines: {primary}\n"
@@ -792,8 +789,7 @@ class AppView(tk.Tk):
                         image=child_icon,
                     )
                     self._tree_item_info[child_item] = (
-                        f"{child.get('name', key)}\n"
-                        f"Segments: {child_count}"
+                        f"{child.get('name', key)}\nSegments: {child_count}"
                     )
                     self._tree_item_action[child_item] = ("path_child", (idx, key))
         else:
@@ -1559,10 +1555,14 @@ class AppView(tk.Tk):
     def _build_gcode_for_entries(self, entries: list[dict]) -> str | None:
         if not entries:
             return None
+
         gcode_lines = ["G21", "G90"]
+        travel_z = self._format_gcode_value(self.TRAVEL_Z)
+        cut_z = self._format_gcode_value(self.CUT_Z)
         has_segments = False
         feed_rate = self.DEFAULT_FEED_RATE
         feed_set = False
+
         for entry in entries:
             segments = self._collect_path_segments(entry)
             if not segments:
@@ -1571,9 +1571,11 @@ class AppView(tk.Tk):
             polygon_index = entry.get("polygon_index", "?")
             gcode_lines.append(f"; Path {polygon_index}")
             for (x0, y0), (x1, y1) in segments:
+                gcode_lines.append(f"G0 Z{travel_z}")
                 gcode_lines.append(
                     f"G0 X{self._format_gcode_value(x0)} Y{self._format_gcode_value(y0)}"
                 )
+                gcode_lines.append(f"G0 Z{cut_z}")
                 if not feed_set:
                     gcode_lines.append(
                         f"G1 X{self._format_gcode_value(x1)} "
@@ -1590,7 +1592,9 @@ class AppView(tk.Tk):
         gcode_lines.append("M2")
         return "\n".join(gcode_lines) + "\n"
 
-    def _estimate_gcode_for_entries(self, entries: list[dict]) -> dict[str, float] | None:
+    def _estimate_gcode_for_entries(
+        self, entries: list[dict]
+    ) -> dict[str, float] | None:
         gcode = self._build_gcode_for_entries(entries)
         if not gcode:
             return None
