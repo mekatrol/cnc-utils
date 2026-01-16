@@ -34,6 +34,10 @@ class BaseView(ttk.Frame):
     def hatch_spacing_px(self) -> float:
         return getattr(self.app, "hatch_spacing_px", 8.0)
 
+    @property
+    def cross_hatch(self) -> bool:
+        return bool(getattr(self.app, "cross_hatch", True))
+
     def _on_resize(self, event):
         self.redraw()
 
@@ -106,7 +110,8 @@ class BaseView(ttk.Frame):
         if len(polygon_points) < 3:
             return
         self._draw_hatch_lines(polygon_points, self.hatch_angle_deg)
-        self._draw_hatch_lines(polygon_points, self.hatch_angle_deg + 90.0)
+        if self.cross_hatch:
+            self._draw_hatch_lines(polygon_points, self.hatch_angle_deg + 90.0)
 
     def _draw_hatch_lines(self, polygon_points, angle_deg: float) -> None:
         c = self.canvas

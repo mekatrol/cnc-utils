@@ -75,6 +75,7 @@ class AppView(tk.Tk):
         path_settings = settings["path_generation"]
         self.hatch_angle_deg = path_settings["hatch_angle_deg"]
         self.hatch_spacing_px = path_settings["hatch_spacing_px"]
+        self.cross_hatch = path_settings["cross_hatch"]
         self._loaded_settings = copy.deepcopy(settings)
         self._settings_dirty = False
         self.show_generated_paths = tk.BooleanVar(value=True)
@@ -82,8 +83,10 @@ class AppView(tk.Tk):
         self.show_degenerate = tk.BooleanVar(value=True)
         self._hatch_angle_var = tk.StringVar(value=str(self.hatch_angle_deg))
         self._hatch_spacing_var = tk.StringVar(value=str(self.hatch_spacing_px))
+        self._cross_hatch_var = tk.BooleanVar(value=self.cross_hatch)
         self._hatch_angle_var.trace_add("write", self._on_settings_var_change)
         self._hatch_spacing_var.trace_add("write", self._on_settings_var_change)
+        self._cross_hatch_var.trace_add("write", self._on_settings_var_change)
         self.properties_var = tk.StringVar(value="No selection")
         self._tree_item_info = {}
         self._tree_item_action = {}
@@ -137,6 +140,7 @@ class AppView(tk.Tk):
             "path_generation": {
                 "hatch_angle_deg": 45.0,
                 "hatch_spacing_px": 0.25,
+                "cross_hatch": True,
             },
         }
 
@@ -154,6 +158,8 @@ class AppView(tk.Tk):
             path_settings["hatch_angle_deg"] = upgraded["hatch_angle_deg"]
         if "hatch_spacing_px" in upgraded:
             path_settings["hatch_spacing_px"] = upgraded["hatch_spacing_px"]
+        if "cross_hatch" in upgraded:
+            path_settings["cross_hatch"] = upgraded["cross_hatch"]
         if "version" in upgraded:
             app_settings["version"] = upgraded["version"]
         app_settings["version"] = 1
@@ -195,6 +201,18 @@ class AppView(tk.Tk):
                         settings["path_generation"][key] = float(path_data[key])
                     except Exception:
                         save_needed = True
+            if "cross_hatch" in path_data:
+                value = path_data["cross_hatch"]
+                if isinstance(value, bool):
+                    settings["path_generation"]["cross_hatch"] = value
+                elif isinstance(value, (int, float)):
+                    settings["path_generation"]["cross_hatch"] = bool(value)
+                elif isinstance(value, str):
+                    settings["path_generation"]["cross_hatch"] = (
+                        value.strip().lower() in {"1", "true", "yes", "on"}
+                    )
+                else:
+                    save_needed = True
         else:
             save_needed = True
 
@@ -209,6 +227,7 @@ class AppView(tk.Tk):
             spacing = float(self._hatch_spacing_var.get())
         except Exception:
             return None
+        cross_hatch = bool(self._cross_hatch_var.get())
         version = self._default_settings()["app"]["version"]
         return {
             "app": {
@@ -217,6 +236,7 @@ class AppView(tk.Tk):
             "path_generation": {
                 "hatch_angle_deg": angle,
                 "hatch_spacing_px": spacing,
+                "cross_hatch": cross_hatch,
             },
         }
 
@@ -232,6 +252,7 @@ class AppView(tk.Tk):
             path_settings = settings["path_generation"]
             self.hatch_angle_deg = path_settings["hatch_angle_deg"]
             self.hatch_spacing_px = path_settings["hatch_spacing_px"]
+            self.cross_hatch = path_settings["cross_hatch"]
             self.update_properties()
         try:
             self._settings_path.write_text(
@@ -267,6 +288,7 @@ class AppView(tk.Tk):
         defaults = self._default_settings()["path_generation"]
         self._hatch_angle_var.set(str(defaults["hatch_angle_deg"]))
         self._hatch_spacing_var.set(str(defaults["hatch_spacing_px"]))
+        self._cross_hatch_var.set(bool(defaults["cross_hatch"]))
         self._update_settings_dirty()
 
     def _on_reset_settings(self) -> None:
@@ -274,6 +296,7 @@ class AppView(tk.Tk):
         path_settings = settings["path_generation"]
         self._hatch_angle_var.set(str(path_settings["hatch_angle_deg"]))
         self._hatch_spacing_var.set(str(path_settings["hatch_spacing_px"]))
+        self._cross_hatch_var.set(bool(path_settings["cross_hatch"]))
         self._update_settings_dirty()
 
     def _build_left_sidebar(self) -> None:
@@ -332,6 +355,12 @@ class AppView(tk.Tk):
             self._path_settings, textvariable=self._hatch_spacing_var
         )
         spacing_entry.grid(row=1, column=1, sticky="ew", padx=8, pady=(0, 4))
+        cross_hatch_check = ttk.Checkbutton(
+            self._path_settings,
+            text="Cross hatch (perpendicular lines)",
+            variable=self._cross_hatch_var,
+        )
+        cross_hatch_check.grid(row=2, column=0, columnspan=2, sticky="w", padx=8)
         angle_entry.bind("<Return>", self._apply_hatch_settings)
         spacing_entry.bind("<Return>", self._apply_hatch_settings)
         angle_entry.bind("<FocusOut>", self._apply_hatch_settings)
@@ -340,7 +369,7 @@ class AppView(tk.Tk):
             self._path_settings, text="Save settings", command=self._on_save_settings
         )
         self._save_button.grid(
-            row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8)
+            row=3, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8)
         )
         self._save_button.state(["disabled"])
         self._restore_defaults_button = ttk.Button(
@@ -349,13 +378,13 @@ class AppView(tk.Tk):
             command=self._on_restore_defaults,
         )
         self._restore_defaults_button.grid(
-            row=3, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8)
+            row=4, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8)
         )
         self._reset_button = ttk.Button(
             self._path_settings, text="Reload settings", command=self._on_reset_settings
         )
         self._reset_button.grid(
-            row=4, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8)
+            row=5, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8)
         )
 
         label = ttk.Label(self.right_sidebar, text="Properties")
@@ -417,6 +446,7 @@ class AppView(tk.Tk):
             return
         self._hatch_angle_var.set(str(self.hatch_angle_deg))
         self._hatch_spacing_var.set(str(self.hatch_spacing_px))
+        self._cross_hatch_var.set(bool(self.cross_hatch))
         self._path_settings.grid(row=0, column=0, sticky="nsew", padx=0, pady=(0, 4))
 
     def _hide_path_settings(self) -> None:
@@ -432,6 +462,7 @@ class AppView(tk.Tk):
             return
         self.hatch_angle_deg = angle
         self.hatch_spacing_px = spacing
+        self.cross_hatch = bool(self._cross_hatch_var.get())
         self.update_properties()
         self._update_settings_dirty()
 
@@ -1356,13 +1387,6 @@ class AppView(tk.Tk):
         if not path:
             return
         target = Path(path)
-        if target.exists():
-            overwrite = messagebox.askyesno(
-                "Overwrite?",
-                f"{target}\n\nFile already exists. Overwrite?",
-            )
-            if not overwrite:
-                return
         try:
             target.write_text(gcode, encoding="utf-8")
         except Exception as e:
@@ -1697,11 +1721,12 @@ class AppView(tk.Tk):
             return
         hatch_angle = float(self.hatch_angle_deg)
         hatch_spacing = max(1e-6, float(self.hatch_spacing_px))
+        cross_hatch = bool(self.cross_hatch)
         scale = int(self.model.scale) if self.model and self.model.scale else 1
         self._show_spinner("Generating paths…")
         threading.Thread(
             target=self._generate_paths_worker,
-            args=(selection, hatch_angle, hatch_spacing, scale, append),
+            args=(selection, hatch_angle, hatch_spacing, cross_hatch, scale, append),
             daemon=True,
         ).start()
 
@@ -1732,6 +1757,7 @@ class AppView(tk.Tk):
         selection,
         hatch_angle: float,
         hatch_spacing: float,
+        cross_hatch: bool,
         scale: int,
         append: bool,
     ):
@@ -1747,13 +1773,15 @@ class AppView(tk.Tk):
                     hatch_spacing,
                     scale,
                 )
-                secondary = self._hatch_lines_for_polygon(
-                    polygon_points,
-                    holes,
-                    hatch_angle + 90.0,
-                    hatch_spacing,
-                    scale,
-                )
+                secondary = []
+                if cross_hatch:
+                    secondary = self._hatch_lines_for_polygon(
+                        polygon_points,
+                        holes,
+                        hatch_angle + 90.0,
+                        hatch_spacing,
+                        scale,
+                    )
                 boundary_outer = self._polygon_boundary_segments(polygon_points, scale)
                 boundary_children = [
                     {
@@ -1764,9 +1792,10 @@ class AppView(tk.Tk):
                 ]
                 lines = {
                     "primary": primary,
-                    "secondary": secondary,
                     "boundary_outer": boundary_outer,
                 }
+                if secondary:
+                    lines["secondary"] = secondary
                 for hole_index, hole in enumerate(holes, start=1):
                     key = f"boundary_hole_{hole_index}"
                     lines[key] = self._polygon_boundary_segments(hole, scale)
@@ -1777,10 +1806,11 @@ class AppView(tk.Tk):
                             "visible": True,
                         }
                     )
-                children = [
-                    {"key": "primary", "name": "Fill (primary)", "visible": True},
-                    {"key": "secondary", "name": "Fill (secondary)", "visible": True},
-                ]
+                children = [{"key": "primary", "name": "Fill (primary)", "visible": True}]
+                if secondary:
+                    children.append(
+                        {"key": "secondary", "name": "Fill (secondary)", "visible": True}
+                    )
                 children.extend(boundary_children)
                 paths.append(
                     {
