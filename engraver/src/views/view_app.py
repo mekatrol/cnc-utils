@@ -81,6 +81,9 @@ class AppView(tk.Tk):
         self.generated_gcode_segments = []
         # Load path generation defaults early so UI reflects saved values.
         settings = self._load_settings()
+        app_settings = settings["app"]
+        self._recent_dirs = dict(app_settings.get("recent_dirs", {}))
+        self._last_open_ext = app_settings.get("last_open_ext")
         path_settings = settings["path_generation"]
         self.hatch_angle_deg = path_settings["hatch_angle_deg"]
         self.hatch_spacing_px = path_settings["hatch_spacing_px"]
@@ -150,6 +153,8 @@ class AppView(tk.Tk):
         return {
             "app": {
                 "version": 1,
+                "recent_dirs": {},
+                "last_open_ext": None,
             },
             "path_generation": {
                 "hatch_angle_deg": 45.0,
@@ -178,6 +183,10 @@ class AppView(tk.Tk):
         if "version" in upgraded:
             app_settings["version"] = upgraded["version"]
         app_settings["version"] = 1
+        if "recent_dirs" not in app_settings:
+            app_settings["recent_dirs"] = {}
+        if "last_open_ext" not in app_settings:
+            app_settings["last_open_ext"] = None
         return upgraded
 
     def _load_settings(self) -> dict:
@@ -207,6 +216,30 @@ class AppView(tk.Tk):
 
         if app_version != settings["app"]["version"]:
             data = self._upgrade_settings(data)
+            save_needed = True
+
+        app_data = data.get("app")
+        if isinstance(app_data, dict):
+            recent = {}
+            raw_recent = app_data.get("recent_dirs")
+            if isinstance(raw_recent, dict):
+                for key, value in raw_recent.items():
+                    if not isinstance(key, str):
+                        continue
+                    if isinstance(value, str) and value.strip():
+                        recent[key.lower()] = value
+            else:
+                save_needed = True
+            settings["app"]["recent_dirs"] = recent
+            last_open = app_data.get("last_open_ext")
+            if isinstance(last_open, str) and last_open.strip():
+                settings["app"]["last_open_ext"] = last_open.lower()
+            elif last_open is None:
+                settings["app"]["last_open_ext"] = None
+            else:
+                settings["app"]["last_open_ext"] = None
+                save_needed = True
+        else:
             save_needed = True
 
         path_data = data.get("path_generation")
@@ -246,11 +279,8 @@ class AppView(tk.Tk):
         except Exception:
             return None
         cross_hatch = bool(self._cross_hatch_var.get())
-        version = self._default_settings()["app"]["version"]
         return {
-            "app": {
-                "version": version,
-            },
+            "app": self._current_app_settings(),
             "path_generation": {
                 "hatch_angle_deg": angle,
                 "hatch_spacing_px": spacing,
@@ -284,6 +314,20 @@ class AppView(tk.Tk):
                 self._update_settings_dirty()
         except Exception:
             pass
+
+    def _current_app_settings(self) -> dict:
+        return {
+            "version": self._default_settings()["app"]["version"],
+            "recent_dirs": dict(self._recent_dirs),
+            "last_open_ext": self._last_open_ext,
+        }
+
+    def _persist_app_settings(self) -> None:
+        settings = self._settings_from_vars()
+        if settings is None:
+            settings = copy.deepcopy(self._loaded_settings)
+        settings["app"] = self._current_app_settings()
+        self._save_settings(settings)
 
     def _update_settings_dirty(self) -> None:
         # Keep the Save button state in sync with actual unsaved changes.
@@ -1106,16 +1150,60 @@ class AppView(tk.Tk):
             if hasattr(widget, "redraw"):
                 widget.redraw()
 
+    def _normalize_ext(self, ext: str) -> str:
+        if not ext:
+            return ""
+        ext = ext.lower()
+        if not ext.startswith("."):
+            ext = f".{ext}"
+        return ext
+
+    def _remember_recent_dir(self, ext: str, path: Path, update_last_open: bool) -> None:
+        ext = self._normalize_ext(ext)
+        if not ext:
+            return
+        try:
+            parent = str(path.parent)
+        except Exception:
+            return
+        if not parent:
+            return
+        self._recent_dirs[ext] = parent
+        if update_last_open:
+            self._last_open_ext = ext
+        self._persist_app_settings()
+
+    def _recent_dir_for_ext(self, ext: str) -> str | None:
+        ext = self._normalize_ext(ext)
+        if not ext:
+            return None
+        return self._recent_dirs.get(ext)
+
+    def _open_dialog_initial_dir(self) -> str | None:
+        if self._last_open_ext:
+            recent = self._recent_dirs.get(self._last_open_ext)
+            if recent:
+                return recent
+        for ext in (".svg", ".json", ".nc"):
+            recent = self._recent_dirs.get(ext)
+            if recent:
+                return recent
+        return None
+
     def open_file_dialog(self):
         # Unified dialog for loading JSON or SVG sources.
-        path = filedialog.askopenfilename(
-            title="Open geometry JSON",
-            filetypes=[
+        options = {
+            "title": "Open geometry JSON",
+            "filetypes": [
                 ("SVG Files", "*.svg"),
                 ("JSON Files", "*.json"),
                 ("All Files", "*.*"),
             ],
-        )
+        }
+        initial_dir = self._open_dialog_initial_dir()
+        if initial_dir:
+            options["initialdir"] = initial_dir
+        path = filedialog.askopenfilename(**options)
         if not path:
             return
 
@@ -1125,6 +1213,7 @@ class AppView(tk.Tk):
                 geom = AppView.load_geometry_from_json(Path(path))
                 self.set_geometry(geom, source=str(path))
                 self.fit_current()
+                self._remember_recent_dir(ext, Path(path), update_last_open=True)
             elif ext == ".svg":
                 self.open_svg_async(str(path))
             else:
@@ -1161,6 +1250,7 @@ class AppView(tk.Tk):
                 geom = AppView.load_geometry_from_json(file_path)
                 self.set_geometry(geom, source=str(file_path))
                 self.fit_current()
+                self._remember_recent_dir(ext, file_path, update_last_open=True)
             elif ext == ".svg":
                 self.open_svg_async(str(file_path), scale=scale, tol=tol)
             else:
@@ -1236,6 +1326,7 @@ class AppView(tk.Tk):
         self._hide_spinner()
         self.set_geometry(geom, source=path)  # safe here
         self.fit_current()
+        self._remember_recent_dir(".svg", Path(path), update_last_open=True)
 
     def _load_svg_failed(self, path: str, err: Exception):
         # Ensure the spinner is dismissed before showing an error.
@@ -1461,15 +1552,25 @@ class AppView(tk.Tk):
         if not self.model:
             messagebox.showinfo("Save SVG", "No geometry loaded.")
             return
-        path = filedialog.asksaveasfilename(
-            title="Save SVG As",
-            defaultextension=".svg",
-            filetypes=[("SVG Files", "*.svg"), ("All Files", "*.*")],
-        )
+        options = {
+            "title": "Save SVG As",
+            "defaultextension": ".svg",
+            "filetypes": [("SVG Files", "*.svg"), ("All Files", "*.*")],
+        }
+        recent = self._recent_dir_for_ext(".svg")
+        if recent:
+            options["initialdir"] = recent
+        elif self.source_path:
+            try:
+                options["initialdir"] = str(Path(self.source_path).parent)
+            except Exception:
+                pass
+        path = filedialog.asksaveasfilename(**options)
         if not path:
             return
         try:
             self._write_svg(path)
+            self._remember_recent_dir(".svg", Path(path), update_last_open=False)
         except Exception as e:
             messagebox.showerror("Save failed", f"{path}\n\n{e}")
             return
@@ -1527,8 +1628,12 @@ class AppView(tk.Tk):
             "defaultextension": ".nc",
             "filetypes": [("G-code Files", "*.nc"), ("All Files", "*.*")],
         }
-        if default_path:
+        recent = self._recent_dir_for_ext(".nc")
+        if recent:
+            options["initialdir"] = recent
+        elif default_path:
             options["initialdir"] = str(default_path.parent)
+        if default_path:
             options["initialfile"] = default_path.name
         path = filedialog.asksaveasfilename(**options)
         if not path:
@@ -1536,6 +1641,7 @@ class AppView(tk.Tk):
         target = Path(path)
         try:
             target.write_text(gcode, encoding="utf-8")
+            self._remember_recent_dir(".nc", target, update_last_open=False)
         except Exception as e:
             messagebox.showerror("Save failed", f"{target}\n\n{e}")
 
