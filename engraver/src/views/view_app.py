@@ -33,12 +33,16 @@ from views.view_spinner import Spinner
 
 
 class AppView(tk.Tk):
+    # Default motion parameters used by G-code generation and time estimation.
+    # Keeping them centralized avoids mismatches between UI and export behavior.
     DEFAULT_FEED_RATE = 200.0
     TRAVEL_Z = 5.0
     CUT_Z = 0.0
 
     def __init__(self):
         super().__init__()
+        # Main GUI initialization happens here so widgets and state are created
+        # once and remain consistent for the lifetime of the app.
         self.spinner: tk.Toplevel | None = None
         self.title("Polygon Engraver")
         icon_path = Path(__file__).resolve().parents[2] / "assets" / "app-icon.png"
@@ -46,6 +50,7 @@ class AppView(tk.Tk):
             self._app_icon = tk.PhotoImage(file=str(icon_path))
             self.iconphoto(True, self._app_icon)
         except Exception:
+            # Icon load failure should not block app startup.
             self._app_icon = None
         self.geometry("1200x800")
         self.minsize(900, 600)
@@ -54,15 +59,17 @@ class AppView(tk.Tk):
         except Exception:
             pass
 
+        # Track startup sizing so layout-dependent calls happen once.
         self._first_load_done = False
         self._mapped = False
         self.bind("<Map>", self._on_map)
         self.bind("<Configure>", self._on_configure)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+        # Persist settings in a predictable place near the app.
         self._settings_path = Path(__file__).resolve().parents[2] / "settings.json"
 
-        # Shared state
+        # Shared state referenced across widgets and tool actions.
         self.model: Optional[GeometryInt] = None
         self.source_label_var = tk.StringVar(value="No file loaded")
         self.source_path: Optional[str] = None
@@ -71,16 +78,19 @@ class AppView(tk.Tk):
         self.selected_polylines = []
         self.generated_paths = []
         self.generated_gcode = None
+        # Load path generation defaults early so UI reflects saved values.
         settings = self._load_settings()
         path_settings = settings["path_generation"]
         self.hatch_angle_deg = path_settings["hatch_angle_deg"]
         self.hatch_spacing_px = path_settings["hatch_spacing_px"]
         self.cross_hatch = path_settings["cross_hatch"]
+        # Keep a copy to detect unsaved changes in the UI.
         self._loaded_settings = copy.deepcopy(settings)
         self._settings_dirty = False
         self.show_generated_paths = tk.BooleanVar(value=True)
         self.show_geometry = tk.BooleanVar(value=True)
         self.show_degenerate = tk.BooleanVar(value=True)
+        # Tk variables allow entry widgets to push changes into state.
         self._hatch_angle_var = tk.StringVar(value=str(self.hatch_angle_deg))
         self._hatch_spacing_var = tk.StringVar(value=str(self.hatch_spacing_px))
         self._cross_hatch_var = tk.BooleanVar(value=self.cross_hatch)
@@ -88,6 +98,7 @@ class AppView(tk.Tk):
         self._hatch_spacing_var.trace_add("write", self._on_settings_var_change)
         self._cross_hatch_var.trace_add("write", self._on_settings_var_change)
         self.properties_var = tk.StringVar(value="No selection")
+        # Tree bookkeeping drives context menus and properties display.
         self._tree_item_info = {}
         self._tree_item_action = {}
         self._tree_icon_shown = None
@@ -99,7 +110,7 @@ class AppView(tk.Tk):
         if "clam" in style.theme_names():
             style.theme_use("clam")
 
-        # Create main menubar
+        # Create main menubar before panels that rely on it.
         self.menubar = Menubar(self)
 
         self.rowconfigure(0, weight=1)
@@ -124,7 +135,7 @@ class AppView(tk.Tk):
         self._build_right_sidebar()
         self._update_settings_dirty()
 
-        # Default tabs
+        # Default tabs provide both 3D overview and 2D precision view.
         self.add_view("3D")
         self.add_view("2D")
 
@@ -133,6 +144,7 @@ class AppView(tk.Tk):
         self.update_properties()
 
     def _default_settings(self) -> dict:
+        # Canonical settings schema; update here when adding new options.
         return {
             "app": {
                 "version": 1,
@@ -145,6 +157,7 @@ class AppView(tk.Tk):
         }
 
     def _upgrade_settings(self, data: dict) -> dict:
+        # Normalize older/flat settings into the current schema.
         upgraded = dict(data)
         if "app" not in upgraded or not isinstance(upgraded.get("app"), dict):
             upgraded["app"] = {}
@@ -166,6 +179,7 @@ class AppView(tk.Tk):
         return upgraded
 
     def _load_settings(self) -> dict:
+        # Load settings from disk with validation and safe fallbacks.
         settings = self._default_settings()
         data: dict = {}
         save_needed = False
@@ -216,12 +230,14 @@ class AppView(tk.Tk):
         else:
             save_needed = True
 
+        # Persist any fixed/normalized values for future runs.
         if save_needed:
             self._save_settings(settings)
 
         return settings
 
     def _settings_from_vars(self) -> dict | None:
+        # Convert UI entry values into a settings dict or None if invalid.
         try:
             angle = float(self._hatch_angle_var.get())
             spacing = float(self._hatch_spacing_var.get())
@@ -241,6 +257,7 @@ class AppView(tk.Tk):
         }
 
     def _save_settings(self, settings: dict | None = None) -> None:
+        # Save settings from UI or a provided dict, with validation on input.
         if settings is None:
             settings = self._settings_from_vars()
             if settings is None:
@@ -249,6 +266,7 @@ class AppView(tk.Tk):
                     "Hatch angle and spacing must be numeric values.",
                 )
                 return
+            # Update live values so immediate actions use the saved settings.
             path_settings = settings["path_generation"]
             self.hatch_angle_deg = path_settings["hatch_angle_deg"]
             self.hatch_spacing_px = path_settings["hatch_spacing_px"]
@@ -266,6 +284,7 @@ class AppView(tk.Tk):
             pass
 
     def _update_settings_dirty(self) -> None:
+        # Keep the Save button state in sync with actual unsaved changes.
         current = self._settings_from_vars()
         if current is None:
             is_dirty = True
@@ -285,6 +304,7 @@ class AppView(tk.Tk):
         self._save_settings()
 
     def _on_restore_defaults(self) -> None:
+        # Reset UI to defaults without touching disk until Save is pressed.
         defaults = self._default_settings()["path_generation"]
         self._hatch_angle_var.set(str(defaults["hatch_angle_deg"]))
         self._hatch_spacing_var.set(str(defaults["hatch_spacing_px"]))
@@ -292,6 +312,7 @@ class AppView(tk.Tk):
         self._update_settings_dirty()
 
     def _on_reset_settings(self) -> None:
+        # Reload settings from disk, discarding current unsaved edits.
         settings = self._load_settings()
         path_settings = settings["path_generation"]
         self._hatch_angle_var.set(str(path_settings["hatch_angle_deg"]))
@@ -300,6 +321,7 @@ class AppView(tk.Tk):
         self._update_settings_dirty()
 
     def _build_left_sidebar(self) -> None:
+        # Scene tree provides access to geometry and generated paths.
         self.left_sidebar = ttk.Frame(self.main_frame, width=240)
         self.left_sidebar.grid(row=0, column=0, sticky="nsew")
         self.left_sidebar.grid_propagate(False)
@@ -326,6 +348,7 @@ class AppView(tk.Tk):
         self._tree_menu = tk.Menu(self, tearoff=False)
 
     def _init_tree_icons(self) -> None:
+        # Small colored squares indicate visibility state in the tree.
         size = 12
         pad = 6
         width = size + pad
@@ -337,12 +360,14 @@ class AppView(tk.Tk):
         self._tree_icon_hidden = hidden
 
     def _build_right_sidebar(self) -> None:
+        # Right sidebar holds path generation settings and properties summary.
         self.right_sidebar = ttk.Frame(self.main_frame, width=260)
         self.right_sidebar.grid(row=0, column=2, sticky="nsew")
         self.right_sidebar.grid_propagate(False)
         self.right_sidebar.rowconfigure(1, weight=1)
         self.right_sidebar.columnconfigure(0, weight=1)
 
+        # Path settings are only shown when the paths root is selected.
         self._path_settings = ttk.Frame(self.right_sidebar)
         self._path_settings.columnconfigure(1, weight=1)
         angle_label = ttk.Label(self._path_settings, text="Hatch angle (deg)")
@@ -399,10 +424,12 @@ class AppView(tk.Tk):
         props.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
 
     def _on_close(self) -> None:
+        # Save settings on exit to preserve the latest UI changes.
         self._save_settings()
         self.destroy()
 
     def _on_tree_select(self, _event) -> None:
+        # Update properties and show/hide the settings panel based on selection.
         selection = self.scene_tree.selection()
         if not selection:
             return
@@ -415,6 +442,7 @@ class AppView(tk.Tk):
             self._hide_path_settings()
 
     def _on_tree_left_click(self, event) -> str | None:
+        # Intercept icon clicks to toggle visibility instead of changing selection.
         row_id = self.scene_tree.identify_row(event.y)
         if not row_id:
             return None
@@ -442,6 +470,7 @@ class AppView(tk.Tk):
         return "break"
 
     def _show_path_settings(self) -> None:
+        # Sync UI entry values to internal state when showing the panel.
         if not hasattr(self, "_path_settings"):
             return
         self._hatch_angle_var.set(str(self.hatch_angle_deg))
@@ -455,6 +484,7 @@ class AppView(tk.Tk):
         self._path_settings.grid_remove()
 
     def _apply_hatch_settings(self, _event=None) -> None:
+        # Apply entry edits so previews use the latest values immediately.
         try:
             angle = float(self._hatch_angle_var.get())
             spacing = float(self._hatch_spacing_var.get())
@@ -467,6 +497,7 @@ class AppView(tk.Tk):
         self._update_settings_dirty()
 
     def _on_tree_right_click(self, event) -> None:
+        # Context menu is built dynamically per tree item type.
         row_id = self.scene_tree.identify_row(event.y)
         if not row_id:
             return
@@ -577,12 +608,14 @@ class AppView(tk.Tk):
         self._dismiss_tree_menu()
 
     def _dismiss_tree_menu(self) -> None:
+        # Close the context menu on outside interaction.
         if not self._tree_menu_posted:
             return
         self._tree_menu.unpost()
         self._tree_menu_posted = False
 
     def _on_tree_open(self, event) -> None:
+        # Persist expand state so the tree stays consistent across refreshes.
         row_id = event.widget.focus()
         action = self._tree_item_action.get(row_id)
         if not action:
@@ -594,6 +627,7 @@ class AppView(tk.Tk):
                 entry["expanded"] = True
 
     def _on_tree_close(self, event) -> None:
+        # Persist collapse state for generated path entries.
         row_id = event.widget.focus()
         action = self._tree_item_action.get(row_id)
         if not action:
@@ -605,6 +639,7 @@ class AppView(tk.Tk):
                 entry["expanded"] = False
 
     def _get_path_entry(self, index: int):
+        # Defensive lookup to avoid index errors when paths change.
         if index < 0:
             return None
         if index >= len(self.generated_paths):
@@ -612,6 +647,7 @@ class AppView(tk.Tk):
         return self.generated_paths[index]
 
     def _ensure_path_children(self, entry: dict) -> list[dict]:
+        # Ensure children are created once to drive tree visibility toggles.
         children = entry.get("children")
         if isinstance(children, list) and children:
             return children
@@ -640,6 +676,7 @@ class AppView(tk.Tk):
         return None
 
     def _toggle_geometry_visibility(self) -> None:
+        # Hide geometry and clear selection to prevent edits on hidden data.
         self.show_geometry.set(not self.show_geometry.get())
         if not self.show_geometry.get():
             self.selected_polygons = []
@@ -648,18 +685,21 @@ class AppView(tk.Tk):
         self.redraw_all()
 
     def _toggle_degenerate_visibility(self) -> None:
+        # Toggle drawing of degenerate polylines for debugging.
         self.show_degenerate.set(not self.show_degenerate.get())
         self._refresh_tree()
         self.update_properties()
         self.redraw_all()
 
     def _toggle_all_paths_visibility(self) -> None:
+        # Toggle all generated paths at once for quick comparisons.
         self.show_generated_paths.set(not self.show_generated_paths.get())
         self._refresh_tree()
         self.update_properties()
         self.redraw_all()
 
     def _remove_all_paths(self) -> None:
+        # Clearing paths also clears cached G-code and UI state.
         if not self.generated_paths:
             return
         self.generated_paths = []
@@ -670,6 +710,7 @@ class AppView(tk.Tk):
         self.redraw_all()
 
     def _remove_path(self, index: int) -> None:
+        # Remove a single path and invalidate cached G-code.
         entry = self._get_path_entry(index)
         if entry is None:
             return
@@ -680,6 +721,7 @@ class AppView(tk.Tk):
         self.redraw_all()
 
     def _toggle_path_visibility(self, index: int) -> None:
+        # Toggle one path's visibility while keeping the rest untouched.
         entry = self._get_path_entry(index)
         if entry is None:
             return
@@ -689,6 +731,7 @@ class AppView(tk.Tk):
         self.redraw_all()
 
     def _toggle_path_child_visibility(self, index: int, key: str) -> None:
+        # Toggle visibility of a child group (primary/secondary/boundary).
         entry = self._get_path_entry(index)
         if entry is None:
             return
@@ -701,6 +744,7 @@ class AppView(tk.Tk):
         self.redraw_all()
 
     def _refresh_tree(self) -> None:
+        # Rebuild the tree to reflect current model, paths, and visibility state.
         if not hasattr(self, "scene_tree"):
             return
 
@@ -709,6 +753,7 @@ class AppView(tk.Tk):
         self._tree_item_action = {}
         self.scene_tree.delete(*self.scene_tree.get_children(self.tree_geometry_id))
         self.scene_tree.delete(*self.scene_tree.get_children(self.tree_paths_id))
+        # Show aggregate path info, including estimated runtime when available.
         paths_info = "Generated paths"
         if self.generated_paths:
             estimate = self._estimate_gcode_for_entries(self.generated_paths)
@@ -721,6 +766,7 @@ class AppView(tk.Tk):
         self._tree_item_info[self.tree_paths_id] = paths_info
         self._tree_item_action[self.tree_paths_id] = ("paths_root", None)
 
+        # Geometry root includes source and basic counts for fast inspection.
         if self.model and self.model.polylines:
             source = self.source_path or "in-memory geometry"
             status = "shown" if self.show_geometry.get() else "hidden"
@@ -760,6 +806,7 @@ class AppView(tk.Tk):
             )
             self._tree_item_info[none_item] = "No geometry loaded"
 
+        # Each generated path gets its own node with visibility and estimate.
         if self.generated_paths:
             for idx, entry in enumerate(self.generated_paths):
                 polygon_index = entry.get("polygon_index", "?")
@@ -833,6 +880,7 @@ class AppView(tk.Tk):
             self._tree_item_info[none_item] = "No generated paths"
 
     def update_properties(self) -> None:
+        # Build a multiline status summary used by the properties panel.
         lines = []
         if self.model and self.model.polylines:
             source = self.source_path or "(in-memory geometry)"
@@ -851,6 +899,7 @@ class AppView(tk.Tk):
         else:
             lines.append("No geometry loaded")
 
+        # Selection details help users confirm the target region.
         if self.selected_polygons:
             selected = self.selected_polygons[0]["polygon"]
             holes = self.selected_polygons[0]["holes"]
@@ -868,6 +917,7 @@ class AppView(tk.Tk):
         )
         visibility = "shown" if self.show_generated_paths.get() else "hidden"
         lines.append(f"Generated paths: {visible_count}/{path_count} ({visibility})")
+        # Include travel and time estimates to guide machining decisions.
         if self.generated_paths:
             estimate = self._estimate_gcode_for_entries(self.generated_paths)
             if estimate:
@@ -884,13 +934,14 @@ class AppView(tk.Tk):
         self.properties_var.set("\n".join(lines))
 
     def _on_map(self, _):
+        # Track when the window becomes visible.
         self._mapped = True
 
     def _on_configure(self, _):
         if self._first_load_done or not self._mapped:
             return
 
-        # Debounce sziing events on startup: run after resize/placement bursts stop
+        # Debounce sizing events on startup: run after resize/placement bursts stop.
         if getattr(self, "_settle_job", None):
             self.after_cancel(self._settle_job)
 
@@ -908,13 +959,14 @@ class AppView(tk.Tk):
         # optional: unbind to avoid later calls
         self.unbind("<Map>")
         self.unbind("<Configure>")
-        self.on_first_loaded()  # <-- your method
+        self.on_first_loaded()  # hook for post-layout actions
 
     def on_first_loaded(self):
-        # run once when window is visible and size is final-ish
+        # Run once when window is visible and size is final-ish.
         self.fit_current()
 
     def maximize(self):
+        # Try platform-specific maximize options before falling back to geometry.
         self.update_idletasks()
         # 1) Try native "zoomed" (Windows, many X11)
         try:
@@ -936,6 +988,7 @@ class AppView(tk.Tk):
 
     @staticmethod
     def _as_point(pt) -> PointInt:
+        # Accept multiple point formats used by JSON and SVG tooling.
         if isinstance(pt, dict) and "x" in pt and "y" in pt:
             return PointInt(int(pt["x"]), int(pt["y"]))
         if (
@@ -948,6 +1001,7 @@ class AppView(tk.Tk):
 
     @staticmethod
     def load_geometry_from_json(path: Path) -> GeometryInt:
+        # Read geometry from JSON with support for legacy schemas.
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         scale = int(data.get("scale", 1) or 1)
@@ -974,12 +1028,14 @@ class AppView(tk.Tk):
 
     # Geometry management
     def set_geometry(self, geom: GeometryInt, source: str = ""):
+        # Replace the model and reset derived state like selections and paths.
         self.model = geom
         self.source_label_var.set(source or "(in-memory geometry)")
         self.source_path = source or None
         self.selected_polygons = []
         self.generated_paths = []
         self._clear_gcode_cache()
+        # Mark 3D view to refit once the new bounds are known.
         for i in range(self.notebook.index("end")):
             widget = self.notebook.nametowidget(self.notebook.tabs()[i])
             if isinstance(widget, View3D):
@@ -990,12 +1046,14 @@ class AppView(tk.Tk):
         self.redraw_all()
 
     def redraw_all(self):
+        # Ask every view to redraw to reflect any state changes.
         for i in range(self.notebook.index("end")):
             widget = self.notebook.nametowidget(self.notebook.tabs()[i])
             if hasattr(widget, "redraw"):
                 widget.redraw()
 
     def open_file_dialog(self):
+        # Unified dialog for loading JSON or SVG sources.
         path = filedialog.askopenfilename(
             title="Open geometry JSON",
             filetypes=[
@@ -1028,11 +1086,13 @@ class AppView(tk.Tk):
         tol: float = 0.25,
         export_json: str | None = None,
     ):
+        # Defer startup load until the UI loop is running.
         self._startup_load_params = (input_path, scale, tol)
         self._startup_export_json = export_json
         self.after(0, self._run_startup_load)
 
     def _run_startup_load(self):
+        # Single-shot startup loader triggered after the event loop starts.
         if not self._startup_load_params:
             return
         path, scale, tol = self._startup_load_params
@@ -1055,6 +1115,7 @@ class AppView(tk.Tk):
             messagebox.showerror("Load failed", f"{path}\n\n{e}")
 
     def _center_in_parent(self, win: tk.Toplevel):
+        # Center dialog windows over the main app to keep context obvious.
         win.update_idletasks()  # ensure geometry is calculated
 
         pw, ph = self.winfo_width(), self.winfo_height()
@@ -1068,7 +1129,7 @@ class AppView(tk.Tk):
         win.geometry(f"+{x}+{y}")
 
     def _show_spinner(self, message):
-        # show spinner dialog
+        # Show a transient spinner dialog for long-running tasks.
         self.spinner = tk.Toplevel(self)
         self.spinner.withdraw()
         self.spinner.overrideredirect(True)
@@ -1099,6 +1160,7 @@ class AppView(tk.Tk):
         self.spinner.deiconify()
 
     def open_svg_async(self, path: str, scale: int = 10000, tol: float = 0.25):
+        # Convert SVG on a worker thread to keep UI responsive.
         self._show_spinner("Processing…")
         threading.Thread(
             target=self._load_svg_worker, args=(path, scale, tol), daemon=True
@@ -1108,29 +1170,33 @@ class AppView(tk.Tk):
         try:
             geom = SvgConverter.svg_to_geometry_int(path, scale=scale, tol=tol)
         except Exception as e:
-            # report back to UI thread
+            # Report back to UI thread because Tk is not thread-safe.
             self.after(0, self._load_svg_failed, path, e)
             return
 
-        # hand result to UI thread
+        # Hand result to UI thread for safe widget updates.
         self.after(0, lambda: self._load_svg_done(path, geom))
 
     def _load_svg_done(self, path: str, geom):
+        # Apply the geometry after the conversion finishes.
         self._hide_spinner()
         self.set_geometry(geom, source=path)  # safe here
         self.fit_current()
 
     def _load_svg_failed(self, path: str, err: Exception):
+        # Ensure the spinner is dismissed before showing an error.
         self._hide_spinner()
         from tkinter import messagebox
 
         messagebox.showerror("Load failed", f"{path}\n\n{err}")
 
     def _hide_spinner(self):
+        # Defensive cleanup in case the dialog already closed.
         if self.spinner and self.spinner.winfo_exists():
             self.spinner.destroy()
 
     def _maybe_export_startup(self, geom: GeometryInt):
+        # Optional auto-export for CLI-driven workflows.
         if not self._startup_export_json:
             return
         export_path = Path(self._startup_export_json)
@@ -1142,6 +1208,7 @@ class AppView(tk.Tk):
             messagebox.showerror("Export failed", f"{export_path}\n\n{e}")
 
     def add_view(self, kind: str):
+        # Insert view tabs and select the newly created one.
         if kind == "2D":
             frame = View2D(self.notebook, self)
             title = "2D View"
@@ -1157,6 +1224,7 @@ class AppView(tk.Tk):
         return frame
 
     def fit_current(self):
+        # Fit the current view to geometry bounds.
         cur = self.notebook.select()
         if not cur:
             return
@@ -1165,6 +1233,7 @@ class AppView(tk.Tk):
             widget.fit_to_view()
 
     def fit_current_including_origin(self):
+        # Fit view while including origin for machining reference.
         cur = self.notebook.select()
         if not cur:
             return
@@ -1173,6 +1242,7 @@ class AppView(tk.Tk):
             widget.fit_to_view(include_origin=True)
 
     def centre_to_origin(self):
+        # Translate geometry so its center is at the world origin.
         if not self.model:
             messagebox.showinfo("Centre to Origin", "No geometry loaded.")
             return
@@ -1211,18 +1281,21 @@ class AppView(tk.Tk):
         self.fit_current()
 
     def simplify_polygons(self) -> None:
+        # Split self-intersections so paths can be generated reliably.
         self._run_polygon_processing(
             "Fixing self intersecting polygons…",
             lambda polylines, _scale: PolyProcessor.split_self_intersections(polylines),
         )
 
     def close_polygons(self) -> None:
+        # Close open polylines to create valid polygons.
         self._run_polygon_processing(
             "Closing polygons…",
             lambda polylines, _scale: PolyProcessor.close_open_polylines(polylines),
         )
 
     def clip_all(self) -> None:
+        # Clip intersections so overlapping regions are separated.
         self._run_polygon_processing(
             "Clipping polygons…",
             lambda polylines, scale: PolyProcessor.split_intersections_between_polygons(
@@ -1231,6 +1304,7 @@ class AppView(tk.Tk):
         )
 
     def extract_faces(self) -> None:
+        # Extract faces to rebuild polygon regions from linework.
         self._run_polygon_processing(
             "Extracting faces…",
             lambda polylines, scale: PolyProcessor.extract_faces_from_polylines(
@@ -1239,6 +1313,7 @@ class AppView(tk.Tk):
         )
 
     def _run_polygon_processing(self, message: str, func) -> None:
+        # Run geometry operations in a worker thread and show progress.
         if not self.model or not self.model.polylines:
             messagebox.showinfo("Geometry Operation", "No geometry loaded.")
             return
@@ -1260,6 +1335,7 @@ class AppView(tk.Tk):
         self.after(0, lambda: self._polygon_processing_done(result))
 
     def _polygon_processing_done(self, result) -> None:
+        # Replace geometry and reset dependent state after processing.
         self._hide_spinner()
         if not self.model:
             return
@@ -1282,14 +1358,17 @@ class AppView(tk.Tk):
         self.redraw_all()
 
     def _polygon_processing_failed(self, err: Exception) -> None:
+        # Show a friendly error message for processing failures.
         self._hide_spinner()
         messagebox.showerror("Geometry Operation Failed", f"{err}")
 
     def _format_svg_number(self, value: float) -> str:
+        # Compact float formatting keeps SVG files small and readable.
         text = f"{value:.6f}".rstrip("0").rstrip(".")
         return text if text else "0"
 
     def _write_svg(self, path: str):
+        # Serialize the current geometry to SVG for export or round-trip.
         if not self.model:
             return
         minx, miny, maxx, maxy = self.model.bounds()
@@ -1311,6 +1390,7 @@ class AppView(tk.Tk):
             ),
         ]
 
+        # Each polyline becomes a single SVG path in model space.
         for pl in self.model.polylines:
             if len(pl.points) < 2:
                 continue
@@ -1323,6 +1403,7 @@ class AppView(tk.Tk):
             f.write("\n".join(lines))
 
     def save_svg_as(self):
+        # Prompt for a filename and export the SVG.
         if not self.model:
             messagebox.showinfo("Save SVG", "No geometry loaded.")
             return
@@ -1341,6 +1422,7 @@ class AppView(tk.Tk):
         self.menubar.files_dirty = False
 
     def generate_gcode_for_all_paths(self) -> None:
+        # Build and save G-code for every generated path entry.
         if not self.generated_paths:
             messagebox.showinfo("Generate G-code", "No generated paths.")
             return
@@ -1355,6 +1437,7 @@ class AppView(tk.Tk):
         self._prompt_save_gcode(gcode)
 
     def generate_gcode_for_path(self, index: int) -> None:
+        # Build and save G-code for a single path entry.
         entry = self._get_path_entry(index)
         if entry is None:
             return
@@ -1374,6 +1457,7 @@ class AppView(tk.Tk):
         self._prompt_save_gcode(gcode)
 
     def _prompt_save_gcode(self, gcode: str) -> None:
+        # Prompt for a save location so output goes where the user expects.
         default_path = self._default_gcode_path()
         options = {
             "title": "Save G-code As",
@@ -1393,6 +1477,7 @@ class AppView(tk.Tk):
             messagebox.showerror("Save failed", f"{target}\n\n{e}")
 
     def _ensure_model_gcode_store(self) -> dict | None:
+        # Attach a cache to the model to persist generated G-code per path.
         if not self.model:
             return None
         store = getattr(self.model, "generated_gcode", None)
@@ -1402,11 +1487,13 @@ class AppView(tk.Tk):
         return store
 
     def _clear_gcode_cache(self) -> None:
+        # Clear any cached G-code when geometry or paths change.
         self.generated_gcode = None
         if self.model:
             self.model.generated_gcode = {}
 
     def _default_gcode_path(self) -> Path | None:
+        # Use the source filename when possible so exports are easy to locate.
         if self.source_path:
             source = Path(self.source_path)
             if source.suffix:
@@ -1416,10 +1503,12 @@ class AppView(tk.Tk):
 
     @staticmethod
     def _format_gcode_value(value: float) -> str:
+        # Fixed precision avoids noisy diffs and controller quirks.
         return f"{value:.4f}"
 
     @staticmethod
     def _format_duration(seconds: float) -> str:
+        # Format seconds into mm:ss or hh:mm:ss for readability.
         seconds = max(0, int(round(seconds)))
         minutes, secs = divmod(seconds, 60)
         hours, minutes = divmod(minutes, 60)
@@ -1429,6 +1518,7 @@ class AppView(tk.Tk):
 
     @classmethod
     def _estimate_gcode_time(cls, gcode: str) -> dict[str, float]:
+        # Simulate motion commands to estimate time and distance.
         pos_x = 0.0
         pos_y = 0.0
         feed_rate = cls.DEFAULT_FEED_RATE
@@ -1555,6 +1645,7 @@ class AppView(tk.Tk):
     def _collect_path_segments(
         self, entry: dict
     ) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+        # Gather segments in tree order so output matches UI expectations.
         if not isinstance(entry, dict):
             return []
         lines = entry.get("lines", {})
@@ -1577,10 +1668,15 @@ class AppView(tk.Tk):
         return segments
 
     def _build_gcode_for_entries(self, entries: list[dict]) -> str | None:
+        # Build a simple G-code program from path segments.
+        # Purpose: lift to travel height between segments, rapid to starts,
+        # then feed along each segment to produce an engraving toolpath.
         if not entries:
             return None
 
+        # Start with explicit units (mm) and absolute positioning for clarity.
         gcode_lines = ["G21", "G90"]
+        # Pre-format Z heights so every line uses consistent precision.
         travel_z = self._format_gcode_value(self.TRAVEL_Z)
         cut_z = self._format_gcode_value(self.CUT_Z)
         has_segments = False
@@ -1590,15 +1686,18 @@ class AppView(tk.Tk):
         pos_y = None
 
         for entry in entries:
+            # Normalize and order segments to keep output stable.
             segments = self._collect_path_segments(entry)
             if not segments:
                 continue
             
             has_segments = True
             polygon_index = entry.get("polygon_index", "?")
+            # Comments help users identify which polygon produced which moves.
             gcode_lines.append(f"; Path {polygon_index}")
             
             for (x0, y0), (x1, y1) in segments:
+                # Pick the closest endpoint to minimize travel distance.
                 if pos_x is None or pos_y is None:
                     start_x, start_y = x0, y0
                     end_x, end_y = x1, y1
@@ -1611,14 +1710,18 @@ class AppView(tk.Tk):
                     else:
                         start_x, start_y = x0, y0
                         end_x, end_y = x1, y1
+                # Lift to safe travel height before rapid moves.
                 gcode_lines.append(f"G0 Z{travel_z}")
+                # Rapid to the segment start to reduce non-cutting time.
                 gcode_lines.append(
                     f"G0 X{self._format_gcode_value(start_x)} "
                     f"Y{self._format_gcode_value(start_y)}"
                 )
 
+                # Drop to cut height and engrave along the segment.
                 gcode_lines.append(f"G0 Z{cut_z}")
                 
+                # Emit feed rate once to keep the G-code concise.
                 if not feed_set:
                     gcode_lines.append(
                         f"G1 X{self._format_gcode_value(end_x)} "
@@ -1630,11 +1733,13 @@ class AppView(tk.Tk):
                         f"G1 X{self._format_gcode_value(end_x)} "
                         f"Y{self._format_gcode_value(end_y)}"
                     )
+                # Track end position for the next segment's distance check.
                 pos_x, pos_y = end_x, end_y
         
         if not has_segments:
             return None
         
+        # Program end marker so controllers know the job is complete.
         gcode_lines.append("M2")
         
         return "\n".join(gcode_lines) + "\n"
@@ -1642,12 +1747,14 @@ class AppView(tk.Tk):
     def _estimate_gcode_for_entries(
         self, entries: list[dict]
     ) -> dict[str, float] | None:
+        # Estimate from generated G-code to match real output behavior.
         gcode = self._build_gcode_for_entries(entries)
         if not gcode:
             return None
         return self._estimate_gcode_time(gcode)
 
     def _collect_polygons_for_paths(self) -> list[dict]:
+        # Convert closed polylines into polygon entries for path generation.
         g = self.model
         if not g or not g.polylines:
             return []
@@ -1670,6 +1777,7 @@ class AppView(tk.Tk):
         return polygons
 
     def _selection_entries_from_indices(self, indices: list[int]) -> list[dict]:
+        # Build selection entries with hole detection for each polygon.
         polygons = self._collect_polygons_for_paths()
         if not polygons:
             return []
@@ -1692,6 +1800,7 @@ class AppView(tk.Tk):
         return selection
 
     def _selection_entries_from_generated_paths(self) -> list[dict]:
+        # Recreate selection from existing paths after geometry edits.
         indices = []
         seen = set()
         for entry in self.generated_paths:
@@ -1703,6 +1812,7 @@ class AppView(tk.Tk):
         return self._selection_entries_from_indices(indices)
 
     def _build_path_generation_selection(self, entries: list[dict]) -> list[dict]:
+        # Flatten selection into primitives safe to send to a worker thread.
         selection = []
         for entry in entries:
             polygon = entry["polygon"]
@@ -1717,6 +1827,7 @@ class AppView(tk.Tk):
         return selection
 
     def _generate_paths_from_selection(self, selection, append: bool = False) -> None:
+        # Dispatch path generation on a worker thread for responsiveness.
         if not selection:
             return
         hatch_angle = float(self.hatch_angle_deg)
@@ -1731,6 +1842,7 @@ class AppView(tk.Tk):
         ).start()
 
     def _regenerate_paths_after_geometry_change(self) -> bool:
+        # Attempt to rebuild paths so edits preserve the user's workflow.
         if not self.generated_paths:
             return False
         selection_entries = self.selected_polygons
@@ -1745,6 +1857,7 @@ class AppView(tk.Tk):
         return True
 
     def generate_paths_for_selection(self, append: bool = False) -> None:
+        # Public entry point used by menus and context actions.
         if not self.selected_polygons:
             messagebox.showinfo("Generate Paths", "No polygons selected.")
             return
@@ -1761,11 +1874,13 @@ class AppView(tk.Tk):
         scale: int,
         append: bool,
     ):
+        # Worker routine: compute fill and boundary segments per polygon.
         try:
             paths = []
             for entry in selection:
                 polygon_points = [PointInt(x, y) for x, y in entry["polygon_points"]]
                 holes = [[PointInt(x, y) for x, y in hole] for hole in entry["holes"]]
+                # Primary hatch provides the main fill pattern.
                 primary = self._hatch_lines_for_polygon(
                     polygon_points,
                     holes,
@@ -1775,6 +1890,7 @@ class AppView(tk.Tk):
                 )
                 secondary = []
                 if cross_hatch:
+                    # Cross-hatch adds perpendicular lines for denser coverage.
                     secondary = self._hatch_lines_for_polygon(
                         polygon_points,
                         holes,
@@ -1782,6 +1898,7 @@ class AppView(tk.Tk):
                         hatch_spacing,
                         scale,
                     )
+                # Boundary segments outline the polygon and holes.
                 boundary_outer = self._polygon_boundary_segments(polygon_points, scale)
                 boundary_children = [
                     {
@@ -1806,6 +1923,7 @@ class AppView(tk.Tk):
                             "visible": True,
                         }
                     )
+                # Child entries mirror the groups shown in the tree.
                 children = [{"key": "primary", "name": "Fill (primary)", "visible": True}]
                 if secondary:
                     children.append(
@@ -1829,6 +1947,7 @@ class AppView(tk.Tk):
         self.after(0, self._generate_paths_done, paths, append)
 
     def _generate_paths_done(self, paths, append: bool = False):
+        # Apply generated paths and refresh the UI.
         self._hide_spinner()
         if append:
             self.generated_paths.extend(paths)
@@ -1841,11 +1960,13 @@ class AppView(tk.Tk):
         self.fit_current()
 
     def _generate_paths_failed(self, err: Exception):
+        # Report failures after the spinner is dismissed.
         self._hide_spinner()
         messagebox.showerror("Generate Paths Failed", f"{err}")
 
     @staticmethod
     def _frange(start: float, end: float, step: float):
+        # Floating range with a small epsilon to include the end value.
         value = start
         while value <= end + 1e-6:
             yield value
@@ -1853,6 +1974,7 @@ class AppView(tk.Tk):
 
     @staticmethod
     def _line_segment_intersection(direction, normal, offset, seg_a, seg_b):
+        # Compute intersection of a hatch line with a polygon edge.
         dx, dy = direction
         nx, ny = normal
         ax, ay = seg_a
@@ -1875,6 +1997,7 @@ class AppView(tk.Tk):
 
     @staticmethod
     def _polygon_line_intervals(points, direction, normal, offset):
+        # Return intervals along the hatch line that are inside the polygon.
         intersections = []
         for i in range(len(points)):
             p0 = points[i]
@@ -1902,6 +2025,7 @@ class AppView(tk.Tk):
 
     @staticmethod
     def _build_edge_cache(points, direction, normal):
+        # Cache edge values to speed up repeated intersection tests.
         dx, dy = direction
         nx, ny = normal
         edges = []
@@ -1921,6 +2045,7 @@ class AppView(tk.Tk):
 
     @staticmethod
     def _polygon_line_intervals_cached(edges, offset):
+        # Fast interval computation using cached edge data.
         intersections = []
         for base, denom, adot, sdot in edges:
             t = (offset - base) / denom
@@ -1947,6 +2072,7 @@ class AppView(tk.Tk):
 
     @staticmethod
     def _merge_intervals(intervals):
+        # Merge overlapping intervals to simplify subtraction.
         if not intervals:
             return []
         intervals = sorted(intervals, key=lambda item: item[0])
@@ -1961,6 +2087,7 @@ class AppView(tk.Tk):
 
     @staticmethod
     def _subtract_intervals(base_intervals, cut_intervals):
+        # Remove hole intervals from outer intervals to avoid cutting voids.
         if not cut_intervals:
             return list(base_intervals)
         result = []
@@ -1982,6 +2109,7 @@ class AppView(tk.Tk):
 
     @staticmethod
     def _polygon_boundary_segments(points: List[PointInt], scale: int):
+        # Convert polygon edges to normalized line segment coordinates.
         if len(points) < 2:
             return []
         segments = []
@@ -2005,9 +2133,11 @@ class AppView(tk.Tk):
         spacing_world: float,
         scale: int,
     ):
+        # Generate evenly spaced hatch lines clipped to polygon minus holes.
         if len(polygon_points) < 3:
             return []
 
+        # Convert spacing into model units and compute the hatch direction.
         spacing = max(1.0, spacing_world * scale)
         direction = (
             math.cos(math.radians(angle_deg)),
@@ -2015,6 +2145,7 @@ class AppView(tk.Tk):
         )
         normal = (-direction[1], direction[0])
 
+        # Determine hatch extents from the polygon bounding box.
         points = [(p.x, p.y) for p in polygon_points]
         xs = [p[0] for p in points]
         ys = [p[1] for p in points]
@@ -2033,6 +2164,7 @@ class AppView(tk.Tk):
         start = math.floor(min_o / spacing) * spacing
         end = math.ceil(max_o / spacing) * spacing
 
+        # Cache edge data so each hatch line clips quickly.
         hole_points = [[(p.x, p.y) for p in hole] for hole in holes]
         outer_edges = self._build_edge_cache(points, direction, normal)
         hole_edges = [
@@ -2040,6 +2172,7 @@ class AppView(tk.Tk):
         ]
         lines = []
 
+        # Sweep hatch lines across the polygon and clip to valid intervals.
         steps = int(math.floor((end - start) / spacing + 1.0 + 1e-6))
         for step in range(steps):
             offset = start + step * spacing
@@ -2073,6 +2206,7 @@ class AppView(tk.Tk):
         return lines
 
     def clear_generated_paths(self) -> None:
+        # Public helper to clear all generated paths and refresh UI state.
         if not self.generated_paths:
             return
         self.generated_paths = []
