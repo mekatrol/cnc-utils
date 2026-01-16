@@ -78,6 +78,7 @@ class AppView(tk.Tk):
         self.selected_polylines = []
         self.generated_paths = []
         self.generated_gcode = None
+        self.generated_gcode_segments = []
         # Load path generation defaults early so UI reflects saved values.
         settings = self._load_settings()
         path_settings = settings["path_generation"]
@@ -88,6 +89,7 @@ class AppView(tk.Tk):
         self._loaded_settings = copy.deepcopy(settings)
         self._settings_dirty = False
         self.show_generated_paths = tk.BooleanVar(value=True)
+        self.show_generated_gcode = tk.BooleanVar(value=True)
         self.show_geometry = tk.BooleanVar(value=True)
         self.show_degenerate = tk.BooleanVar(value=True)
         # Tk variables allow entry widgets to push changes into state.
@@ -345,6 +347,7 @@ class AppView(tk.Tk):
             "", "end", text="Geometries", open=True
         )
         self.tree_paths_id = self.scene_tree.insert("", "end", text="Paths", open=True)
+        self.tree_gcode_id = self.scene_tree.insert("", "end", text="G-code", open=True)
         self._tree_menu = tk.Menu(self, tearoff=False)
 
     def _init_tree_icons(self) -> None:
@@ -453,6 +456,9 @@ class AppView(tk.Tk):
         if row_id == self.tree_paths_id:
             self._toggle_all_paths_visibility()
             return "break"
+        if row_id == self.tree_gcode_id:
+            self._toggle_gcode_visibility()
+            return "break"
         action = self._tree_item_action.get(row_id)
         if not action:
             return "break"
@@ -506,6 +512,8 @@ class AppView(tk.Tk):
             action = ("paths_root", None)
         elif row_id == self.tree_geometry_id:
             action = ("geometry_root", None)
+        elif row_id == self.tree_gcode_id:
+            action = ("gcode_root", None)
         else:
             action = self._tree_item_action.get(row_id)
         if not action:
@@ -556,6 +564,12 @@ class AppView(tk.Tk):
             )
             self._tree_menu.add_command(
                 label="Remove All", command=self._remove_all_paths
+            )
+        elif kind == "gcode_root":
+            is_visible = self.show_generated_gcode.get()
+            label = "Hide" if is_visible else "Show"
+            self._tree_menu.add_command(
+                label=label, command=self._toggle_gcode_visibility
             )
         elif kind == "path":
             entry = self._get_path_entry(payload)
@@ -698,6 +712,13 @@ class AppView(tk.Tk):
         self.update_properties()
         self.redraw_all()
 
+    def _toggle_gcode_visibility(self) -> None:
+        # Toggle G-code path rendering independently of generated paths.
+        self.show_generated_gcode.set(not self.show_generated_gcode.get())
+        self._refresh_tree()
+        self.update_properties()
+        self.redraw_all()
+
     def _remove_all_paths(self) -> None:
         # Clearing paths also clears cached G-code and UI state.
         if not self.generated_paths:
@@ -753,6 +774,7 @@ class AppView(tk.Tk):
         self._tree_item_action = {}
         self.scene_tree.delete(*self.scene_tree.get_children(self.tree_geometry_id))
         self.scene_tree.delete(*self.scene_tree.get_children(self.tree_paths_id))
+        self.scene_tree.delete(*self.scene_tree.get_children(self.tree_gcode_id))
         # Show aggregate path info, including estimated runtime when available.
         paths_info = "Generated paths"
         if self.generated_paths:
@@ -765,6 +787,31 @@ class AppView(tk.Tk):
                 )
         self._tree_item_info[self.tree_paths_id] = paths_info
         self._tree_item_action[self.tree_paths_id] = ("paths_root", None)
+        self.scene_tree.item(self.tree_paths_id, image="")
+
+        gcode_segments = self.generated_gcode_segments
+        gcode_visible = self.show_generated_gcode.get()
+        gcode_status = "shown" if gcode_visible else "hidden"
+        gcode_icon = (
+            self._tree_icon_shown if gcode_visible else self._tree_icon_hidden
+        )
+        if gcode_segments:
+            cut_count = sum(1 for seg in gcode_segments if seg.get("kind") == "cut")
+            travel_count = sum(
+                1 for seg in gcode_segments if seg.get("kind") == "travel"
+            )
+            z_count = sum(1 for seg in gcode_segments if seg.get("kind") == "z")
+            gcode_info = (
+                "Generated G-code\n"
+                f"Segments: {len(gcode_segments)} ({gcode_status})\n"
+                f"Cut: {cut_count}, Travel: {travel_count}, Z: {z_count}"
+            )
+            self.scene_tree.item(self.tree_gcode_id, image=gcode_icon)
+        else:
+            gcode_info = "No generated G-code"
+            self.scene_tree.item(self.tree_gcode_id, image=self._tree_icon_hidden)
+        self._tree_item_info[self.tree_gcode_id] = gcode_info
+        self._tree_item_action[self.tree_gcode_id] = ("gcode_root", None)
 
         # Geometry root includes source and basic counts for fast inspection.
         if self.model and self.model.polylines:
@@ -917,6 +964,13 @@ class AppView(tk.Tk):
         )
         visibility = "shown" if self.show_generated_paths.get() else "hidden"
         lines.append(f"Generated paths: {visible_count}/{path_count} ({visibility})")
+        if self.generated_gcode_segments:
+            gcode_status = "shown" if self.show_generated_gcode.get() else "hidden"
+            lines.append(
+                f"G-code: {len(self.generated_gcode_segments)} segments ({gcode_status})"
+            )
+        else:
+            lines.append("G-code: none")
         # Include travel and time estimates to guide machining decisions.
         if self.generated_paths:
             estimate = self._estimate_gcode_for_entries(self.generated_paths)
@@ -1431,9 +1485,13 @@ class AppView(tk.Tk):
             messagebox.showinfo("Generate G-code", "No path segments to export.")
             return
         self.generated_gcode = gcode
+        self.generated_gcode_segments = self._parse_gcode_segments(gcode)
         store = self._ensure_model_gcode_store()
         if store is not None:
             store["all"] = gcode
+        self._refresh_tree()
+        self.update_properties()
+        self.redraw_all()
         self._prompt_save_gcode(gcode)
 
     def generate_gcode_for_path(self, index: int) -> None:
@@ -1446,6 +1504,8 @@ class AppView(tk.Tk):
             messagebox.showinfo("Generate G-code", "No path segments to export.")
             return
         entry["gcode"] = gcode
+        self.generated_gcode = gcode
+        self.generated_gcode_segments = self._parse_gcode_segments(gcode)
         store = self._ensure_model_gcode_store()
         if store is not None:
             paths = store.get("paths")
@@ -1454,6 +1514,9 @@ class AppView(tk.Tk):
             polygon_index = entry.get("polygon_index", index)
             paths[polygon_index] = gcode
             store["paths"] = paths
+        self._refresh_tree()
+        self.update_properties()
+        self.redraw_all()
         self._prompt_save_gcode(gcode)
 
     def _prompt_save_gcode(self, gcode: str) -> None:
@@ -1489,6 +1552,7 @@ class AppView(tk.Tk):
     def _clear_gcode_cache(self) -> None:
         # Clear any cached G-code when geometry or paths change.
         self.generated_gcode = None
+        self.generated_gcode_segments = []
         if self.model:
             self.model.generated_gcode = {}
 
@@ -1641,6 +1705,115 @@ class AppView(tk.Tk):
                 continue
             normalized.append(((x0, y0), (x1, y1)))
         return normalized
+
+    def _parse_gcode_segments(self, gcode: str) -> list[dict]:
+        # Parse G-code into segments for visualization.
+        if not gcode:
+            return []
+        pos_x = 0.0
+        pos_y = 0.0
+        pos_z = 0.0
+        active_motion = None
+        abs_mode = True
+        units_scale = 1.0
+        segments = []
+
+        for raw_line in gcode.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if ";" in line:
+                line = line.split(";", 1)[0].strip()
+            if not line:
+                continue
+            if "(" in line:
+                line = line.split("(", 1)[0].strip()
+            if not line:
+                continue
+            tokens = line.split()
+            motion_in_line = None
+            x_val = None
+            y_val = None
+            z_val = None
+            for token in tokens:
+                if not token:
+                    continue
+                prefix = token[0].upper()
+                value = token[1:]
+                if not value:
+                    continue
+                if prefix == "G":
+                    try:
+                        g_code = int(float(value))
+                    except Exception:
+                        continue
+                    if g_code in (0, 1):
+                        motion_in_line = g_code
+                    elif g_code == 90:
+                        abs_mode = True
+                    elif g_code == 91:
+                        abs_mode = False
+                    elif g_code == 20:
+                        units_scale = 25.4
+                    elif g_code == 21:
+                        units_scale = 1.0
+                elif prefix == "X":
+                    try:
+                        x_val = float(value) * units_scale
+                    except Exception:
+                        continue
+                elif prefix == "Y":
+                    try:
+                        y_val = float(value) * units_scale
+                    except Exception:
+                        continue
+                elif prefix == "Z":
+                    try:
+                        z_val = float(value) * units_scale
+                    except Exception:
+                        continue
+            if motion_in_line is not None:
+                active_motion = motion_in_line
+            if active_motion not in (0, 1):
+                continue
+            if x_val is None and y_val is None and z_val is None:
+                continue
+
+            if abs_mode:
+                target_x = pos_x if x_val is None else x_val
+                target_y = pos_y if y_val is None else y_val
+                target_z = pos_z if z_val is None else z_val
+            else:
+                target_x = pos_x if x_val is None else pos_x + x_val
+                target_y = pos_y if y_val is None else pos_y + y_val
+                target_z = pos_z if z_val is None else pos_z + z_val
+
+            if (
+                target_x == pos_x
+                and target_y == pos_y
+                and target_z == pos_z
+            ):
+                continue
+
+            xy_changed = (target_x != pos_x) or (target_y != pos_y)
+            z_changed = target_z != pos_z
+            if xy_changed:
+                kind = "cut" if active_motion == 1 else "travel"
+            elif z_changed:
+                kind = "z"
+            else:
+                continue
+            segments.append(
+                {
+                    "start": (pos_x, pos_y, pos_z),
+                    "end": (target_x, target_y, target_z),
+                    "kind": kind,
+                }
+            )
+            pos_x = target_x
+            pos_y = target_y
+            pos_z = target_z
+        return segments
 
     def _collect_path_segments(
         self, entry: dict

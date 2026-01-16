@@ -12,6 +12,9 @@ from views.view_constants import (
     COLORS,
     EMPTY_TEXT_COLOR,
     FILL_COLOR_2D,
+    GCODE_CUT_COLOR,
+    GCODE_TRAVEL_COLOR,
+    GCODE_Z_COLOR,
     GRID_AXIS_COLOR,
     GRID_CENTER_CROSS_COLOR,
     GRID_LINE_COLOR,
@@ -263,6 +266,7 @@ class View2D(BaseView):
                 c.create_oval(
                     xs - r, ys - r, xs + r, ys + r, outline=color, fill=color
                 )
+        self._draw_gcode_paths()
         self._draw_axis_gizmo(w, h)
 
     def _draw_generated_paths(self) -> None:
@@ -325,6 +329,46 @@ class View2D(BaseView):
                 xs1 = x1 * self.zoom + self.offset[0]
                 ys1 = -y1 * self.zoom + self.offset[1]
                 c.create_line(xs0, ys0, xs1, ys1, fill=BOUNDARY_COLOR, width=1.5)
+
+    def _draw_gcode_paths(self) -> None:
+        show_gcode = getattr(self.app, "show_generated_gcode", None)
+        if show_gcode is not None:
+            try:
+                if not show_gcode.get():
+                    return
+            except Exception:
+                if not show_gcode:
+                    return
+        segments = getattr(self.app, "generated_gcode_segments", [])
+        if not segments:
+            return
+        c = self.canvas
+        marker_len = 8.0
+        for segment in segments:
+            kind = segment.get("kind")
+            if kind == "cut":
+                color = GCODE_CUT_COLOR
+            elif kind == "travel":
+                color = GCODE_TRAVEL_COLOR
+            else:
+                color = GCODE_Z_COLOR
+            (x0, y0, _z0) = segment["start"]
+            (x1, y1, _z1) = segment["end"]
+            xs0 = x0 * self.zoom + self.offset[0]
+            ys0 = -y0 * self.zoom + self.offset[1]
+            xs1 = x1 * self.zoom + self.offset[0]
+            ys1 = -y1 * self.zoom + self.offset[1]
+            if kind == "z" and x0 == x1 and y0 == y1:
+                c.create_line(
+                    xs0,
+                    ys0 - marker_len * 0.5,
+                    xs0,
+                    ys0 + marker_len * 0.5,
+                    fill=color,
+                    width=1.5,
+                )
+            else:
+                c.create_line(xs0, ys0, xs1, ys1, fill=color, width=1.5)
 
     def _draw_axis_gizmo(self, w: int, h: int) -> None:
         # Fixed-size axis arrows anchored at the world origin.

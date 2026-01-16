@@ -17,6 +17,9 @@ from views.view_constants import (
     COLORS,
     EMPTY_TEXT_COLOR,
     FILL_COLOR_3D,
+    GCODE_CUT_COLOR,
+    GCODE_TRAVEL_COLOR,
+    GCODE_Z_COLOR,
     GRID_LINE_COLOR,
     HATCH_COLOR,
     ORIGIN_BALL_COLOR,
@@ -321,6 +324,7 @@ class View3D(BaseView):
                         last_pt = (xs, ys)
 
         self._draw_generated_paths(w, h, cx, cy)
+        self._draw_gcode_paths(w, h, cx, cy)
         self._draw_axis_gizmo(w, h, cx, cy)
 
     def _draw_generated_paths(self, w: int, h: int, cx: float, cy: float) -> None:
@@ -389,6 +393,37 @@ class View3D(BaseView):
                 xs0, ys0, _ = self._project_point(x_rel0, y_rel0, 0.0, w, h)
                 xs1, ys1, _ = self._project_point(x_rel1, y_rel1, 0.0, w, h)
                 c.create_line(xs0, ys0, xs1, ys1, fill=BOUNDARY_COLOR, width=1.5)
+
+    def _draw_gcode_paths(self, w: int, h: int, cx: float, cy: float) -> None:
+        show_gcode = getattr(self.app, "show_generated_gcode", None)
+        if show_gcode is not None:
+            try:
+                if not show_gcode.get():
+                    return
+            except Exception:
+                if not show_gcode:
+                    return
+        segments = getattr(self.app, "generated_gcode_segments", [])
+        if not segments:
+            return
+        c = self.canvas
+        for segment in segments:
+            kind = segment.get("kind")
+            if kind == "cut":
+                color = GCODE_CUT_COLOR
+            elif kind == "travel":
+                color = GCODE_TRAVEL_COLOR
+            else:
+                color = GCODE_Z_COLOR
+            (x0, y0, z0) = segment["start"]
+            (x1, y1, z1) = segment["end"]
+            x_rel0 = x0 - cx
+            y_rel0 = y0 - cy
+            x_rel1 = x1 - cx
+            y_rel1 = y1 - cy
+            xs0, ys0, _ = self._project_point(x_rel0, y_rel0, z0, w, h)
+            xs1, ys1, _ = self._project_point(x_rel1, y_rel1, z1, w, h)
+            c.create_line(xs0, ys0, xs1, ys1, fill=color, width=1.5)
 
     def _project_polygon(
         self, points, w: int, h: int, cx: float, cy: float, scale: int
