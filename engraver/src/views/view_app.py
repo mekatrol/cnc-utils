@@ -1562,34 +1562,57 @@ class AppView(tk.Tk):
         has_segments = False
         feed_rate = self.DEFAULT_FEED_RATE
         feed_set = False
+        pos_x = None
+        pos_y = None
 
         for entry in entries:
             segments = self._collect_path_segments(entry)
             if not segments:
                 continue
+            
             has_segments = True
             polygon_index = entry.get("polygon_index", "?")
             gcode_lines.append(f"; Path {polygon_index}")
+            
             for (x0, y0), (x1, y1) in segments:
+                if pos_x is None or pos_y is None:
+                    start_x, start_y = x0, y0
+                    end_x, end_y = x1, y1
+                else:
+                    dist_start = (x0 - pos_x) ** 2 + (y0 - pos_y) ** 2
+                    dist_end = (x1 - pos_x) ** 2 + (y1 - pos_y) ** 2
+                    if dist_end < dist_start:
+                        start_x, start_y = x1, y1
+                        end_x, end_y = x0, y0
+                    else:
+                        start_x, start_y = x0, y0
+                        end_x, end_y = x1, y1
                 gcode_lines.append(f"G0 Z{travel_z}")
                 gcode_lines.append(
-                    f"G0 X{self._format_gcode_value(x0)} Y{self._format_gcode_value(y0)}"
+                    f"G0 X{self._format_gcode_value(start_x)} "
+                    f"Y{self._format_gcode_value(start_y)}"
                 )
+
                 gcode_lines.append(f"G0 Z{cut_z}")
+                
                 if not feed_set:
                     gcode_lines.append(
-                        f"G1 X{self._format_gcode_value(x1)} "
-                        f"Y{self._format_gcode_value(y1)} F{feed_rate:.1f}"
+                        f"G1 X{self._format_gcode_value(end_x)} "
+                        f"Y{self._format_gcode_value(end_y)} F{feed_rate:.1f}"
                     )
                     feed_set = True
                 else:
                     gcode_lines.append(
-                        f"G1 X{self._format_gcode_value(x1)} "
-                        f"Y{self._format_gcode_value(y1)}"
+                        f"G1 X{self._format_gcode_value(end_x)} "
+                        f"Y{self._format_gcode_value(end_y)}"
                     )
+                pos_x, pos_y = end_x, end_y
+        
         if not has_segments:
             return None
+        
         gcode_lines.append("M2")
+        
         return "\n".join(gcode_lines) + "\n"
 
     def _estimate_gcode_for_entries(
