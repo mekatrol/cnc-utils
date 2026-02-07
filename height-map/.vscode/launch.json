@@ -42,6 +42,24 @@
         "--unlock"
       ],
       "justMyCode": true
+    },
+    {
+      "name": "Python: viewer.py",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/viewer.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      },
+      "args": [
+        "heightmap.csv",
+        "--mode",
+        "surface",
+        "--shade"
+      ],
+      "justMyCode": true
     }
   ]
 }
