@@ -1,0 +1,47 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: main.py",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      },
+      "args": [
+        "--port",
+        "/dev/ttyUSB0",
+        "--baud",
+        "115200",
+        "--start-x",
+        "0",
+        "--start-y",
+        "0",
+        "--width",
+        "20",
+        "--height",
+        "20",
+        "--steps-x",
+        "5",
+        "--steps-y",
+        "5",
+        "--retract-z",
+        "1",
+        "--max-probe-travel",
+        "39",
+        "--probe-feed",
+        "60",
+        "--travel-feed",
+        "600",
+        "--settle",
+        "0.1",
+        "--home",
+        "--unlock"
+      ],
+      "justMyCode": true
+    }
+  ]
+}
