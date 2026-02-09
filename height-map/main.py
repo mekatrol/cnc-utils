@@ -849,7 +849,7 @@ class YamlSettings:
 
     def get(self, key_path: str, default: Any) -> Any:
         """
-        Read a setting by dotted path, e.g. "connection.last_port".
+        Read a setting by dotted path, e.g. "connection.port".
 
         If missing, returns default.
         """
@@ -981,8 +981,8 @@ class YamlSettings:
 
 class MainWindow(QMainWindow):
     # Settings keys (stored in YAML).
-    _KEY_LAST_PORT = "connection.last_port"
-    _KEY_LAST_BAUD = "connection.last_baud"
+    _KEY_LAST_PORT = "connection.port"
+    _KEY_LAST_BAUD = "connection.baud"
     _KEY_UNLOCK = "probe.send_unlock"
     _KEY_HOME = "probe.send_home"
 
@@ -1243,6 +1243,16 @@ class MainWindow(QMainWindow):
                 rects.append(s.availableGeometry())
             except Exception:
                 pass
+
+        # Fallback: if Qt reports no screens for any reason, use a safe default.
+        if not rects:
+            try:
+                ps = QGuiApplication.primaryScreen()
+                if ps is not None:
+                    rects.append(ps.availableGeometry())
+            except Exception:
+                pass
+
         return rects
 
     def _rect_is_visible_on_any_screen(self, r: QRect) -> bool:
@@ -1256,7 +1266,12 @@ class MainWindow(QMainWindow):
         """
         if not r.isValid() or r.width() < 50 or r.height() < 50:
             return False
-        for sr in self._available_screen_rects():
+
+        screens = self._available_screen_rects()
+        if not screens:
+            return True  # nothing to validate against; do not block restore
+
+        for sr in screens:
             if r.intersects(sr):
                 return True
         return False
@@ -1270,12 +1285,12 @@ class MainWindow(QMainWindow):
         - Persist maximized state.
         - Ignore overriding position if the window was minimized at last save.
         - Support multiple screens and avoid restoring off-screen.
+        - If the saved position is no longer available (e.g. monitor unplugged), move
+        the window onto an available screen.
         """
         was_minimized = bool(self._settings.get(self._KEY_WIN_MIN, False))
         was_maximized = bool(self._settings.get(self._KEY_WIN_MAX, False))
 
-        # If the window was minimized when saved, do not force a potentially odd geometry
-        # (users often minimize into a different workflow). We still restore maximized state.
         if not was_minimized:
             x = self._settings.get(self._KEY_WIN_X, None)
             y = self._settings.get(self._KEY_WIN_Y, None)
@@ -1283,22 +1298,27 @@ class MainWindow(QMainWindow):
             h = self._settings.get(self._KEY_WIN_H, None)
 
             if all(isinstance(v, int) for v in [x, y, w, h]):
-                r = QRect(int(x), int(y), int(w), int(h))
-                if self._rect_is_visible_on_any_screen(r):
-                    self.setGeometry(r)
+                saved = QRect(int(x), int(y), int(w), int(h))
+
+                if self._rect_is_visible_on_any_screen(saved):
+                    # Saved geometry still lands on a connected screen.
+                    self.setGeometry(saved)
                 else:
-                    # Screen topology changed; center on the primary screen with saved size if reasonable.
-                    primary = QGuiApplication.primaryScreen()
-                    if primary is not None:
-                        pr = primary.availableGeometry()
-                        ww = max(200, min(r.width(), pr.width()))
-                        hh = max(150, min(r.height(), pr.height()))
-                        cx = pr.x() + (pr.width() - ww) // 2
-                        cy = pr.y() + (pr.height() - hh) // 2
-                        self.setGeometry(QRect(cx, cy, ww, hh))
+                    # Saved position is off-screen (likely monitor layout changed).
+                    # Restore size (clamped), but re-home to an available screen.
+
+                    screens = self._available_screen_rects()
+                    target = screens[0] if screens else QRect(0, 0, 1024, 768)
+
+                    ww = max(200, min(saved.width(), target.width()))
+                    hh = max(150, min(saved.height(), target.height()))
+
+                    cx = target.x() + (target.width() - ww) // 2
+                    cy = target.y() + (target.height() - hh) // 2
+
+                    self.setGeometry(QRect(cx, cy, ww, hh))
 
         if was_maximized:
-            # showMaximized() is safe before show(); Qt will apply it when shown.
             self.showMaximized()
 
     def _save_main_window_state(self) -> None:
@@ -1693,8 +1713,8 @@ def main() -> int:
     app = QApplication(sys.argv)
 
     # Controls where QStandardPaths.AppConfigLocation points (prevents "main.py" as the folder name).
-    app.setOrganizationName("mekatrol")
-    app.setApplicationName("mekatrol-pcb-cnc")
+    app.setOrganizationName("Mekatrol")
+    app.setApplicationName("MekatrolPCBCNC")
 
     _install_qt_exception_hook(app)
 
