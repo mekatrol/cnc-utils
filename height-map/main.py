@@ -938,8 +938,6 @@ def main() -> int:
                     wait_idle=True,
                     idle_timeout_s=60.0,
                 )
-
-                grbl.run_step("M18", "Disable steppers (M18)", timeout_s=10.0)
             except Exception as ex:
                 print(
                     f"Warning: failed to retract Z to top before close: {ex}",
