@@ -27,7 +27,8 @@ from typing import Generic, List, Optional, Tuple, TypeVar, Any, Dict
 import serial
 from serial.tools import list_ports
 
-from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot, QStandardPaths
+from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot, QStandardPaths, QRect
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -781,26 +782,20 @@ class YamlSettings:
     - Uses the OS-standard app config directory via QStandardPaths.
     """
 
-    def __init__(
-        self, org_name: str, app_name: str, filename: str = "settings.yaml"
-    ) -> None:
-        self._org_name = org_name
+    def __init__(self, app_name: str, filename: str = "settings.yaml") -> None:
         self._app_name = app_name
         self._filename = filename
 
         # Determine a stable per-user config folder.
         base = QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)
         if not base:
-            # Very rare; fallback to user home config.
             base = str(Path.home() / ".config" / app_name)
 
         self._dir = Path(base)
         self._path = self._dir / self._filename
 
-        # In-memory settings dict (always a dict).
         self._data: Dict[str, Any] = {}
 
-        # Try importing PyYAML for robust parsing/writing.
         try:
             import yaml  # type: ignore
 
@@ -829,7 +824,6 @@ class YamlSettings:
             if isinstance(parsed, dict):
                 self._data = parsed
         except Exception:
-            # Keep app resilient: settings read errors should never crash the UI.
             self._data = {}
 
     def save(self) -> None:
@@ -847,19 +841,17 @@ class YamlSettings:
             else:
                 text = self._dump_minimal_yaml(self._data)
 
-            # Atomic-ish write: write to temp then replace.
             tmp = self._path.with_suffix(self._path.suffix + ".tmp")
             tmp.write_text(text, encoding="utf-8")
             os.replace(tmp, self._path)
         except Exception:
-            # Keep app resilient: settings write errors should not crash the UI.
             pass
 
     def get(self, key_path: str, default: Any) -> Any:
         """
         Read a setting by dotted path, e.g. "connection.last_port".
 
-        If missing or wrong type, returns default.
+        If missing, returns default.
         """
         cur: Any = self._data
         for part in key_path.split("."):
@@ -906,10 +898,8 @@ class YamlSettings:
                 return True
             if s.lower() == "false":
                 return False
-            # quoted string
             if (len(s) >= 2) and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
                 return s[1:-1]
-            # int / float
             try:
                 if "." in s or "e" in s.lower():
                     return float(s)
@@ -926,10 +916,8 @@ class YamlSettings:
                 continue
 
             indent = len(line) - len(stripped)
-            # Only support 2-space indentation levels.
             level = indent // 2
 
-            # Pop to the correct parent level.
             while stack and stack[-1][0] > level:
                 stack.pop()
             if not stack:
@@ -944,12 +932,10 @@ class YamlSettings:
 
             parent = stack[-1][1]
             if rest == "":
-                # "key:" begins a nested mapping.
                 child: Dict[str, Any] = {}
                 parent[key] = child
                 stack.append((level + 1, child))
             else:
-                # "key: value"
                 parent[key] = parse_scalar(rest)
 
         return root
@@ -970,7 +956,6 @@ class YamlSettings:
             if isinstance(v, (int, float)):
                 return str(v)
             s = str(v)
-            # Quote strings with characters that are likely to confuse YAML.
             if (
                 any(ch in s for ch in [":", "#", "\n", "\r", "\t"])
                 or s.strip() != s
@@ -1001,14 +986,20 @@ class MainWindow(QMainWindow):
     _KEY_UNLOCK = "probe.send_unlock"
     _KEY_HOME = "probe.send_home"
 
+    # Main window persistence.
+    _KEY_WIN_X = "ui.main_window.x"
+    _KEY_WIN_Y = "ui.main_window.y"
+    _KEY_WIN_W = "ui.main_window.width"
+    _KEY_WIN_H = "ui.main_window.height"
+    _KEY_WIN_MAX = "ui.main_window.maximized"
+    _KEY_WIN_MIN = "ui.main_window.minimized"
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("GRBL Heightmap Probe (Qt6)")
 
         # YAML settings stored in the OS-standard config directory.
-        self._settings = YamlSettings(
-            "MekatrolTools", "GrblHeightmapProbe", "settings.yaml"
-        )
+        self._settings = YamlSettings(QApplication.applicationName(), "settings.yaml")
         self._settings.load()
 
         self._grbl_live: Optional[Grbl] = None
@@ -1201,6 +1192,10 @@ class MainWindow(QMainWindow):
 
         self._refresh_ports()
 
+        # --- Main window persistence (geometry + maximized state)
+        # Restoring geometry is safe here (after widgets exist).
+        self._restore_main_window_state()
+
     def _restore_settings(self) -> None:
         """
         Restore the last-used connection choices and probe toggles.
@@ -1234,6 +1229,112 @@ class MainWindow(QMainWindow):
         self._settings.set(self._KEY_UNLOCK, self.chk_unlock.isChecked())
         self._settings.set(self._KEY_HOME, self.chk_home.isChecked())
         self._settings.save()
+
+    def _available_screen_rects(self) -> List[QRect]:
+        """
+        Return the available geometry rectangles for all screens.
+
+        availableGeometry() accounts for taskbars/docks, which is what users expect
+        when restoring window positions across multiple monitors.
+        """
+        rects: List[QRect] = []
+        for s in QGuiApplication.screens():
+            try:
+                rects.append(s.availableGeometry())
+            except Exception:
+                pass
+        return rects
+
+    def _rect_is_visible_on_any_screen(self, r: QRect) -> bool:
+        """
+        Determine whether a rect is plausibly visible on any connected screen.
+
+        We accept any intersection at all (even partial), which handles:
+        - different DPI / scaling changes
+        - monitor layout changes (slight offsets)
+        - restoring a window that was partially off-screen
+        """
+        if not r.isValid() or r.width() < 50 or r.height() < 50:
+            return False
+        for sr in self._available_screen_rects():
+            if r.intersects(sr):
+                return True
+        return False
+
+    def _restore_main_window_state(self) -> None:
+        """
+        Restore MainWindow size, location and maximized state.
+
+        Requirements handled:
+        - Persist window size and location.
+        - Persist maximized state.
+        - Ignore overriding position if the window was minimized at last save.
+        - Support multiple screens and avoid restoring off-screen.
+        """
+        was_minimized = bool(self._settings.get(self._KEY_WIN_MIN, False))
+        was_maximized = bool(self._settings.get(self._KEY_WIN_MAX, False))
+
+        # If the window was minimized when saved, do not force a potentially odd geometry
+        # (users often minimize into a different workflow). We still restore maximized state.
+        if not was_minimized:
+            x = self._settings.get(self._KEY_WIN_X, None)
+            y = self._settings.get(self._KEY_WIN_Y, None)
+            w = self._settings.get(self._KEY_WIN_W, None)
+            h = self._settings.get(self._KEY_WIN_H, None)
+
+            if all(isinstance(v, int) for v in [x, y, w, h]):
+                r = QRect(int(x), int(y), int(w), int(h))
+                if self._rect_is_visible_on_any_screen(r):
+                    self.setGeometry(r)
+                else:
+                    # Screen topology changed; center on the primary screen with saved size if reasonable.
+                    primary = QGuiApplication.primaryScreen()
+                    if primary is not None:
+                        pr = primary.availableGeometry()
+                        ww = max(200, min(r.width(), pr.width()))
+                        hh = max(150, min(r.height(), pr.height()))
+                        cx = pr.x() + (pr.width() - ww) // 2
+                        cy = pr.y() + (pr.height() - hh) // 2
+                        self.setGeometry(QRect(cx, cy, ww, hh))
+
+        if was_maximized:
+            # showMaximized() is safe before show(); Qt will apply it when shown.
+            self.showMaximized()
+
+    def _save_main_window_state(self) -> None:
+        """
+        Save MainWindow size, location and maximized state.
+
+        Notes:
+        - If the window is minimized, we do NOT overwrite stored geometry (per requirement).
+          We still record that it was minimized, so restore can avoid forcing geometry.
+        - If maximized, we save normalGeometry() as the restore size/position, and save maximized=True.
+        """
+        try:
+            is_min = self.isMinimized()
+            is_max = self.isMaximized()
+
+            # Always store these flags.
+            self._settings.set(self._KEY_WIN_MIN, bool(is_min))
+            self._settings.set(self._KEY_WIN_MAX, bool(is_max))
+
+            if is_min:
+                # Requirement: ignore overriding position if window is minimized.
+                # Therefore: do not replace x/y/w/h with minimized-state artifacts.
+                self._settings.save()
+                return
+
+            # Use the normal geometry as the stored rectangle when maximized.
+            g = self.normalGeometry() if is_max else self.geometry()
+
+            self._settings.set(self._KEY_WIN_X, int(g.x()))
+            self._settings.set(self._KEY_WIN_Y, int(g.y()))
+            self._settings.set(self._KEY_WIN_W, int(g.width()))
+            self._settings.set(self._KEY_WIN_H, int(g.height()))
+            self._settings.save()
+        except Exception:
+            # Window persistence should never crash the app.
+            pass
 
     def _list_serial_ports(self) -> List[Tuple[str, str]]:
         """
@@ -1314,7 +1415,6 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _connect(self) -> None:
-        # UI-side exceptions should never close the app.
         try:
             if self._grbl_live is not None:
                 return
@@ -1349,12 +1449,10 @@ class MainWindow(QMainWindow):
                 self._grbl_live = None
                 QMessageBox.critical(self, "Connect failed", str(ex))
         except Exception as ex:
-            # Catch-all: do not allow unexpected slot exceptions to kill the app.
             QMessageBox.critical(self, "Unexpected error", str(ex))
 
     @Slot()
     def _disconnect(self) -> None:
-        # UI-side exceptions should never close the app.
         try:
             self._poll_timer.stop()
             if self._grbl_live is not None:
@@ -1427,7 +1525,6 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _start_probe(self) -> None:
-        # UI-side exceptions should never close the app.
         try:
             if self._worker_thread is not None:
                 return
@@ -1508,7 +1605,6 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _on_worker_ok(self, msg: str) -> None:
-        # Worker completion should never close the app, even if message boxes fail.
         try:
             self._append_log(msg)
             self._cleanup_worker()
@@ -1520,7 +1616,6 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_worker_error(self, err: str) -> None:
         # Requirement: do not close the app if an error occurs.
-        # Probe errors are handled here, logged, and shown to the user, but the app stays open.
         try:
             self._append_log(f"ERROR: {err}")
             self._cleanup_worker()
@@ -1546,6 +1641,9 @@ class MainWindow(QMainWindow):
             self._save_settings()
         except Exception:
             pass
+
+        # Save window geometry/state. If minimized, geometry is not overwritten (per requirement).
+        self._save_main_window_state()
 
         try:
             self._poll_timer.stop()
@@ -1585,7 +1683,6 @@ def _install_qt_exception_hook(app: QApplication) -> None:
             msg = f"{exctype.__name__}: {value}"
             QMessageBox.critical(None, "Unhandled exception", msg)
         except Exception:
-            # If Qt is not in a good state, fall back to the default hook.
             pass
         old_hook(exctype, value, tb)
 
@@ -1595,14 +1692,13 @@ def _install_qt_exception_hook(app: QApplication) -> None:
 def main() -> int:
     app = QApplication(sys.argv)
 
-    app.setOrganizationName("Mekatrol")
+    # Controls where QStandardPaths.AppConfigLocation points (prevents "main.py" as the folder name).
+    app.setOrganizationName("mekatrol")
     app.setApplicationName("mekatrol-pcb-cnc")
 
-    # Keep the application resilient: show a dialog on unhandled exceptions rather than just exiting.
     _install_qt_exception_hook(app)
 
     w = MainWindow()
-    w.resize(1100, 750)
     w.show()
     return app.exec()
 
