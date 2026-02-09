@@ -6,6 +6,14 @@ GRBL Z height-map probe for a rectangular area (e.g., Vevor 3018 with probe inpu
 - Records Z at each (X,Y) where the probe triggers.
 - Outputs CSV (and optional JSON) with the sampled points.
 
+Grid definition:
+- The probe grid is defined by stepping in X/Y by a *distance*:
+  --step-distance-x and --step-distance-y (mm).
+- Positions start at (start-x, start-y) and advance by the given distance.
+- The final limit positions (start-x + width, start-y + height) are ALWAYS included.
+  If the final stepped position does not land exactly on the limits, an extra point
+  at each limit is appended so there is a probe at those limits.
+
 Safety/behavior:
 - Moves to a retract height before any XY move (optional; enabled by default here).
 - Uses G38.2 with a caller-specified max travel, but clamps the travel so it cannot exceed GRBL soft limits.
@@ -20,7 +28,8 @@ Soft-limit clamping notes (important):
 - It then computes the maximum safe downward travel and clamps G38.2 distance accordingly.
 
 Typical usage:
-  ./z_height_map.py --port /dev/ttyUSB0 --start-x 0 --start-y 0 --width 100 --height 80 --steps-x 11 --steps-y 9 \
+  ./z_height_map.py --port /dev/ttyUSB0 --start-x 0 --start-y 0 --width 100 --height 80 \
+    --step-distance-x 10 --step-distance-y 10 \
     --retract-z 5 --max-probe-travel 15 --probe-feed 60 --travel-feed 600 --out heightmap.csv
 """
 
@@ -401,10 +410,59 @@ class Grbl:
 
 
 def linspace(start: float, end: float, steps: int) -> List[float]:
+    """
+    Kept for backwards compatibility / utility; this script's grid now uses step-distance
+    generation instead of a fixed number of steps.
+    """
     if steps < 2:
         return [start]
     span = end - start
     return [start + span * (i / (steps - 1)) for i in range(steps)]
+
+
+def build_axis_by_step_distance(
+    start: float, length: float, step_distance: float
+) -> List[float]:
+    """
+    Build axis positions from start to (start + length) stepping by step_distance.
+
+    Rules:
+    - Always includes the starting position: start.
+    - Advances by step_distance (mm) until the next step would be >= end.
+    - Always includes the final limit: end = start + length.
+      If the stepping doesn't land exactly on the end, an extra final point is appended.
+
+    Examples:
+      start=0, length=100, step=10 => [0,10,20,...,100]
+      start=0, length=95,  step=10 => [0,10,20,...,90,95]   (extra end point)
+      start=0, length=0,   step=10 => [0]
+    """
+    if step_distance <= 0:
+        raise ValueError("step_distance must be > 0")
+    if length < 0:
+        raise ValueError("length must be >= 0")
+
+    end = start + length
+    if length == 0:
+        return [start]
+
+    pts: List[float] = [start]
+    i = 1
+    # Add intermediate points strictly before end
+    while True:
+        v = start + i * step_distance
+        if v >= end:
+            break
+        pts.append(v)
+        i += 1
+
+    # Ensure the end limit is included (avoid duplicates within a small tolerance)
+    if abs(pts[-1] - end) > 1e-9:
+        pts.append(end)
+    else:
+        pts[-1] = end
+
+    return pts
 
 
 def clamp_probe_travel_to_soft_limits(
@@ -462,8 +520,8 @@ def probe_height_map(
     start_y: float,
     width: float,
     height: float,
-    steps_x: int,
-    steps_y: int,
+    step_distance_x: float,
+    step_distance_y: float,
     retract_z: float,
     max_probe_travel: float,
     probe_feed: float,
@@ -472,8 +530,11 @@ def probe_height_map(
     unlock: bool,
     home: bool,
 ) -> Result[List[SamplePoint]]:
-    if steps_x <= 0 or steps_y <= 0:
-        return Result.fail("steps_x and steps_y must be positive.")
+    # Grid is now defined by step distances (mm), not a fixed sample count.
+    if step_distance_x <= 0 or step_distance_y <= 0:
+        return Result.fail("step_distance_x and step_distance_y must be > 0.")
+    if width < 0 or height < 0:
+        return Result.fail("width and height must be >= 0.")
     if max_probe_travel <= 0:
         return Result.fail("max_probe_travel must be > 0.")
     if probe_feed <= 0 or travel_feed <= 0:
@@ -500,9 +561,23 @@ def probe_height_map(
         if not r.ok:
             return Result.fail(r.error or f"{ctx} failed")
 
-    # Precompute grid (work coordinates)
-    xs = linspace(start_x, start_x + width, steps_x)
-    ys = linspace(start_y, start_y + height, steps_y)
+    # Precompute grid (work coordinates) by step distance, always including the end limits.
+    try:
+        xs = build_axis_by_step_distance(start_x, width, step_distance_x)
+        ys = build_axis_by_step_distance(start_y, height, step_distance_y)
+    except Exception as ex:
+        return Result.fail(f"Failed to build probe grid: {ex}")
+
+    # Derived step counts (useful for logging / JSON output)
+    steps_x = len(xs)
+    steps_y = len(ys)
+    print(
+        f"Grid: X samples={steps_x} (step {step_distance_x}mm)  "
+        f"Y samples={steps_y} (step {step_distance_y}mm)"
+    )
+    print(
+        f"X range: {xs[0]:.3f} .. {xs[-1]:.3f}   Y range: {ys[0]:.3f} .. {ys[-1]:.3f}"
+    )
 
     samples: List[SamplePoint] = []
 
@@ -667,11 +742,20 @@ def main() -> int:
         required=True,
         help="Height of area (mm) in +Y direction",
     )
+
+    # Replaces --steps-x/--steps-y:
+    # Step distances define the grid spacing; the final limits are always included.
     ap.add_argument(
-        "--steps-x", type=int, required=True, help="Number of samples along X (>=1)"
+        "--step-distance-x",
+        type=float,
+        required=True,
+        help="Step distance along X (mm). End limit (start-x+width) is always included.",
     )
     ap.add_argument(
-        "--steps-y", type=int, required=True, help="Number of samples along Y (>=1)"
+        "--step-distance-y",
+        type=float,
+        required=True,
+        help="Step distance along Y (mm). End limit (start-y+height) is always included.",
     )
 
     ap.add_argument(
@@ -733,8 +817,8 @@ def main() -> int:
             start_y=args.start_y,
             width=args.width,
             height=args.height,
-            steps_x=args.steps_x,
-            steps_y=args.steps_y,
+            step_distance_x=args.step_distance_x,
+            step_distance_y=args.step_distance_y,
             retract_z=args.retract_z,
             max_probe_travel=args.max_probe_travel,
             probe_feed=args.probe_feed,
@@ -751,14 +835,25 @@ def main() -> int:
         write_csv(args.out, points)
         print(f"\nWrote CSV: {args.out}")
 
+        # Derive steps_x/steps_y for reporting/JSON from the sampled indices.
+        # (This stays correct even with serpentine scanning.)
+        steps_x = 0
+        steps_y = 0
+        if points:
+            steps_x = max(p.ix for p in points) + 1
+            steps_y = max(p.iy for p in points) + 1
+
         if args.out_json:
             payload = {
                 "start_x": args.start_x,
                 "start_y": args.start_y,
                 "width": args.width,
                 "height": args.height,
-                "steps_x": args.steps_x,
-                "steps_y": args.steps_y,
+                "step_distance_x": args.step_distance_x,
+                "step_distance_y": args.step_distance_y,
+                # Derived counts, since the grid is distance-based:
+                "steps_x": steps_x,
+                "steps_y": steps_y,
                 "retract_z": args.retract_z,
                 "max_probe_travel": args.max_probe_travel,
                 "probe_feed": args.probe_feed,
@@ -776,6 +871,10 @@ def main() -> int:
                 f"Samples: {len(points)}  Z(min/avg/max): "
                 f"{min(zs):.4f} / {sum(zs) / len(zs):.4f} / {max(zs):.4f} (mm)"
             )
+
+        # Also print derived grid size (useful now that steps are not a CLI input).
+        if steps_x and steps_y:
+            print(f"Derived grid: steps_x={steps_x} steps_y={steps_y}")
 
         return 0
 
@@ -801,6 +900,14 @@ def main() -> int:
                     timeout_s=30.0,
                     wait_idle=True,
                     idle_timeout_s=60.0,
+                )
+
+                # Disable stepper motors (turn off holding torque).
+                # Common GRBL: M18 (often M84 is an alias, but M18 is the usual).
+                grbl.run_step(
+                    "M18",
+                    "Disable steppers (M18)",
+                    timeout_s=10.0,
                 )
             except Exception as ex:
                 # Do not mask the original exception; just report and proceed to close.
