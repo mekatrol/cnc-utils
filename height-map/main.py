@@ -2,35 +2,19 @@
 """
 GRBL Z height-map probe for a rectangular area (e.g., Vevor 3018 with probe input)
 
-- Probes a grid across a specified rectangle in the active work coordinate system (e.g., G54).
-- Records Z at each (X,Y) where the probe triggers.
-- Outputs CSV (and optional JSON) with the sampled points.
+Goal (your change request):
+- Assume the job starts at "world" X=0, Y=0 (at the current location).
+- Do a probe at world (0,0) to establish world Z=0 at the probe contact point.
+- After that, use world coordinates for all actions:
+  - We accomplish this by issuing a temporary coordinate shift: G92 Z0
+    (non-persistent; does NOT write EEPROM).
+- Also print world coordinates even if GRBL status reports only MPos by maintaining
+  a synthetic WCO override derived from MPos at the job start/probe contact.
 
-Grid definition:
-- The probe grid is defined by stepping in X/Y by a *distance*:
-  --step-distance-x and --step-distance-y (mm).
-- Positions start at (start-x, start-y) and advance by the given distance.
-- The final limit positions (start-x + width, start-y + height) are ALWAYS included.
-  If the final stepped position does not land exactly on the limits, an extra point
-  at each limit is appended so there is a probe at those limits.
-
-Safety/behavior:
-- Moves to a retract height before any XY move (optional; enabled by default here).
-- Uses G38.2 with a caller-specified max travel, but clamps the travel so it cannot exceed GRBL soft limits.
-- Uses a serpentine scan pattern to reduce rapids.
-
-Soft-limit clamping notes (important):
-- GRBL soft limits are enforced in MACHINE coordinates (MPos).
-- The Z soft-limit minimum is typically at MPosZ == -$132 when homed at MPosZ == 0.
-- Before each probe, this script reads:
-  - Current MPosZ via "?" status
-  - $132 (max Z travel) via "$132"
-- It then computes the maximum safe downward travel and clamps G38.2 distance accordingly.
-
-Typical usage:
-  ./z_height_map.py --port /dev/ttyUSB0 --start-x 0 --start-y 0 --width 100 --height 80 \
-    --step-distance-x 10 --step-distance-y 10 \
-    --retract-z 5 --max-probe-travel 15 --probe-feed 60 --travel-feed 600 --out heightmap.csv
+Notes:
+- This does NOT write any GRBL settings (no $10=, etc).
+- G92 is temporary (clears on reset, or can be cleared by G92.1).
+- Soft-limit clamping remains based on machine coordinates (MPos) and $132.
 """
 
 from __future__ import annotations
@@ -100,7 +84,7 @@ class SamplePoint:
     iy: int
     x: float
     y: float
-    z: float  # Z in work coordinates (best-effort; see notes below)
+    z: float  # Z in "world" coordinates after G92 Z0 (best-effort)
 
 
 def describe_command(cmd: str) -> List[str]:
@@ -128,6 +112,7 @@ def describe_command(cmd: str) -> List[str]:
         "G1": "(G1) Linear move at feed rate.",
         "G38.2": "(G38.2) Probe toward target; ALARM if not triggered within distance.",
         "M5": "(M5) Spindle stop.",
+        "G92": "(G92) Temporary coordinate offset (non-persistent).",
     }
 
     out: List[str] = []
@@ -148,6 +133,10 @@ class Grbl:
             timeout=timeout,
             write_timeout=timeout,
         )
+
+        # Synthetic WCO override for when status does not include WPos/WCO.
+        # Interpreted as: WPos = MPos - _wco_override
+        self._wco_override: Optional[Tuple[float, float, float]] = None
 
     def close(self) -> None:
         try:
@@ -225,20 +214,88 @@ class Grbl:
                 return line
 
     def get_state(self, timeout_s: float = 2.0) -> str:
-        """
-        Returns the GRBL state from the status line, e.g. 'Idle', 'Run', 'Hold', 'Alarm'.
-        """
         status = self.query_status_line(timeout_s=timeout_s)
         m = STATUS_STATE_RE.search(status)
         if not m:
             raise RuntimeError(f"Could not parse state from status line: {status}")
         return m.group(1)
 
+    def get_status_pos(self, timeout_s: float = 2.0) -> StatusPos:
+        status = self.query_status_line(timeout_s=timeout_s)
+
+        mpos: Optional[Tuple[float, float, float]] = None
+        wpos: Optional[Tuple[float, float, float]] = None
+        wco: Optional[Tuple[float, float, float]] = None
+
+        m = STATUS_MPOS_RE.search(status)
+        if m:
+            mpos = (float(m.group(1)), float(m.group(2)), float(m.group(3)))
+
+        w = STATUS_WPOS_RE.search(status)
+        if w:
+            wpos = (float(w.group(1)), float(w.group(2)), float(w.group(3)))
+
+        c = STATUS_WCO_RE.search(status)
+        if c:
+            wco = (float(c.group(1)), float(c.group(2)), float(c.group(3)))
+
+        return StatusPos(mpos=mpos, wpos=wpos, wco=wco)
+
+    def capture_world_xy_zero_from_current_mpos(
+        self, *, status_timeout_s: float = 2.0
+    ) -> None:
+        """
+        Assume the *current physical position* is world X=0, Y=0.
+        Store an override so we can display WPos even if status doesn't provide WPos/WCO.
+        Z is left unchanged here; we set Z later after the probe contact.
+        """
+        sp = self.get_status_pos(timeout_s=status_timeout_s)
+        if sp.mpos is None:
+            raise RuntimeError(
+                "Cannot capture world XY=0: status did not include MPos."
+            )
+        mx, my, _ = sp.mpos
+
+        oz = self._wco_override[2] if self._wco_override is not None else 0.0
+        self._wco_override = (mx, my, oz)
+
+    def set_world_z_zero_from_current_mpos(
+        self, *, status_timeout_s: float = 2.0
+    ) -> None:
+        """
+        Assume the *current physical position* is world Z=0.
+        (We call this at probe contact at world X=0,Y=0.)
+        """
+        sp = self.get_status_pos(timeout_s=status_timeout_s)
+        if sp.mpos is None:
+            raise RuntimeError("Cannot set world Z=0: status did not include MPos.")
+        mx, my, mz = sp.mpos
+
+        ox = self._wco_override[0] if self._wco_override is not None else mx
+        oy = self._wco_override[1] if self._wco_override is not None else my
+        self._wco_override = (ox, oy, mz)
+
+    def best_effort_wpos(self, timeout_s: float = 2.0) -> Tuple[float, float, float]:
+        """
+        Prefer WPos if present; else compute from (MPos+WCO); else compute from (MPos+override).
+        """
+        sp = self.get_status_pos(timeout_s=timeout_s)
+        if sp.wpos is not None:
+            return sp.wpos
+        if sp.mpos is not None and sp.wco is not None:
+            mx, my, mz = sp.mpos
+            ox, oy, oz = sp.wco
+            return (mx - ox, my - oy, mz - oz)
+        if sp.mpos is not None and self._wco_override is not None:
+            mx, my, mz = sp.mpos
+            ox, oy, oz = self._wco_override
+            return (mx - ox, my - oy, mz - oz)
+        raise RuntimeError(
+            "Status did not contain usable WPos, or (MPos+WCO) to derive it, "
+            "and no override has been captured."
+        )
+
     def _format_status_line(self, status: str) -> str:
-        """
-        Extracts state and best-effort position from a raw GRBL status line
-        and formats it for logging.
-        """
         m_state = STATUS_STATE_RE.search(status)
         state = m_state.group(1) if m_state else "?"
 
@@ -252,6 +309,13 @@ class Grbl:
         if m and c:
             mx, my, mz = map(float, m.groups())
             ox, oy, oz = map(float, c.groups())
+            return (
+                f"State={state}  WPos X={mx - ox:.3f} Y={my - oy:.3f} Z={mz - oz:.3f}"
+            )
+
+        if m and self._wco_override is not None:
+            mx, my, mz = map(float, m.groups())
+            ox, oy, oz = self._wco_override
             return (
                 f"State={state}  WPos X={mx - ox:.3f} Y={my - oy:.3f} Z={mz - oz:.3f}"
             )
@@ -271,13 +335,6 @@ class Grbl:
         poll_s: float = 0.05,
         status_timeout_s: float = 2.0,
     ) -> List[str]:
-        """
-        Sends a command (waits for 'ok'), then polls status until the controller
-        reports 'Idle', printing live position updates while waiting.
-
-        Note: When the sender is streaming commands quickly, '?' responses can interleave.
-        This implementation expects the port is used by this process alone.
-        """
         lines = self.send(cmd, timeout_s=send_timeout_s)
 
         deadline = time.monotonic() + float(idle_timeout_s)
@@ -308,43 +365,6 @@ class Grbl:
                 raise RuntimeError("Controller entered ALARM while waiting for Idle")
 
             time.sleep(poll_s)
-
-    def get_status_pos(self, timeout_s: float = 2.0) -> StatusPos:
-        status = self.query_status_line(timeout_s=timeout_s)
-
-        mpos: Optional[Tuple[float, float, float]] = None
-        wpos: Optional[Tuple[float, float, float]] = None
-        wco: Optional[Tuple[float, float, float]] = None
-
-        m = STATUS_MPOS_RE.search(status)
-        if m:
-            mpos = (float(m.group(1)), float(m.group(2)), float(m.group(3)))
-
-        w = STATUS_WPOS_RE.search(status)
-        if w:
-            wpos = (float(w.group(1)), float(w.group(2)), float(w.group(3)))
-
-        c = STATUS_WCO_RE.search(status)
-        if c:
-            wco = (float(c.group(1)), float(c.group(2)), float(c.group(3)))
-
-        return StatusPos(mpos=mpos, wpos=wpos, wco=wco)
-
-    def best_effort_wpos(self, timeout_s: float = 2.0) -> Tuple[float, float, float]:
-        """
-        Prefer WPos if present; else compute WPos from MPos and WCO if both present.
-        If neither is possible, raise.
-        """
-        sp = self.get_status_pos(timeout_s=timeout_s)
-        if sp.wpos is not None:
-            return sp.wpos
-        if sp.mpos is not None and sp.wco is not None:
-            mx, my, mz = sp.mpos
-            ox, oy, oz = sp.wco
-            return (mx - ox, my - oy, mz - oz)
-        raise RuntimeError(
-            "Status did not contain usable WPos, or (MPos+WCO) to derive it."
-        )
 
     def get_probe_result(self, response_lines: List[str]) -> Optional[ProbeResult]:
         for line in response_lines:
@@ -380,6 +400,7 @@ class Grbl:
         idle_timeout_s: float = 30.0,
     ) -> Result[List[str]]:
         try:
+            # Print current position in "world" if we can (WPos, or derived).
             try:
                 wx, wy, wz = self.best_effort_wpos(timeout_s=status_timeout_s)
                 print(f"Current WPos: X={wx:.3f} Y={wy:.3f} Z={wz:.3f}")
@@ -409,34 +430,9 @@ class Grbl:
             return Result.fail(f"{context}: {ex}")
 
 
-def linspace(start: float, end: float, steps: int) -> List[float]:
-    """
-    Kept for backwards compatibility / utility; this script's grid now uses step-distance
-    generation instead of a fixed number of steps.
-    """
-    if steps < 2:
-        return [start]
-    span = end - start
-    return [start + span * (i / (steps - 1)) for i in range(steps)]
-
-
 def build_axis_by_step_distance(
     start: float, length: float, step_distance: float
 ) -> List[float]:
-    """
-    Build axis positions from start to (start + length) stepping by step_distance.
-
-    Rules:
-    - Always includes the starting position: start.
-    - Advances by step_distance (mm) until the next step would be >= end.
-    - Always includes the final limit: end = start + length.
-      If the stepping doesn't land exactly on the end, an extra final point is appended.
-
-    Examples:
-      start=0, length=100, step=10 => [0,10,20,...,100]
-      start=0, length=95,  step=10 => [0,10,20,...,90,95]   (extra end point)
-      start=0, length=0,   step=10 => [0]
-    """
     if step_distance <= 0:
         raise ValueError("step_distance must be > 0")
     if length < 0:
@@ -448,7 +444,6 @@ def build_axis_by_step_distance(
 
     pts: List[float] = [start]
     i = 1
-    # Add intermediate points strictly before end
     while True:
         v = start + i * step_distance
         if v >= end:
@@ -456,7 +451,6 @@ def build_axis_by_step_distance(
         pts.append(v)
         i += 1
 
-    # Ensure the end limit is included (avoid duplicates within a small tolerance)
     if abs(pts[-1] - end) > 1e-9:
         pts.append(end)
     else:
@@ -473,37 +467,24 @@ def clamp_probe_travel_to_soft_limits(
     status_timeout_s: float = 2.0,
 ) -> float:
     """
-    Clamp a *relative* Z- probe move distance (positive mm) so it cannot exceed GRBL soft limits.
+    Clamp a *relative* Z- probe distance (positive mm) so it cannot exceed GRBL soft limits.
 
-    Assumptions/behavior:
-    - Soft limits are enforced in machine coordinates (MPos).
-    - Z travel setting is $132 (max travel in mm).
-    - When homed, MPosZ is typically 0 at the top and the lowest allowed is -$132.
-
-    Returns:
-      safe_travel_mm (positive). May be less than requested_travel_mm.
-
-    Raises:
-      RuntimeError if no safe downward motion is available (already at/below limit).
+    Soft limits are enforced in MACHINE coordinates (MPos).
+    Z travel setting is $132 (max Z travel).
+    When homed, MPosZ typically 0 at top and min allowed is -$132.
     """
     if requested_travel_mm <= 0:
         raise ValueError("requested_travel_mm must be > 0")
 
-    # Read current MPosZ
     sp = grbl.get_status_pos(timeout_s=status_timeout_s)
     if sp.mpos is None:
         raise RuntimeError("Status did not include MPos; cannot clamp to soft limits.")
     _, _, mpos_z = sp.mpos
 
-    # Read $132 (Z max travel)
     z_max_travel = grbl.read_setting(132)
-
-    # Compute machine Z minimum allowed by soft limits.
     z_min = -z_max_travel
 
-    # How far can we move downward before crossing the minimum?
-    max_down = mpos_z - z_min  # (e.g. if mpos_z=-25 and z_min=-80 => 55mm available)
-
+    max_down = mpos_z - z_min
     safe_travel = min(requested_travel_mm, max(0.0, max_down - margin_mm))
     if safe_travel <= 0.0:
         raise RuntimeError(
@@ -530,7 +511,6 @@ def probe_height_map(
     unlock: bool,
     home: bool,
 ) -> Result[List[SamplePoint]]:
-    # Grid is now defined by step distances (mm), not a fixed sample count.
     if step_distance_x <= 0 or step_distance_y <= 0:
         return Result.fail("step_distance_x and step_distance_y must be > 0.")
     if width < 0 or height < 0:
@@ -550,7 +530,7 @@ def probe_height_map(
         if not r.ok:
             return Result.fail(r.error or "Homing failed")
 
-    # Basic modal setup (work coordinates)
+    # Modal setup
     for cmd, ctx, tmo in [
         ("G90", "Set absolute mode (G90)", 10.0),
         ("G21", "Set mm units (G21)", 10.0),
@@ -561,19 +541,122 @@ def probe_height_map(
         if not r.ok:
             return Result.fail(r.error or f"{ctx} failed")
 
-    # Precompute grid (work coordinates) by step distance, always including the end limits.
+    # -------------------------------------------------------------------------
+    # Establish "world" frame:
+    # 1) Move to world (0,0) using the current coordinate system.
+    # 2) Capture XY zero from current MPos so we can DISPLAY world coords.
+    # 3) Probe down at (0,0), then:
+    #    - set world Z=0 for DISPLAY (override)
+    #    - set controller Z=0 for MOTION via G92 Z0 (temporary, non-EEPROM)
+    # -------------------------------------------------------------------------
+
+    r = grbl.run_step(
+        f"G1 X0 Y0 F{travel_feed:.3f}",
+        "Move to world (0, 0) to establish XY origin",
+        timeout_s=180.0,
+        wait_idle=True,
+    )
+    if not r.ok:
+        return Result.fail(r.error or "Initial XY move to (0,0) failed")
+
+    try:
+        grbl.capture_world_xy_zero_from_current_mpos(status_timeout_s=2.0)
+        ox, oy, oz = grbl._wco_override or (0.0, 0.0, 0.0)
+        print(
+            f"World XY origin captured (display override): WCO_override={ox:.3f},{oy:.3f},{oz:.3f}"
+        )
+    except Exception as ex:
+        return Result.fail(f"Failed to capture world XY origin from MPos: {ex}")
+
+    # Pre-probe retract (this Z is interpreted in the current coordinate system)
+    r = grbl.run_step(
+        f"G0 Z{retract_z:.3f}",
+        "Initial retract before Z-zero probe",
+        timeout_s=30.0,
+        wait_idle=True,
+    )
+    if not r.ok:
+        return Result.fail(r.error or "Initial retract failed")
+
+    if settle_s > 0:
+        time.sleep(settle_s)
+
+    print("\n--- Establishing world Z=0 by probing at X=0 Y=0 ---")
+
+    r = grbl.run_step("G91", "Set relative mode (G91) for Z-zero probe", timeout_s=10.0)
+    if not r.ok:
+        return Result.fail(r.error or "Failed to set G91 for Z-zero probe")
+
+    try:
+        safe_travel = clamp_probe_travel_to_soft_limits(
+            grbl,
+            max_probe_travel,
+            margin_mm=0.5,
+            status_timeout_s=2.0,
+        )
+    except Exception as ex:
+        return Result.fail(f"Soft-limit clamp failed during Z-zero probe: {ex}")
+
+    probe = grbl.run_step(
+        f"G38.2 Z-{safe_travel:.3f} F{probe_feed:.3f}",
+        "Probe down to establish Z=0 (G38.2)",
+        timeout_s=180.0,
+        wait_idle=True,
+    )
+    if not probe.ok:
+        return Result.fail((probe.error or "Z-zero probe failed") + " at X=0 Y=0.")
+
+    prb = grbl.get_probe_result(probe.value or [])
+    if prb is None or not prb.success:
+        return Result.fail(
+            "Z-zero probe did not report success (no PRB:...:1) at X=0 Y=0."
+        )
+
+    # Restore absolute mode before applying G92
+    r = grbl.run_step(
+        "G90", "Restore absolute mode (G90) after Z-zero probe", timeout_s=10.0
+    )
+    if not r.ok:
+        return Result.fail(r.error or "Failed to set G90 after Z-zero probe")
+
+    # Update DISPLAY override: current MPos is world Z=0 at contact
+    try:
+        grbl.set_world_z_zero_from_current_mpos(status_timeout_s=2.0)
+        ox, oy, oz = grbl._wco_override or (0.0, 0.0, 0.0)
+        print(
+            f"World Z=0 captured (display override): WCO_override={ox:.3f},{oy:.3f},{oz:.3f}"
+        )
+    except Exception as ex:
+        return Result.fail(f"Failed to capture world Z=0 from MPos: {ex}")
+
+    # Make controller MOTION match world Z=0 too (temporary; non-EEPROM).
+    # After this, commanding Z values uses your world Z zero at the probe contact point.
+    r = grbl.run_step("G92 Z0", "Set temporary world Z0 (G92 Z0)", timeout_s=10.0)
+    if not r.ok:
+        return Result.fail(r.error or "Failed to set G92 Z0")
+
+    # Now retract in world coordinates (because G92 set Z0)
+    r = grbl.run_step(
+        f"G0 Z{retract_z:.3f}",
+        "Retract after establishing world Z0",
+        timeout_s=30.0,
+        wait_idle=True,
+    )
+    if not r.ok:
+        return Result.fail(r.error or "Post Z-zero retract failed")
+
+    # -------------------------------------------------------------------------
+    # Heightmap scan begins (world coordinates now aligned for motion and display)
+    # -------------------------------------------------------------------------
+
     try:
         xs = build_axis_by_step_distance(start_x, width, step_distance_x)
         ys = build_axis_by_step_distance(start_y, height, step_distance_y)
     except Exception as ex:
         return Result.fail(f"Failed to build probe grid: {ex}")
 
-    # Derived step counts (useful for logging / JSON output)
-    steps_x = len(xs)
-    steps_y = len(ys)
     print(
-        f"Grid: X samples={steps_x} (step {step_distance_x}mm)  "
-        f"Y samples={steps_y} (step {step_distance_y}mm)"
+        f"Grid: X samples={len(xs)} (step {step_distance_x}mm)  Y samples={len(ys)} (step {step_distance_y}mm)"
     )
     print(
         f"X range: {xs[0]:.3f} .. {xs[-1]:.3f}   Y range: {ys[0]:.3f} .. {ys[-1]:.3f}"
@@ -581,42 +664,20 @@ def probe_height_map(
 
     samples: List[SamplePoint] = []
 
-    # Move to (0, 0)
-    r = grbl.run_step(
-        f"G1 X0 Y0 F{travel_feed:.3f}",
-        "Move to (0, 0)",
-        timeout_s=180.0,
-        wait_idle=True,
-    )
-    if not r.ok:
-        return Result.fail(r.error or "Initial XY move failed")
-
-    # Start by retracting to safe Z in work coordinates.
-    # This reduces the chance of dragging the probe during the initial move.
-    r = grbl.run_step(
-        f"G0 Z{retract_z:.3f}",
-        "Initial retract to safe Z",
-        timeout_s=30.0,
-        wait_idle=True,
-    )
-    if not r.ok:
-        return Result.fail(r.error or "Initial retract failed")
-
-    # Move to first sample point (start_x/start_y) rather than hardcoding X0 Y0.
+    # Move to first sample point in world coordinates
     r = grbl.run_step(
         f"G1 X{xs[0]:.3f} Y{ys[0]:.3f} F{travel_feed:.3f}",
-        "Move to first XY",
+        "Move to first XY (world)",
         timeout_s=60.0,
         wait_idle=True,
     )
     if not r.ok:
-        return Result.fail(r.error or "Initial XY move failed")
+        return Result.fail(r.error or "Initial move to first XY failed")
 
     if settle_s > 0:
         time.sleep(settle_s)
 
     for iy, y in enumerate(ys):
-        # Serpentine: alternate direction each row
         row = list(enumerate(xs))
         if iy % 2 == 1:
             row = list(reversed(row))
@@ -624,20 +685,20 @@ def probe_height_map(
         for ix, x in row:
             print(f"\n--- Sample ix={ix} iy={iy} at X={x:.3f} Y={y:.3f} ---")
 
-            # Retract before any XY move (in work coordinates).
+            # Retract before XY move (world coordinates)
             r = grbl.run_step(
                 f"G0 Z{retract_z:.3f}",
-                "Retract to safe Z",
+                "Retract to safe Z (world)",
                 timeout_s=30.0,
                 wait_idle=True,
             )
             if not r.ok:
                 return Result.fail(r.error or "Retract failed")
 
-            # XY move at travel feed (use G1 so F applies consistently)
+            # XY move (world coordinates)
             r = grbl.run_step(
                 f"G1 X{x:.3f} Y{y:.3f} F{travel_feed:.3f}",
-                "Move to XY",
+                "Move to XY (world)",
                 timeout_s=60.0,
                 wait_idle=True,
             )
@@ -647,7 +708,7 @@ def probe_height_map(
             if settle_s > 0:
                 time.sleep(settle_s)
 
-            # Probe down relative: switch to G91, then clamp the requested travel to soft limits.
+            # Probe down relative (clamped to soft limits)
             r = grbl.run_step("G91", "Set relative mode (G91)", timeout_s=10.0)
             if not r.ok:
                 return Result.fail(r.error or "Failed to set G91")
@@ -669,7 +730,6 @@ def probe_height_map(
                 wait_idle=True,
             )
             if not probe.ok:
-                # If probe fails, GRBL likely ALARMs; caller wanted "fail after max travel"
                 return Result.fail(
                     (probe.error or "Probe failed")
                     + f" at ix={ix} iy={iy} (X={x:.3f}, Y={y:.3f})."
@@ -677,27 +737,26 @@ def probe_height_map(
 
             prb = grbl.get_probe_result(probe.value or [])
             if prb is None or not prb.success:
-                return Result.fail(
-                    f"Probe did not report success (no PRB:...:1) at ix={ix} iy={iy}."
-                )
+                return Result.fail(f"Probe did not report success at ix={ix} iy={iy}.")
 
-            # Immediately read current Z in work coordinates after probe.
-            # This is usually the most useful Z height for a heightmap in the active WCS (e.g. G54).
-            try:
-                _, _, wz = grbl.best_effort_wpos(timeout_s=2.0)
-                measured_z = wz
-            except Exception:
-                # Fallback: use PRB Z (coordinate basis can differ by sender/config).
-                measured_z = prb.prb_z
-
-            # Restore absolute mode and retract to safe height.
+            # Restore absolute mode
             r = grbl.run_step("G90", "Restore absolute mode (G90)", timeout_s=10.0)
             if not r.ok:
                 return Result.fail(r.error or "Failed to set G90")
 
+            # Read current Z in world coordinates (best-effort).
+            # Because we used G92 Z0 at the initial contact, Z here should already be in world units.
+            try:
+                _, _, wz = grbl.best_effort_wpos(timeout_s=2.0)
+                measured_z = wz
+            except Exception:
+                # Fallback: PRB Z may or may not match "world"; keep as a last resort.
+                measured_z = prb.prb_z
+
+            # Retract after probe (world)
             r = grbl.run_step(
                 f"G0 Z{retract_z:.3f}",
-                "Retract after probe",
+                "Retract after probe (world)",
                 timeout_s=30.0,
                 wait_idle=True,
             )
@@ -718,7 +777,7 @@ def write_csv(path: str, points: List[SamplePoint]) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="GRBL Z height-map probe across a rectangular area (work coordinates)."
+        description="GRBL Z height-map probe across a rectangular area (world coordinates via G92 Z0)."
     )
     ap.add_argument(
         "--port", required=True, help="Serial port (e.g. COM3 or /dev/ttyUSB0)"
@@ -728,10 +787,10 @@ def main() -> int:
     )
 
     ap.add_argument(
-        "--start-x", type=float, required=True, help="Start X (mm) in work coordinates"
+        "--start-x", type=float, required=True, help="Start X (mm) in world coordinates"
     )
     ap.add_argument(
-        "--start-y", type=float, required=True, help="Start Y (mm) in work coordinates"
+        "--start-y", type=float, required=True, help="Start Y (mm) in world coordinates"
     )
     ap.add_argument(
         "--width", type=float, required=True, help="Width of area (mm) in +X direction"
@@ -743,8 +802,6 @@ def main() -> int:
         help="Height of area (mm) in +Y direction",
     )
 
-    # Replaces --steps-x/--steps-y:
-    # Step distances define the grid spacing; the final limits are always included.
     ap.add_argument(
         "--step-distance-x",
         type=float,
@@ -762,14 +819,13 @@ def main() -> int:
         "--retract-z",
         type=float,
         required=True,
-        help="Safe retract Z (mm) in work coordinates",
+        help="Safe retract Z (mm) in world coordinates",
     )
     ap.add_argument(
         "--max-probe-travel",
         type=float,
         required=True,
-        help="Maximum Z travel (mm) without probe trigger before failing (G38.2 distance). "
-        "This will be clamped to soft limits automatically.",
+        help="Maximum Z travel (mm) without probe trigger before failing. Clamped to soft limits.",
     )
     ap.add_argument(
         "--probe-feed", type=float, default=60.0, help="Probe feed rate (mm/min)"
@@ -784,16 +840,8 @@ def main() -> int:
         help="Settle time between actions (seconds)",
     )
 
-    ap.add_argument(
-        "--unlock",
-        action="store_true",
-        help="Send $X at start (recommended if you might be alarm-locked)",
-    )
-    ap.add_argument(
-        "--home",
-        action="store_true",
-        help="Send $H at start (only if your machine is set up for homing)",
-    )
+    ap.add_argument("--unlock", action="store_true", help="Send $X at start")
+    ap.add_argument("--home", action="store_true", help="Send $H at start")
 
     ap.add_argument(
         "--out",
@@ -835,13 +883,8 @@ def main() -> int:
         write_csv(args.out, points)
         print(f"\nWrote CSV: {args.out}")
 
-        # Derive steps_x/steps_y for reporting/JSON from the sampled indices.
-        # (This stays correct even with serpentine scanning.)
-        steps_x = 0
-        steps_y = 0
-        if points:
-            steps_x = max(p.ix for p in points) + 1
-            steps_y = max(p.iy for p in points) + 1
+        steps_x = max((p.ix for p in points), default=-1) + 1
+        steps_y = max((p.iy for p in points), default=-1) + 1
 
         if args.out_json:
             payload = {
@@ -851,7 +894,6 @@ def main() -> int:
                 "height": args.height,
                 "step_distance_x": args.step_distance_x,
                 "step_distance_y": args.step_distance_y,
-                # Derived counts, since the grid is distance-based:
                 "steps_x": steps_x,
                 "steps_y": steps_y,
                 "retract_z": args.retract_z,
@@ -864,7 +906,6 @@ def main() -> int:
                 json.dump(payload, f, indent=2)
             print(f"Wrote JSON: {args.out_json}")
 
-        # Minimal summary
         zs = [p.z for p in points]
         if zs:
             print(
@@ -872,7 +913,6 @@ def main() -> int:
                 f"{min(zs):.4f} / {sum(zs) / len(zs):.4f} / {max(zs):.4f} (mm)"
             )
 
-        # Also print derived grid size (useful now that steps are not a CLI input).
         if steps_x and steps_y:
             print(f"Derived grid: steps_x={steps_x} steps_y={steps_y}")
 
@@ -887,13 +927,10 @@ def main() -> int:
     finally:
         if grbl is not None:
             try:
-                # Best-effort: raise Z to the top soft-limit boundary before closing.
-                # - Uses machine coordinates (G53) so it is independent of work offsets.
-                # - Assumes homed Z=0 at the top (typical GRBL convention).
-                # - If the controller is in ALARM (or not homed), GRBL may reject motion.
+                # Best-effort cleanup. If you want to clear the temporary Z offset:
+                #   grbl.run_step("G92.1", "Clear G92 offsets (G92.1)", timeout_s=10.0)
                 grbl.run_step("$X", "Unlock before final retract ($X)", timeout_s=10.0)
 
-                # Absolute machine move to Z0 (top). Use G0 for rapid.
                 grbl.run_step(
                     "G53 G0 Z0",
                     "Final retract to machine Z0 (G53)",
@@ -902,15 +939,8 @@ def main() -> int:
                     idle_timeout_s=60.0,
                 )
 
-                # Disable stepper motors (turn off holding torque).
-                # Common GRBL: M18 (often M84 is an alias, but M18 is the usual).
-                grbl.run_step(
-                    "M18",
-                    "Disable steppers (M18)",
-                    timeout_s=10.0,
-                )
+                grbl.run_step("M18", "Disable steppers (M18)", timeout_s=10.0)
             except Exception as ex:
-                # Do not mask the original exception; just report and proceed to close.
                 print(
                     f"Warning: failed to retract Z to top before close: {ex}",
                     file=sys.stderr,
