@@ -6,6 +6,9 @@
 # Dependencies:
 #   pip install PySide6 pyserial
 #
+# Optional dependency (recommended) for robust YAML:
+#   pip install pyyaml
+#
 # Windows "no console window" options:
 #   - Run with pythonw.exe:  pythonw grbl_probe_gui.py
 #   - Or PyInstaller:  pyinstaller --noconsole --onefile grbl_probe_gui.py
@@ -13,16 +16,18 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import time
 from dataclasses import dataclass
-from typing import Generic, List, Optional, Tuple, TypeVar
+from pathlib import Path
+from typing import Generic, List, Optional, Tuple, TypeVar, Any, Dict
 
 import serial
 from serial.tools import list_ports
 
-from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot, QSettings
+from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot, QStandardPaths
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -760,24 +765,251 @@ class ProbeWorker(QObject):
             json.dump(payload, f, indent=2)
 
 
+class YamlSettings:
+    """
+    Small YAML-backed settings store for a handful of UI preferences.
+
+    Design goals:
+    - Human-readable YAML on disk.
+    - No app shutdown on read/write errors (log + continue with defaults).
+    - Prefer PyYAML if available; otherwise use a small YAML subset parser/writer:
+      * supports nested dicts (2-space indentation)
+      * supports scalars: str, int, float, bool, null
+      * does not support lists, anchors, multi-line strings, etc.
+
+    File location:
+    - Uses the OS-standard app config directory via QStandardPaths.
+    """
+
+    def __init__(
+        self, org_name: str, app_name: str, filename: str = "settings.yaml"
+    ) -> None:
+        self._org_name = org_name
+        self._app_name = app_name
+        self._filename = filename
+
+        # Determine a stable per-user config folder.
+        base = QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)
+        if not base:
+            # Very rare; fallback to user home config.
+            base = str(Path.home() / ".config" / app_name)
+
+        self._dir = Path(base)
+        self._path = self._dir / self._filename
+
+        # In-memory settings dict (always a dict).
+        self._data: Dict[str, Any] = {}
+
+        # Try importing PyYAML for robust parsing/writing.
+        try:
+            import yaml  # type: ignore
+
+            self._yaml = yaml
+        except Exception:
+            self._yaml = None
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def load(self) -> None:
+        """Load YAML from disk into memory; on failure keeps defaults (empty dict)."""
+        self._data = {}
+        try:
+            if not self._path.exists():
+                return
+            text = self._path.read_text(encoding="utf-8")
+            if self._yaml is not None:
+                parsed = self._yaml.safe_load(text)
+                if isinstance(parsed, dict):
+                    self._data = parsed
+                return
+
+            parsed = self._parse_minimal_yaml(text)
+            if isinstance(parsed, dict):
+                self._data = parsed
+        except Exception:
+            # Keep app resilient: settings read errors should never crash the UI.
+            self._data = {}
+
+    def save(self) -> None:
+        """Write in-memory settings to disk (atomic best-effort)."""
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+
+            if self._yaml is not None:
+                text = self._yaml.safe_dump(
+                    self._data,
+                    sort_keys=False,
+                    default_flow_style=False,
+                    allow_unicode=True,
+                )
+            else:
+                text = self._dump_minimal_yaml(self._data)
+
+            # Atomic-ish write: write to temp then replace.
+            tmp = self._path.with_suffix(self._path.suffix + ".tmp")
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, self._path)
+        except Exception:
+            # Keep app resilient: settings write errors should not crash the UI.
+            pass
+
+    def get(self, key_path: str, default: Any) -> Any:
+        """
+        Read a setting by dotted path, e.g. "connection.last_port".
+
+        If missing or wrong type, returns default.
+        """
+        cur: Any = self._data
+        for part in key_path.split("."):
+            if not isinstance(cur, dict):
+                return default
+            if part not in cur:
+                return default
+            cur = cur[part]
+        return cur
+
+    def set(self, key_path: str, value: Any) -> None:
+        """
+        Write a setting by dotted path, e.g. "probe.send_unlock".
+
+        Creates nested dicts as needed.
+        """
+        parts = key_path.split(".")
+        cur: Any = self._data
+        for part in parts[:-1]:
+            if not isinstance(cur, dict):
+                return
+            if part not in cur or not isinstance(cur[part], dict):
+                cur[part] = {}
+            cur = cur[part]
+        if isinstance(cur, dict):
+            cur[parts[-1]] = value
+
+    @staticmethod
+    def _parse_minimal_yaml(text: str) -> Dict[str, Any]:
+        """
+        Parse a minimal YAML subset:
+        - indentation is 2 spaces per nesting level
+        - "key: value" scalars or "key:" starting a mapping
+        - comments (# ...) and blank lines ignored
+        """
+        root: Dict[str, Any] = {}
+        stack: List[Tuple[int, Dict[str, Any]]] = [(0, root)]
+
+        def parse_scalar(raw: str) -> Any:
+            s = raw.strip()
+            if s == "" or s.lower() in ("null", "none", "~"):
+                return None
+            if s.lower() == "true":
+                return True
+            if s.lower() == "false":
+                return False
+            # quoted string
+            if (len(s) >= 2) and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
+                return s[1:-1]
+            # int / float
+            try:
+                if "." in s or "e" in s.lower():
+                    return float(s)
+                return int(s)
+            except Exception:
+                return s
+
+        for raw_line in text.splitlines():
+            line = raw_line.rstrip("\r\n")
+            if not line.strip():
+                continue
+            stripped = line.lstrip(" ")
+            if stripped.startswith("#"):
+                continue
+
+            indent = len(line) - len(stripped)
+            # Only support 2-space indentation levels.
+            level = indent // 2
+
+            # Pop to the correct parent level.
+            while stack and stack[-1][0] > level:
+                stack.pop()
+            if not stack:
+                stack = [(0, root)]
+
+            if ":" not in stripped:
+                continue
+
+            key, rest = stripped.split(":", 1)
+            key = key.strip()
+            rest = rest.strip()
+
+            parent = stack[-1][1]
+            if rest == "":
+                # "key:" begins a nested mapping.
+                child: Dict[str, Any] = {}
+                parent[key] = child
+                stack.append((level + 1, child))
+            else:
+                # "key: value"
+                parent[key] = parse_scalar(rest)
+
+        return root
+
+    @staticmethod
+    def _dump_minimal_yaml(data: Dict[str, Any]) -> str:
+        """
+        Dump a minimal YAML subset:
+        - nested dicts via 2-space indentation
+        - scalars: str, int, float, bool, null
+        """
+
+        def dump_scalar(v: Any) -> str:
+            if v is None:
+                return "null"
+            if isinstance(v, bool):
+                return "true" if v else "false"
+            if isinstance(v, (int, float)):
+                return str(v)
+            s = str(v)
+            # Quote strings with characters that are likely to confuse YAML.
+            if (
+                any(ch in s for ch in [":", "#", "\n", "\r", "\t"])
+                or s.strip() != s
+                or s == ""
+            ):
+                return '"' + s.replace('"', '\\"') + '"'
+            return s
+
+        lines: List[str] = []
+
+        def walk(d: Dict[str, Any], indent: int) -> None:
+            pad = "  " * indent
+            for k, v in d.items():
+                if isinstance(v, dict):
+                    lines.append(f"{pad}{k}:")
+                    walk(v, indent + 1)
+                else:
+                    lines.append(f"{pad}{k}: {dump_scalar(v)}")
+
+        walk(data, 0)
+        return "\n".join(lines) + ("\n" if lines else "")
+
+
 class MainWindow(QMainWindow):
-    # QSettings keys (kept simple and stable; values are plain strings/bools/ints).
-    _SET_LAST_PORT = "connection/last_port"
-    _SET_LAST_BAUD = "connection/last_baud"
-    _SET_UNLOCK = "probe/send_unlock"
-    _SET_HOME = "probe/send_home"
+    # Settings keys (stored in YAML).
+    _KEY_LAST_PORT = "connection.last_port"
+    _KEY_LAST_BAUD = "connection.last_baud"
+    _KEY_UNLOCK = "probe.send_unlock"
+    _KEY_HOME = "probe.send_home"
 
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("GRBL Heightmap Probe (Qt6)")
 
-        # Settings are stored by the OS in the standard per-user location.
-        # - Windows: Registry
-        # - macOS:   plist under ~/Library/Preferences
-        # - Linux:   ~/.config
-        #
-        # Using QSettings avoids managing our own config file and handles permissions/paths.
-        self._settings = QSettings("MekatrolTools", "GrblHeightmapProbe")
+        # YAML settings stored in the OS-standard config directory.
+        self._settings = YamlSettings(
+            "MekatrolTools", "GrblHeightmapProbe", "settings.yaml"
+        )
+        self._settings.load()
 
         self._grbl_live: Optional[Grbl] = None
         self._poll_timer = QTimer(self)
@@ -959,7 +1191,6 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
 
         # --- Persistent UI state (port, baud, $X/$H checkboxes)
-        # Load saved values before first refresh so the refresh can select the saved port.
         self._restore_settings()
 
         # Persist changes as the user edits (so a crash/power loss still keeps last values).
@@ -978,15 +1209,12 @@ class MainWindow(QMainWindow):
         - The actual port selection is applied during _refresh_ports() after ports are enumerated.
         - If the saved baud is invalid (non-int), we fall back to the default displayed value.
         """
-        # Restore baud (text field).
-        baud = self._settings.value(self._SET_LAST_BAUD, "", type=str)
-        if baud:
-            # Keep it as text; we'll validate/parse when connecting.
+        baud = self._settings.get(self._KEY_LAST_BAUD, "")
+        if isinstance(baud, str) and baud:
             self.baud_edit.setText(baud)
 
-        # Restore $X/$H checkboxes.
-        self.chk_unlock.setChecked(bool(self._settings.value(self._SET_UNLOCK, False, type=bool)))
-        self.chk_home.setChecked(bool(self._settings.value(self._SET_HOME, False, type=bool)))
+        self.chk_unlock.setChecked(bool(self._settings.get(self._KEY_UNLOCK, False)))
+        self.chk_home.setChecked(bool(self._settings.get(self._KEY_HOME, False)))
 
     def _save_settings(self) -> None:
         """
@@ -999,14 +1227,13 @@ class MainWindow(QMainWindow):
         - on window close (closeEvent) as a final best-effort write
         """
         port = (self.port_combo.currentData() or "").strip()
-        # Save baud exactly as typed (lets the user keep partial edits; we validate at connect).
         baud = self.baud_edit.text().strip()
 
-        self._settings.setValue(self._SET_LAST_PORT, port)
-        self._settings.setValue(self._SET_LAST_BAUD, baud)
-        self._settings.setValue(self._SET_UNLOCK, self.chk_unlock.isChecked())
-        self._settings.setValue(self._SET_HOME, self.chk_home.isChecked())
-        self._settings.sync()
+        self._settings.set(self._KEY_LAST_PORT, port)
+        self._settings.set(self._KEY_LAST_BAUD, baud)
+        self._settings.set(self._KEY_UNLOCK, self.chk_unlock.isChecked())
+        self._settings.set(self._KEY_HOME, self.chk_home.isChecked())
+        self._settings.save()
 
     def _list_serial_ports(self) -> List[Tuple[str, str]]:
         """
@@ -1044,7 +1271,8 @@ class MainWindow(QMainWindow):
         # Restore prior selection if still present (1) current UI selection, else (2) saved selection.
         restore_port = (current or "").strip()
         if not restore_port:
-            restore_port = (self._settings.value(self._SET_LAST_PORT, "", type=str) or "").strip()
+            saved = self._settings.get(self._KEY_LAST_PORT, "")
+            restore_port = saved.strip() if isinstance(saved, str) else ""
 
         if restore_port:
             idx = self.port_combo.findData(restore_port)
@@ -1090,10 +1318,14 @@ class MainWindow(QMainWindow):
         try:
             if self._grbl_live is not None:
                 return
-            port = (self.port_combo.currentData() or self.port_combo.currentText()).strip()
+            port = (
+                self.port_combo.currentData() or self.port_combo.currentText()
+            ).strip()
             if not port:
                 QMessageBox.warning(
-                    self, "Missing port", "Enter a serial port (e.g. COM3 or /dev/ttyUSB0)."
+                    self,
+                    "Missing port",
+                    "Enter a serial port (e.g. COM3 or /dev/ttyUSB0).",
                 )
                 return
             try:
@@ -1206,7 +1438,9 @@ class MainWindow(QMainWindow):
             # Stop polling while the worker owns the port.
             self._poll_timer.stop()
 
-            port = (self.port_combo.currentData() or self.port_combo.currentText()).strip()
+            port = (
+                self.port_combo.currentData() or self.port_combo.currentText()
+            ).strip()
             baud = int(self.baud_edit.text().strip())
             params = self._build_params()
 
@@ -1360,6 +1594,9 @@ def _install_qt_exception_hook(app: QApplication) -> None:
 
 def main() -> int:
     app = QApplication(sys.argv)
+
+    app.setOrganizationName("Mekatrol")
+    app.setApplicationName("mekatrol-pcb-cnc")
 
     # Keep the application resilient: show a dialog on unhandled exceptions rather than just exiting.
     _install_qt_exception_hook(app)
