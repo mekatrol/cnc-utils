@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import os
 import sys
-import time
 from pathlib import Path
 
-from PySide6.QtCore import QEventLoop, QSettings, Qt
+from PySide6.QtCore import QElapsedTimer, QEventLoop, QSettings, QTimer, Qt
 from PySide6.QtGui import QColor, QFontDatabase, QMouseEvent, QPainter, QPen, QPixmap
 from PySide6.QtGui import QScreen
 from PySide6.QtWidgets import QApplication, QSplashScreen, QWidget
@@ -21,21 +20,60 @@ WINDOW_X_KEY = "ui/window_x"
 WINDOW_Y_KEY = "ui/window_y"
 WINDOW_WIDTH_KEY = "ui/window_width"
 WINDOW_HEIGHT_KEY = "ui/window_height"
+SPLASH_MINIMUM_VISIBLE_MS = 5000
 
 
 class DebugSplashScreen(QSplashScreen):
     def __init__(self, pixmap: QPixmap) -> None:
         super().__init__(pixmap)
         self._debug_click_loop: QEventLoop | None = None
+        self._minimum_visible_loop: QEventLoop | None = None
         self._border_width = 2
         self._source_pixmap = pixmap
+        self._minimum_visible_ms = 0
+        self._startup_complete = False
+        self._dismiss_requested = False
+        self._visible_timer = QElapsedTimer()
         self.setPixmap(self._composited_pixmap())
+        self.setFont(self._metadata_font())
+
+    def begin_startup_timing(self, minimum_visible_ms: int) -> None:
+        self._minimum_visible_ms = max(0, minimum_visible_ms)
+        self._startup_complete = False
+        self._dismiss_requested = False
+        self._visible_timer.start()
+
+    def mark_startup_complete(self) -> None:
+        self._startup_complete = True
+
+    def wait_until_ready(self) -> None:
+        if not self._startup_complete:
+            return
+
+        if self._dismiss_requested:
+            return
+
+        remaining_ms = self._remaining_visible_ms()
+        if remaining_ms <= 0:
+            return
+
+        loop = QEventLoop()
+        self._minimum_visible_loop = loop
+        QTimer.singleShot(remaining_ms, loop.quit)
+        loop.exec()
+        self._minimum_visible_loop = None
 
     def wait_for_click(self) -> None:
         loop = QEventLoop()
         self._debug_click_loop = loop
         loop.exec()
         self._debug_click_loop = None
+
+    def _remaining_visible_ms(self) -> int:
+        if not self._visible_timer.isValid():
+            return 0
+        elapsed_ms = self._visible_timer.elapsed()
+        return max(0, self._minimum_visible_ms - elapsed_ms)
 
     def show_status_message(self, message: str) -> None:
         self.showMessage(
@@ -76,6 +114,11 @@ class DebugSplashScreen(QSplashScreen):
         )
         return QColor("#f3f5f7") if luminance < 0.5 else QColor("#1f2328")
 
+    def _metadata_font(self):
+        fixed_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        fixed_font.setPointSize(max(16, fixed_font.pointSize()))
+        return fixed_font
+
     def _composited_pixmap(self) -> QPixmap:
         composed = QPixmap(self._source_pixmap.size())
         composed.fill(self._background_color())
@@ -100,9 +143,7 @@ class DebugSplashScreen(QSplashScreen):
             f"{'Version':>8}: {__version__}",
             f"{'Website':>8}: {PROJECT_URL}",
         ]
-        fixed_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
-        fixed_font.setPointSize(max(16, fixed_font.pointSize()))
-        painter.setFont(fixed_font)
+        painter.setFont(self._metadata_font())
         painter.setPen(self.message_color())
 
         metrics = painter.fontMetrics()
@@ -118,13 +159,17 @@ class DebugSplashScreen(QSplashScreen):
             painter.drawText(x, y + ((index + 1) * line_height), line)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        # Debug-only behavior: when enabled, a click on the splash screen
-        # releases the temporary event loop so the app can continue startup.
+        # A splash click is treated as a dismissal request. In debug mode it
+        # releases the click-held loop. In normal mode it can also release the
+        # minimum-visible timer, but only after startup has completed.
+        self._dismiss_requested = True
         if self._debug_click_loop is not None:
             self._debug_click_loop.quit()
             event.accept()
             return
-        super().mousePressEvent(event)
+        if self._startup_complete and self._minimum_visible_loop is not None:
+            self._minimum_visible_loop.quit()
+        event.accept()
 
 
 def _asset_path(*parts: str) -> Path:
@@ -132,7 +177,12 @@ def _asset_path(*parts: str) -> Path:
 
 
 def _debug_hold_splash_enabled() -> bool:
-    return os.environ.get(DEBUG_SPLASH_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+    return os.environ.get(DEBUG_SPLASH_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _settings() -> QSettings:
@@ -177,8 +227,12 @@ def _center_widget_on_screen(widget: QWidget, screen: QScreen) -> None:
     rect = widget.frameGeometry()
     rect.moveCenter(available.center())
     top_left = rect.topLeft()
-    top_left.setX(max(available.left(), min(top_left.x(), available.right() - rect.width() + 1)))
-    top_left.setY(max(available.top(), min(top_left.y(), available.bottom() - rect.height() + 1)))
+    top_left.setX(
+        max(available.left(), min(top_left.x(), available.right() - rect.width() + 1))
+    )
+    top_left.setY(
+        max(available.top(), min(top_left.y(), available.bottom() - rect.height() + 1))
+    )
     widget.move(top_left)
 
 
@@ -245,16 +299,12 @@ def main() -> int:
     splash.setStyleSheet("font-weight: 600;")
     _center_widget_on_screen(splash, startup_screen)
     splash.show()
+    splash.begin_startup_timing(SPLASH_MINIMUM_VISIBLE_MS)
     app.processEvents()
 
-    for message in (
-        "Starting PCBCAM viewer...",
-        "Preparing Qt workspace...",
-        "Initialising 3D viewport...",
-    ):
+    for message in ("Starting PCBCAM...",):
         splash.show_status_message(message)
         app.processEvents()
-        time.sleep(0.12)
 
     if _debug_hold_splash_enabled():
         # This path is intentionally debug-only. It keeps the splash visible
@@ -271,8 +321,16 @@ def main() -> int:
         candidate = Path(sys.argv[1]).expanduser()
         if candidate.exists():
             window.load_file(str(candidate))
+    splash.mark_startup_complete()
+    if not _debug_hold_splash_enabled():
+        # Normal startup keeps the splash visible for at least the configured
+        # minimum duration, but does not add extra delay after slow loads.
+        splash.wait_until_ready()
     app.aboutToQuit.connect(lambda: _save_window_placement(window))
-    if _settings().value(WINDOW_STATE_KEY, "normal", type=str).strip().lower() == "maximized":
+    if (
+        _settings().value(WINDOW_STATE_KEY, "normal", type=str).strip().lower()
+        == "maximized"
+    ):
         window.showMaximized()
     else:
         window.show()
