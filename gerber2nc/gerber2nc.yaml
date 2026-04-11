@@ -1,0 +1,408 @@
+# gerber2nc process configuration
+#
+# Values here are read by gerber2nc.py at runtime so machining parameters can
+# be tuned without editing the source code.
+
+# input
+#   Settings that control where the source manufacturing files are loaded from.
+input:
+  # project
+  #   Purpose:
+  #     KiCad project base path without suffixes. This may point either to the
+  #     project directory or to the project base path used to derive the Gerber
+  #     filenames.
+  #   Constraint:
+  #     Must be a non-empty string.
+  #   Default:
+  #     test_projects/test_edge_cut/test_edge_cut
+  project: "../../mekatrol-devices/hardware/triac_fet_module"
+
+  # gerber_dir
+  #   Purpose:
+  #     Subdirectory under the project path that contains the exported Gerber
+  #     and drill files.
+  #   Constraint:
+  #     Must be a non-empty string.
+  #   Default:
+  #     gerber
+  gerber_dir: "gerber"
+
+# output
+#   Settings that control where generated CNC output is written.
+output:
+  # outname
+  #   Purpose:
+  #     Optional output base name for the generated G-code file, without the
+  #     final .nc suffix. If left blank, the KiCad project name is used.
+  #   Constraint:
+  #     Must be a string. An empty string is allowed.
+  #   Default:
+  #     ""
+  outname: ""
+
+  # nc_dir
+  #   Purpose:
+  #     Output directory where generated G-code files will be written.
+  #   Constraint:
+  #     Must be a non-empty string.
+  #   Default:
+  #     nc
+  nc_dir: "nc"
+
+# milling
+#   Settings related to spindle-driven PCB machining operations. Isolation
+#   routing parameters live here first, and future milling settings can be
+#   grouped under the same heading.
+milling:
+  # isolation_offset_distance
+  #   Units: millimetres
+  #   Purpose:
+  #     Clearance from the preserved copper edge to the first
+  #     isolation-routing pass. Larger values leave more empty fiberglass
+  #     around traces and pads.
+  #   Constraint:
+  #     Must be > 0.
+  #   Default:
+  #     0.1
+  isolation_offset_distance: 0.1
+
+  # isolation_num_passes
+  #   Units: count
+  #   Purpose:
+  #     Number of outward isolation-routing loops to cut around the copper.
+  #     More passes widen the cleared area but increase machining time.
+  #   Constraint:
+  #     Must be an integer >= 1.
+  #   Default:
+  #     3
+  isolation_num_passes: 3
+
+  # isolation_path_spacing
+  #   Units: millimetres
+  #   Purpose:
+  #     Additional outward spacing between successive isolation-routing
+  #     passes. This controls how quickly the milled clearance area widens
+  #     after the first pass.
+  #   Constraint:
+  #     Must be > 0.
+  #   Default:
+  #     0.1
+  isolation_path_spacing: 0.1
+
+# drilling
+#   Settings that control hole drilling and any follow-up hole enlargement.
+drilling:
+  # available_drill_bits
+  #   Units: millimetres
+  #   Purpose:
+  #     Drill diameters physically available on the machine for this job.
+  #     For each PCB hole, the program chooses the largest listed drill that
+  #     does not exceed the requested Excellon hole diameter.
+  #   Constraint:
+  #     Must be a non-empty list of numbers > 0.
+  #   Default:
+  #     [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0]
+  available_drill_bits: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0]
+
+  # pcb_thickness
+  #   Units: millimetres
+  #   Purpose:
+  #     Finished PCB thickness used to calculate the full drilling and hole
+  #     enlargement depth.
+  #   Constraint:
+  #     Must be > 0.
+  #   Default:
+  #     1.6
+  pcb_thickness: 1.6
+
+  # breakthrough_depth
+  #   Units: millimetres
+  #   Purpose:
+  #     Extra depth below the nominal PCB thickness so drills and mills break
+  #     fully through the board into the spoilboard.
+  #   Constraint:
+  #     Must be >= 0.
+  #   Default:
+  #     0.2
+  breakthrough_depth: 0.2
+
+  # safe_height
+  #   Units: millimetres
+  #   Purpose:
+  #     Clearance height used for rapid moves between operations.
+  #   Constraint:
+  #     Must be > 0.
+  #   Default:
+  #     3.0
+  safe_height: 3.0
+
+  # start_height
+  #   Units: millimetres
+  #   Purpose:
+  #     Height above the PCB where drilling rapids stop and feed plunging
+  #     begins.
+  #   Constraint:
+  #     Must be >= 0.
+  #   Default:
+  #     0.1
+  start_height: 0.1
+
+  # spindle_speed
+  #   Units: RPM
+  #   Purpose:
+  #     Spindle speed used for both peck drilling and hole enlargement
+  #     milling.
+  #   Constraint:
+  #     Must be > 0.
+  #   Default:
+  #     12000
+  spindle_speed: 12000
+
+  # plunge_feed_rate
+  #   Units: millimetres per minute
+  #   Purpose:
+  #     Vertical feed used when peck drilling into the PCB.
+  #   Constraint:
+  #     Must be > 0.
+  #   Default:
+  #     200
+  plunge_feed_rate: 200
+
+  # peck_depth
+  #   Units: millimetres
+  #   Purpose:
+  #     Maximum depth each stabbing drill plunge takes before retracting to
+  #     clear chips.
+  #   Constraint:
+  #     Must be > 0.
+  #   Default:
+  #     0.6
+  peck_depth: 0.6
+
+  # chip_clear_height
+  #   Units: millimetres
+  #   Purpose:
+  #     Height reached between pecks to clear swarf before drilling deeper.
+  #   Constraint:
+  #     Must be >= 0.
+  #   Default:
+  #     1.0
+  chip_clear_height: 1.0
+
+  # mill_tool_diameter
+  #   Units: millimetres
+  #   Purpose:
+  #     Diameter of the side-cutting mill used to enlarge undersized drilled
+  #     holes. This tool must fit inside any hole that needs enlargement.
+  #   Constraint:
+  #     Must be > 0.
+  #   Default:
+  #     0.3
+  mill_tool_diameter: 0.3
+
+  # mill_feed_rate
+  #   Units: millimetres per minute
+  #   Purpose:
+  #     XY feed used while enlarging holes with the milling cutter.
+  #   Constraint:
+  #     Must be > 0.
+  #   Default:
+  #     300
+  mill_feed_rate: 300
+
+  # mill_plunge_feed_rate
+  #   Units: millimetres per minute
+  #   Purpose:
+  #     Z feed used when stepping the hole-enlarging mill deeper into the PCB.
+  #   Constraint:
+  #     Must be > 0.
+  #   Default:
+  #     150
+  mill_plunge_feed_rate: 150
+
+  # mill_depth_step
+  #   Units: millimetres
+  #   Purpose:
+  #     Maximum depth cut per enlargement milling layer until the tool breaks
+  #     through the PCB.
+  #   Constraint:
+  #     Must be > 0.
+  #   Default:
+  #     0.4
+  mill_depth_step: 0.4
+
+  # mill_start_height
+  #   Units: millimetres
+  #   Purpose:
+  #     Height above the PCB where enlargement milling rapids stop before the
+  #     mill feeds down into the drilled hole.
+  #   Constraint:
+  #     Must be >= 0.
+  #   Default:
+  #     0.1
+  mill_start_height: 0.1
+
+  # max_enlarging_step
+  #   Units: millimetres
+  #   Purpose:
+  #     Maximum radial increase between successive hole-enlargement passes at
+  #     the same depth. Smaller values reduce side load but increase runtime.
+  #   Constraint:
+  #     Must be > 0.
+  #   Default:
+  #     0.2
+  max_enlarging_step: 0.2
+
+  # circle_segment_count
+  #   Units: count
+  #   Purpose:
+  #     Number of straight segments used to approximate one circular
+  #     enlargement pass.
+  #   Constraint:
+  #     Must be an integer >= 8.
+  #   Default:
+  #     24
+  circle_segment_count: 24
+
+# height_map
+#   Optional post-processing that uses a probed surface map to create a second
+#   NC file with Z compensation applied across X/Y travel.
+height_map:
+  # enabled
+  #   Purpose:
+  #     When true, gerber2nc writes the normal NC file first, then writes a
+  #     second file with height-map compensation applied.
+  #   Constraint:
+  #     Must be true or false.
+  #   Default:
+  #     false
+  enabled: true
+
+  # input
+  #   Purpose:
+  #     Path to the CSV written by the height-map probe tool.
+  #   Constraint:
+  #     Must be a string. Required when enabled is true.
+  #   Default:
+  #     ../height-map/heightmap.csv
+  input: "../height-map/heightmap.csv"
+
+  # output_suffix
+  #   Purpose:
+  #     Text inserted before the .nc suffix when writing the compensated file.
+  #   Constraint:
+  #     Must be a non-empty string.
+  #   Default:
+  #     .height-adjusted
+  output_suffix: ".height-adjusted"
+
+  # max_compensated_z
+  #   Units: millimetres
+  #   Purpose:
+  #     Only moves whose starting or ending commanded Z is at or below this
+  #     level are compensated. This keeps high clearance rapids unchanged.
+  #   Constraint:
+  #     Must be a number.
+  #   Default:
+  #     1.0
+  max_compensated_z: 1.0
+
+  # max_segment_length
+  #   Units: millimetres
+  #   Purpose:
+  #     Maximum XY segment length used when splitting compensated toolpaths so
+  #     the tool can better follow the interpolated surface.
+  #   Constraint:
+  #     Must be > 0.
+  #   Default:
+  #     1.0
+  max_segment_length: 1.0
+
+# visualisation
+#   Colours used by the Tkinter preview window. All values are hex strings in
+#   the form "#RRGGBB".
+visualisation:
+  # preview_enabled
+  #   Purpose:
+  #     When true, open the Tkinter preview window before writing G-code.
+  #     Disable this in headless or remote debug sessions without a display.
+  #   Default:
+  #     false
+  preview_enabled: true
+
+  # background_with_edgecuts_rgb
+  #   Purpose:
+  #     Canvas background colour when a board outline is present.
+  #   Default:
+  #     "#202020"
+  background_with_edgecuts_rgb: "#202020"
+
+  # background_without_edgecuts_rgb
+  #   Purpose:
+  #     Canvas background colour when there is no edge-cuts outline.
+  #   Default:
+  #     "#FF00FF"
+  background_without_edgecuts_rgb: "#FF00FF"
+
+  # edgecuts_fill_rgb
+  #   Purpose:
+  #     Fill colour inside the detected board outline polygon.
+  #   Default:
+  #     "#FF00FF"
+  edgecuts_fill_rgb: "#FF00FF"
+
+  # edgecuts_outline_rgb
+  #   Purpose:
+  #     Outline colour for the board perimeter preview.
+  #   Default:
+  #     "#FFFF00"
+  edgecuts_outline_rgb: "#FFFF00"
+
+  # trace_copper_rgb
+  #   Purpose:
+  #     Colour used for drawn copper traces.
+  #   Default:
+  #     "#662222"
+  trace_copper_rgb: "#662222"
+
+  # region_copper_rgb
+  #   Purpose:
+  #     Colour used for filled copper regions and pours.
+  #   Default:
+  #     "#662222"
+  region_copper_rgb: "#662222"
+
+  # pad_fill_rgb
+  #   Purpose:
+  #     Fill colour for flashed pads.
+  #   Default:
+  #     "#0000FF"
+  pad_fill_rgb: "#0000FF"
+
+  # pad_outline_rgb
+  #   Purpose:
+  #     Outline colour for flashed pads.
+  #   Default:
+  #     "#ADD8E6"
+  pad_outline_rgb: "#ADD8E6"
+
+  # toolpath_rgb
+  #   Purpose:
+  #     Colour used for the isolation-routing preview lines.
+  #   Default:
+  #     "#FFFFFF"
+  toolpath_rgb: "#FFFFFF"
+
+  # hole_fill_rgb
+  #   Purpose:
+  #     Fill colour for drill holes.
+  #   Default:
+  #     "#000000"
+  hole_fill_rgb: "#000000"
+
+  # hole_outline_rgb
+  #   Purpose:
+  #     Outline colour for drill holes.
+  #   Default:
+  #     "#FFFFFF"
+  hole_outline_rgb: "#FFFFFF"

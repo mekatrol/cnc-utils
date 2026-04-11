@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+*.pyc
+/nc/
+/test_projects/test_edge_cut/test_edge_cut-backups/

@@ -156,6 +156,8 @@ class Grbl:
         # Interpreted as: WPos = MPos - _wco_override
         self._wco_override: Optional[Tuple[float, float, float]] = None
 
+        self._wco: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+
     def close(self) -> None:
         try:
             if self.ser.is_open:
@@ -227,7 +229,6 @@ class Grbl:
 
         mpos: Optional[Tuple[float, float, float]] = None
         wpos: Optional[Tuple[float, float, float]] = None
-        wco: Optional[Tuple[float, float, float]] = None
 
         m = STATUS_MPOS_RE.search(status)
         if m:
@@ -239,9 +240,9 @@ class Grbl:
 
         c = STATUS_WCO_RE.search(status)
         if c:
-            wco = (float(c.group(1)), float(c.group(2)), float(c.group(3)))
+            self._wco = (float(c.group(1)), float(c.group(2)), float(c.group(3)))
 
-        return StatusPos(mpos=mpos, wpos=wpos, wco=wco)
+        return StatusPos(mpos=mpos, wpos=wpos, wco=self._wco)
 
     def capture_world_xy_zero_from_current_mpos(
         self, *, status_timeout_s: float = 2.0

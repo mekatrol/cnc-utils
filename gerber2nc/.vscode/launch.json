@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: gerber2nc.py",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/gerber2nc.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "args": [],
+      "justMyCode": false
+    }
+  ]
+}
