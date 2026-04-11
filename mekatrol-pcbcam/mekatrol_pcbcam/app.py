@@ -5,15 +5,22 @@ import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QEventLoop, Qt
+from PySide6.QtCore import QEventLoop, QSettings, Qt
 from PySide6.QtGui import QColor, QFontDatabase, QMouseEvent, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QApplication, QSplashScreen
+from PySide6.QtGui import QScreen
+from PySide6.QtWidgets import QApplication, QSplashScreen, QWidget
 
 from . import PROJECT_URL, __version__
 from .main_window import MainWindow
 
 
 DEBUG_SPLASH_ENV = "MEKATROL_PCBCAM_DEBUG_SPLASH"
+LAST_SCREEN_KEY = "ui/last_screen_name"
+WINDOW_STATE_KEY = "ui/window_state"
+WINDOW_X_KEY = "ui/window_x"
+WINDOW_Y_KEY = "ui/window_y"
+WINDOW_WIDTH_KEY = "ui/window_width"
+WINDOW_HEIGHT_KEY = "ui/window_height"
 
 
 class DebugSplashScreen(QSplashScreen):
@@ -128,16 +135,115 @@ def _debug_hold_splash_enabled() -> bool:
     return os.environ.get(DEBUG_SPLASH_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _settings() -> QSettings:
+    return QSettings()
+
+
+def _resolve_startup_screen(app: QApplication) -> QScreen:
+    settings = _settings()
+    saved_name = settings.value(LAST_SCREEN_KEY, "", type=str).strip()
+
+    if saved_name:
+        for screen in app.screens():
+            if screen.name() == saved_name:
+                return screen
+
+    primary = app.primaryScreen()
+    if primary is not None:
+        return primary
+
+    screens = app.screens()
+    if not screens:
+        raise RuntimeError("No screens are available for application startup.")
+    return screens[0]
+
+
+def _screen_for_widget(widget: QWidget) -> QScreen | None:
+    handle = widget.windowHandle()
+    if handle is not None and handle.screen() is not None:
+        return handle.screen()
+    return widget.screen()
+
+
+def _save_last_screen(widget: QWidget) -> None:
+    screen = _screen_for_widget(widget)
+    if screen is None:
+        return
+    _settings().setValue(LAST_SCREEN_KEY, screen.name())
+
+
+def _center_widget_on_screen(widget: QWidget, screen: QScreen) -> None:
+    available = screen.availableGeometry()
+    rect = widget.frameGeometry()
+    rect.moveCenter(available.center())
+    top_left = rect.topLeft()
+    top_left.setX(max(available.left(), min(top_left.x(), available.right() - rect.width() + 1)))
+    top_left.setY(max(available.top(), min(top_left.y(), available.bottom() - rect.height() + 1)))
+    widget.move(top_left)
+
+
+def _clamp_window_to_screen(widget: QWidget, screen: QScreen) -> None:
+    available = screen.availableGeometry()
+    width = min(widget.width(), available.width())
+    height = min(widget.height(), available.height())
+    widget.resize(width, height)
+
+    x = max(available.left(), min(widget.x(), available.right() - width + 1))
+    y = max(available.top(), min(widget.y(), available.bottom() - height + 1))
+    widget.move(x, y)
+
+
+def _apply_saved_window_placement(window: MainWindow, startup_screen: QScreen) -> None:
+    settings = _settings()
+    saved_state = settings.value(WINDOW_STATE_KEY, "normal", type=str).strip().lower()
+
+    if saved_state == "normal":
+        width = settings.value(WINDOW_WIDTH_KEY, 1280, type=int)
+        height = settings.value(WINDOW_HEIGHT_KEY, 840, type=int)
+        x = settings.value(WINDOW_X_KEY, None)
+        y = settings.value(WINDOW_Y_KEY, None)
+
+        window.resize(max(640, width), max(480, height))
+        if x is not None and y is not None:
+            window.move(int(x), int(y))
+            _clamp_window_to_screen(window, startup_screen)
+        else:
+            _center_widget_on_screen(window, startup_screen)
+        return
+
+    _center_widget_on_screen(window, startup_screen)
+
+
+def _save_window_placement(window: MainWindow) -> None:
+    if window.isMinimized():
+        return
+
+    settings = _settings()
+    _save_last_screen(window)
+
+    if window.isMaximized():
+        settings.setValue(WINDOW_STATE_KEY, "maximized")
+        return
+
+    settings.setValue(WINDOW_STATE_KEY, "normal")
+    settings.setValue(WINDOW_X_KEY, window.x())
+    settings.setValue(WINDOW_Y_KEY, window.y())
+    settings.setValue(WINDOW_WIDTH_KEY, window.width())
+    settings.setValue(WINDOW_HEIGHT_KEY, window.height())
+
+
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("mekatrol-pcbcam")
     app.setOrganizationName("Mekatrol")
+    startup_screen = _resolve_startup_screen(app)
 
     splash_path = _asset_path("splash.png")
     pixmap = QPixmap(str(splash_path))
     splash = DebugSplashScreen(pixmap)
     splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
     splash.setStyleSheet("font-weight: 600;")
+    _center_widget_on_screen(splash, startup_screen)
     splash.show()
     app.processEvents()
 
@@ -160,10 +266,15 @@ def main() -> int:
         splash.wait_for_click()
 
     window = MainWindow()
+    _apply_saved_window_placement(window, startup_screen)
     if len(sys.argv) > 1:
         candidate = Path(sys.argv[1]).expanduser()
         if candidate.exists():
             window.load_file(str(candidate))
-    window.show()
+    app.aboutToQuit.connect(lambda: _save_window_placement(window))
+    if _settings().value(WINDOW_STATE_KEY, "normal", type=str).strip().lower() == "maximized":
+        window.showMaximized()
+    else:
+        window.show()
     splash.finish(window)
     return app.exec()
