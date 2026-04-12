@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
-from pathlib import Path
 import math
 import re
-from typing import Iterable, List, Sequence
+from pathlib import Path
+
+from .point_3d import Point3D
+from .segment_3d import Segment3D
+from .toolpath_document import ToolpathDocument
+from .toolpath_stats import ToolpathStats
 
 AXES = ("X", "Y", "Z")
 TOKEN_RE = re.compile(r"([A-Z])\s*([-+]?\d+(?:\.\d+)?)", re.IGNORECASE)
@@ -14,46 +17,13 @@ TOKEN_RE = re.compile(r"([A-Z])\s*([-+]?\d+(?:\.\d+)?)", re.IGNORECASE)
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class Point3D:
-    x: float
-    y: float
-    z: float
-
-
-@dataclass(frozen=True)
-class Segment3D:
-    start: Point3D
-    end: Point3D
-    rapid: bool
-    line_number: int
-    source: str
-
-
-@dataclass(frozen=True)
-class ToolpathStats:
-    min_point: Point3D
-    max_point: Point3D
-    segment_count: int
-    rapid_count: int
-    cut_count: int
-    path_length: float
-
-
-@dataclass(frozen=True)
-class ToolpathDocument:
-    path: Path
-    segments: Sequence[Segment3D]
-    stats: ToolpathStats
-
-
 class GCodeParser:
     """Minimal linear-motion G-code parser for viewer bootstrapping."""
 
     def parse_file(self, path: str | Path) -> ToolpathDocument:
         file_path = Path(path)
         logger.debug("Parsing G-code file: %s", file_path)
-        segments: List[Segment3D] = []
+        segments: list[Segment3D] = []
         current = Point3D(0.0, 0.0, 0.0)
         absolute_mode = True
         motion_mode = "G0"
@@ -140,7 +110,12 @@ class GCodeParser:
                 return f"G{value}"
         return None
 
-    def _resolve_target(self, current: Point3D, words: dict[str, str], absolute_mode: bool) -> Point3D:
+    def _resolve_target(
+        self,
+        current: Point3D,
+        words: dict[str, str],
+        absolute_mode: bool,
+    ) -> Point3D:
         next_values = {axis: getattr(current, axis.lower()) for axis in AXES}
         for axis in AXES:
             if axis not in words:

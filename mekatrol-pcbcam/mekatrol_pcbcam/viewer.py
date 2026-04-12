@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
 import math
+
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPen, QWheelEvent
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
-from .gcode_parser import Point3D, ToolpathDocument
+from .camera_state import CameraState
+from .point_3d import Point3D
+from .toolpath_document import ToolpathDocument
 
 BACKGROUND = QColor("#11151c")
 GRID_MAJOR = QColor("#2f3945")
@@ -21,15 +23,6 @@ TEXT = QColor("#dfe7ef")
 
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class CameraState:
-    yaw: float = math.radians(35.0)
-    pitch: float = math.radians(-25.0)
-    zoom: float = 1.0
-    pan_x: float = 0.0
-    pan_y: float = 0.0
 
 
 class ToolpathViewer(QOpenGLWidget):
@@ -116,7 +109,10 @@ class ToolpathViewer(QOpenGLWidget):
         if self._left_drag:
             self.camera.yaw += delta.x() * 0.01
             self.camera.pitch += delta.y() * 0.01
-            self.camera.pitch = max(math.radians(-89.0), min(math.radians(89.0), self.camera.pitch))
+            self.camera.pitch = max(
+                math.radians(-89.0),
+                min(math.radians(89.0), self.camera.pitch),
+            )
             self.update()
         elif self._right_drag:
             self.camera.pan_x += delta.x()
@@ -156,24 +152,49 @@ class ToolpathViewer(QOpenGLWidget):
         while value <= half + 1e-9:
             is_major = abs(round(value / spacing)) % 5 == 0
             painter.setPen(major_pen if is_major else minor_pen)
-            self._draw_line(painter, Point3D(value, -half, 0.0), Point3D(value, half, 0.0))
-            self._draw_line(painter, Point3D(-half, value, 0.0), Point3D(half, value, 0.0))
+            self._draw_line(
+                painter,
+                Point3D(value, -half, 0.0),
+                Point3D(value, half, 0.0),
+            )
+            self._draw_line(
+                painter,
+                Point3D(-half, value, 0.0),
+                Point3D(half, value, 0.0),
+            )
             value += spacing
 
     def _draw_axes(self, painter: QPainter) -> None:
         axis_length = max(self._extent * 0.6, 10.0)
         painter.setPen(QPen(AXIS_X, 2))
-        self._draw_line(painter, Point3D(0.0, 0.0, 0.0), Point3D(axis_length, 0.0, 0.0))
+        self._draw_line(
+            painter,
+            Point3D(0.0, 0.0, 0.0),
+            Point3D(axis_length, 0.0, 0.0),
+        )
         painter.setPen(QPen(AXIS_Y, 2))
-        self._draw_line(painter, Point3D(0.0, 0.0, 0.0), Point3D(0.0, axis_length, 0.0))
+        self._draw_line(
+            painter,
+            Point3D(0.0, 0.0, 0.0),
+            Point3D(0.0, axis_length, 0.0),
+        )
         painter.setPen(QPen(AXIS_Z, 2))
-        self._draw_line(painter, Point3D(0.0, 0.0, 0.0), Point3D(0.0, 0.0, axis_length * 0.35))
+        self._draw_line(
+            painter,
+            Point3D(0.0, 0.0, 0.0),
+            Point3D(0.0, 0.0, axis_length * 0.35),
+        )
 
     def _draw_toolpath(self, painter: QPainter) -> None:
         if not self.document:
             return
         for segment in self.document.segments:
-            painter.setPen(QPen(RAPID if segment.rapid else CUT, 1.8 if not segment.rapid else 1.2))
+            painter.setPen(
+                QPen(
+                    RAPID if segment.rapid else CUT,
+                    1.8 if not segment.rapid else 1.2,
+                )
+            )
             self._draw_line(painter, segment.start, segment.end)
 
     def _draw_overlay(self, painter: QPainter) -> None:
@@ -181,7 +202,11 @@ class ToolpathViewer(QOpenGLWidget):
         painter.drawText(16, 28, "mekatrol-pcbcam")
         if not self.document:
             painter.drawText(16, 50, "Open an .nc file to inspect its motion path.")
-            painter.drawText(16, 72, "Left drag: orbit   Right drag: pan   Wheel: zoom   F: fit")
+            painter.drawText(
+                16,
+                72,
+                "Left drag: orbit   Right drag: pan   Wheel: zoom   F: fit",
+            )
             return
 
         stats = self.document.stats

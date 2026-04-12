@@ -20,7 +20,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .gcode_parser import GCodeParser, ToolpathDocument
+from .gcode_parser import GCodeParser
+from .toolpath_document import ToolpathDocument
 from .viewer import ToolpathViewer
 
 
