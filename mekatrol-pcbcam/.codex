@@ -7,3 +7,28 @@
 # - Preserve formatter behavior that avoids magic trailing commas / dangling commas.
 # - Keep one top-level class per file, including dataclasses.
 # - Do not introduce new Python files that contain multiple classes.
+
+
+[create wizard UI]
+
+I want to change the application so that it is a wizard for CAM operations.
+
+A project file will be needed to collect CAM operations and settings. Once the project file is created then there should be a wizard style workflow in the UI with the following steps:
+
+1. Import Gerber (user can multi select files, typical files include front copper, back copper, and edge cuts). The files are added to the 3d view.
+2. Import Excellon file (drill holes). Can be multiple holes and of type PlatedTHrough Hole (PTH) and non plated through hole (NPTH). The files are added to the 3d view.
+3. Tool selection. This is where the user can select drilling, milling and v bits from their tool library (a yaml configuration file called tools.yaml)
+4. Assign loaded gerber files to one of three functions. Front copper, back copper and edges. All three types are optional, however at least one must be assigned to continue the wizard.
+5. If there is a front and back copper then ask user for mirror flip edge, one of left, top, right, bottom. A visual indicator showing the flip is needed here.
+6. Allow the user to select alignment hole locations, these are x,y offsets outside of the edge along with drill hole sizes. These can be used by the users to align repeat boards and also align for flipped borads when ding fron and back copper isolation routes
+7. Generate front copper isolation operations (if there is a front copper). This creates an NC file.
+8. Generate back copper isolation operations (if there is a back copper).  This creates an NC file.
+9. Generate drill hole operations. This creates an NC file.
+10. Generate edge cut operations. This creates an NC file.
+11. Show resultantant NC files in the 3d view
+
+*** Important:
+1. The wizard steps should be dislayed as a horizontal bar at the top of the view, with edge wizard step being selectable and shaped as a chevron.
+2. The user can move backward and forward in the wizard. If they move backward in the wizard and change any setting then they must go through following steps sequentially because it can impact future wizard steps so forcing user to step forward sequentially is important. If they don't change values shen stepping back then they can jump to an future step where the previous step is complete and valid or to a step that has commenced.
+3. The project ../gerber2nc project has all of the code for wizard steps 1 and 2 including parsing gerber and excellon files. Refer to that project for any of these wizards steps as it may have the code already.
+4. The 3d view at steps 1 and 2 is generated in the ../gerber2nc, however it does not use Qt6. i want the same view in this project except using Qt6 instead of tkinter

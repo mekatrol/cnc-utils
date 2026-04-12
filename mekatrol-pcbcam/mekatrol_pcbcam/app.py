@@ -31,6 +31,7 @@ from .app_constants import (
 )
 from .debug_splash_screen import DebugSplashScreen
 from .diagnostics import InMemoryLogHandler, get_log_tracker
+from .file_locations import FileLocations
 from .logging_config import LoggingConfig
 from .main_window import MainWindow
 from .ui_save_state import UiSaveState
@@ -322,6 +323,7 @@ def _load_config() -> tuple[AppConfig, list[str]]:
 
     app_data = data.get("app", {}) if isinstance(data, dict) else {}
     logging_data = data.get("logging", {}) if isinstance(data, dict) else {}
+    file_locations_data = data.get("file_locations", {}) if isinstance(data, dict) else {}
     ui_data = data.get("ui_save_state", {}) if isinstance(data, dict) else {}
 
     if not isinstance(app_data, dict):
@@ -330,6 +332,11 @@ def _load_config() -> tuple[AppConfig, list[str]]:
     if not isinstance(logging_data, dict):
         warnings.append("logging: expected a mapping; using default logging settings.")
         logging_data = {}
+    if not isinstance(file_locations_data, dict):
+        warnings.append(
+            "file_locations: expected a mapping; using default file location settings."
+        )
+        file_locations_data = {}
     if not isinstance(ui_data, dict):
         warnings.append("ui_save_state: expected a mapping; using default UI settings.")
         ui_data = {}
@@ -367,6 +374,18 @@ def _load_config() -> tuple[AppConfig, list[str]]:
             ),
             loggers=_parse_logger_levels(
                 logging_data.get("loggers"), logging_level, warnings=warnings
+            ),
+        ),
+        file_locations=FileLocations(
+            last_load_directory=_parse_string(
+                file_locations_data.get("last_load_directory"),
+                field_name="file_locations.last_load_directory",
+                warnings=warnings,
+            ),
+            last_save_directory=_parse_string(
+                file_locations_data.get("last_save_directory"),
+                field_name="file_locations.last_save_directory",
+                warnings=warnings,
             ),
         ),
         ui_save_state=UiSaveState(
@@ -439,6 +458,13 @@ def _save_config(config: AppConfig) -> None:
                     ],
                 ]
             ),
+            "",
+            "file_locations:",
+            "  # Most recently used directory for file-open dialogs.",
+            f"  last_load_directory: {_yaml_scalar(config.file_locations.last_load_directory)}",
+            "",
+            "  # Most recently used directory for file-save dialogs.",
+            f"  last_save_directory: {_yaml_scalar(config.file_locations.last_save_directory)}",
             "",
             "ui_save_state:",
             "  # Name of the last display used by the main window. Used to pick the startup screen.",
@@ -653,7 +679,7 @@ def main() -> int:
         app.processEvents()
         splash.wait_for_click()
 
-    window = MainWindow()
+    window = MainWindow(config)
     _apply_saved_window_placement(window, startup_screen, config)
     if len(sys.argv) > 1:
         candidate = Path(sys.argv[1]).expanduser()
