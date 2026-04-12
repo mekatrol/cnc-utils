@@ -30,12 +30,23 @@ from .app_constants import (
     VALID_WINDOW_STATES,
 )
 from .debug_splash_screen import DebugSplashScreen
+from .diagnostics import InMemoryLogHandler, get_log_tracker
 from .logging_config import LoggingConfig
 from .main_window import MainWindow
 from .ui_save_state import UiSaveState
 
 
 logger = logging.getLogger(__name__)
+
+
+def _describe_value(value: object) -> str:
+    return repr(value)
+
+
+def _append_config_warning(
+    warnings: list[str], field_name: str, reason: str, default: object
+) -> None:
+    warnings.append(f"{field_name}: {reason}; using {default!r}.")
 
 def _asset_path(*parts: str) -> Path:
     return Path(__file__).resolve().parents[1] / "assets" / Path(*parts)
@@ -85,73 +96,192 @@ def _parse_int(
     *,
     minimum: int | None = None,
     maximum: int | None = None,
+    field_name: str | None = None,
+    warnings: list[str] | None = None,
 ) -> int:
     if isinstance(value, bool):
+        if field_name is not None and warnings is not None:
+            _append_config_warning(
+                warnings,
+                field_name,
+                f"expected an integer but got boolean {_describe_value(value)}",
+                default,
+            )
         return default
 
     try:
         parsed = int(value)
     except (TypeError, ValueError):
+        if field_name is not None and warnings is not None and value is not None:
+            _append_config_warning(
+                warnings,
+                field_name,
+                f"could not parse integer from {_describe_value(value)}",
+                default,
+            )
         return default
 
     if minimum is not None and parsed < minimum:
+        if field_name is not None and warnings is not None:
+            _append_config_warning(
+                warnings,
+                field_name,
+                f"value {parsed} is below minimum {minimum}",
+                default,
+            )
         return default
     if maximum is not None and parsed > maximum:
+        if field_name is not None and warnings is not None:
+            _append_config_warning(
+                warnings,
+                field_name,
+                f"value {parsed} is above maximum {maximum}",
+                default,
+            )
         return default
     return parsed
 
 
-def _parse_optional_int(value: object) -> int | None:
+def _parse_optional_int(
+    value: object, *, field_name: str | None = None, warnings: list[str] | None = None
+) -> int | None:
     if value is None or value == "":
         return None
     if isinstance(value, bool):
+        if field_name is not None and warnings is not None:
+            _append_config_warning(
+                warnings,
+                field_name,
+                f"expected an integer or null but got boolean {_describe_value(value)}",
+                None,
+            )
         return None
 
     try:
         return int(value)
     except (TypeError, ValueError):
+        if field_name is not None and warnings is not None:
+            _append_config_warning(
+                warnings,
+                field_name,
+                f"could not parse integer from {_describe_value(value)}",
+                None,
+            )
         return None
 
 
-def _parse_string(value: object, default: str = "") -> str:
+def _parse_string(
+    value: object,
+    default: str = "",
+    *,
+    field_name: str | None = None,
+    warnings: list[str] | None = None,
+) -> str:
     if not isinstance(value, str):
+        if field_name is not None and warnings is not None and value is not None:
+            _append_config_warning(
+                warnings,
+                field_name,
+                f"expected a string but got {_describe_value(value)}",
+                default,
+            )
         return default
     return value.strip()
 
 
-def _parse_window_state(value: object) -> str:
-    parsed = _parse_string(value, "normal").lower()
+def _parse_window_state(value: object, *, warnings: list[str] | None = None) -> str:
+    parsed = _parse_string(
+        value,
+        "normal",
+        field_name="ui_save_state.window_state",
+        warnings=warnings,
+    ).lower()
     if parsed in VALID_WINDOW_STATES:
         return parsed
+    if value is not None and warnings is not None:
+        _append_config_warning(
+            warnings,
+            "ui_save_state.window_state",
+            f"invalid value {_describe_value(value)}; expected one of {sorted(VALID_WINDOW_STATES)}",
+            "normal",
+        )
     return "normal"
 
 
-def _parse_log_level(value: object, default: str = DEFAULT_LOG_LEVEL) -> str:
-    parsed = _parse_string(value, default).upper()
+def _parse_log_level(
+    value: object,
+    default: str = DEFAULT_LOG_LEVEL,
+    *,
+    field_name: str | None = None,
+    warnings: list[str] | None = None,
+) -> str:
+    parsed = _parse_string(
+        value,
+        default,
+        field_name=field_name,
+        warnings=warnings,
+    ).upper()
     if parsed in VALID_LOG_LEVELS:
         return parsed
+    if value is not None and field_name is not None and warnings is not None:
+        _append_config_warning(
+            warnings,
+            field_name,
+            f"invalid log level {_describe_value(value)}; expected one of {sorted(VALID_LOG_LEVELS)}",
+            default,
+        )
     return default
 
 
-def _parse_log_path(value: object) -> str:
-    parsed = _parse_string(value)
+def _parse_log_path(value: object, *, warnings: list[str] | None = None) -> str:
+    parsed = _parse_string(value, field_name="logging.path", warnings=warnings)
     if parsed:
         return parsed
+    if value not in (None, "") and warnings is not None:
+        _append_config_warning(
+            warnings,
+            "logging.path",
+            "log path was empty after parsing",
+            _default_log_path(),
+        )
     return _default_log_path()
 
 
-def _parse_logger_levels(value: object, default_level: str) -> dict[str, str]:
+def _parse_logger_levels(
+    value: object, default_level: str, *, warnings: list[str] | None = None
+) -> dict[str, str]:
     if not isinstance(value, dict):
+        if value is not None and warnings is not None:
+            _append_config_warning(
+                warnings,
+                "logging.loggers",
+                f"expected a mapping but got {_describe_value(value)}",
+                {},
+            )
         return {}
 
     parsed: dict[str, str] = {}
     for logger_name, level in value.items():
         if not isinstance(logger_name, str):
+            if warnings is not None:
+                warnings.append(
+                    "logging.loggers: skipped logger override with non-string name "
+                    f"{_describe_value(logger_name)}."
+                )
             continue
         normalized_name = logger_name.strip()
         if not normalized_name:
+            if warnings is not None:
+                warnings.append(
+                    "logging.loggers: skipped logger override with empty logger name."
+                )
             continue
-        parsed[normalized_name] = _parse_log_level(level, default_level)
+        parsed[normalized_name] = _parse_log_level(
+            level,
+            default_level,
+            field_name=f"logging.loggers.{normalized_name}",
+            warnings=warnings,
+        )
     return parsed
 
 
@@ -163,68 +293,117 @@ def _yaml_scalar(value: object) -> str:
     return str(value)
 
 
-def _load_config() -> AppConfig:
+def _load_config() -> tuple[AppConfig, list[str]]:
     path = _config_path()
     data: object = {}
+    warnings: list[str] = []
 
     if path.exists():
         try:
             loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except (OSError, yaml.YAMLError):
+        except OSError as exc:
+            warnings.append(
+                f"Failed to read config file {path}: {exc}. Using default settings."
+            )
             loaded = {}
-        data = loaded if isinstance(loaded, dict) else {}
+        except yaml.YAMLError as exc:
+            warnings.append(
+                f"Failed to parse YAML config file {path}: {exc}. Using default settings."
+            )
+            loaded = {}
+        if loaded is None:
+            loaded = {}
+        elif not isinstance(loaded, dict):
+            warnings.append(
+                f"Config file {path} must contain a top-level mapping. Using default settings."
+            )
+            loaded = {}
+        data = loaded
 
     app_data = data.get("app", {}) if isinstance(data, dict) else {}
     logging_data = data.get("logging", {}) if isinstance(data, dict) else {}
     ui_data = data.get("ui_save_state", {}) if isinstance(data, dict) else {}
 
     if not isinstance(app_data, dict):
+        warnings.append("app: expected a mapping; using default app settings.")
         app_data = {}
     if not isinstance(logging_data, dict):
+        warnings.append("logging: expected a mapping; using default logging settings.")
         logging_data = {}
     if not isinstance(ui_data, dict):
+        warnings.append("ui_save_state: expected a mapping; using default UI settings.")
         ui_data = {}
 
-    logging_level = _parse_log_level(logging_data.get("level"))
+    logging_level = _parse_log_level(
+        logging_data.get("level"),
+        field_name="logging.level",
+        warnings=warnings,
+    )
 
     return AppConfig(
         splash_minimum_visible_ms=_parse_int(
             app_data.get("splash_minimum_visible_ms"),
             DEFAULT_SPLASH_MINIMUM_VISIBLE_MS,
             minimum=0,
+            field_name="app.splash_minimum_visible_ms",
+            warnings=warnings,
         ),
         logging=LoggingConfig(
             level=logging_level,
-            path=_parse_log_path(logging_data.get("path")),
+            path=_parse_log_path(logging_data.get("path"), warnings=warnings),
             max_bytes=_parse_int(
                 logging_data.get("max_bytes"),
                 DEFAULT_LOG_MAX_BYTES,
                 minimum=1024,
+                field_name="logging.max_bytes",
+                warnings=warnings,
             ),
             backup_count=_parse_int(
                 logging_data.get("backup_count"),
                 DEFAULT_LOG_BACKUP_COUNT,
                 minimum=1,
+                field_name="logging.backup_count",
+                warnings=warnings,
             ),
-            loggers=_parse_logger_levels(logging_data.get("loggers"), logging_level),
+            loggers=_parse_logger_levels(
+                logging_data.get("loggers"), logging_level, warnings=warnings
+            ),
         ),
         ui_save_state=UiSaveState(
-            last_screen_name=_parse_string(ui_data.get("last_screen_name")),
-            window_state=_parse_window_state(ui_data.get("window_state")),
-            window_x=_parse_optional_int(ui_data.get("window_x")),
-            window_y=_parse_optional_int(ui_data.get("window_y")),
+            last_screen_name=_parse_string(
+                ui_data.get("last_screen_name"),
+                field_name="ui_save_state.last_screen_name",
+                warnings=warnings,
+            ),
+            window_state=_parse_window_state(
+                ui_data.get("window_state"), warnings=warnings
+            ),
+            window_x=_parse_optional_int(
+                ui_data.get("window_x"),
+                field_name="ui_save_state.window_x",
+                warnings=warnings,
+            ),
+            window_y=_parse_optional_int(
+                ui_data.get("window_y"),
+                field_name="ui_save_state.window_y",
+                warnings=warnings,
+            ),
             window_width=_parse_int(
                 ui_data.get("window_width"),
                 DEFAULT_WINDOW_WIDTH,
                 minimum=MINIMUM_WINDOW_WIDTH,
+                field_name="ui_save_state.window_width",
+                warnings=warnings,
             ),
             window_height=_parse_int(
                 ui_data.get("window_height"),
                 DEFAULT_WINDOW_HEIGHT,
                 minimum=MINIMUM_WINDOW_HEIGHT,
+                field_name="ui_save_state.window_height",
+                warnings=warnings,
             ),
         ),
-    )
+    ), warnings
 
 
 def _save_config(config: AppConfig) -> None:
@@ -314,6 +493,8 @@ def _configure_logging(config: AppConfig) -> Path:
 
     handler.setFormatter(formatter)
     handler.setLevel(logging.NOTSET)
+    memory_handler = InMemoryLogHandler(get_log_tracker())
+    memory_handler.setLevel(logging.NOTSET)
 
     package_logger = logging.getLogger("mekatrol_pcbcam")
     for existing_handler in package_logger.handlers:
@@ -321,6 +502,7 @@ def _configure_logging(config: AppConfig) -> Path:
     package_logger.handlers.clear()
     package_logger.setLevel(config.logging.level)
     package_logger.addHandler(handler)
+    package_logger.addHandler(memory_handler)
     package_logger.propagate = False
 
     for logger_name, level in config.logging.loggers.items():
@@ -438,8 +620,11 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(APPLICATION_NAME)
     app.setOrganizationName(ORGANIZATION_NAME)
-    config = _load_config()
+    get_log_tracker().clear()
+    config, config_warnings = _load_config()
     active_log_path = _configure_logging(config)
+    for warning in config_warnings:
+        logger.warning("Config warning: %s", warning)
     _save_config(config)
     logger.info("Application startup beginning with config at %s", _config_path())
     logger.debug("Active log output path: %s", active_log_path)
