@@ -137,13 +137,13 @@ class MainWindow(QMainWindow):
             document = self.parser.parse_file(file_path)
         except Exception as exc:
             QMessageBox.critical(self, "Failed to load file", str(exc))
-            self.statusBar().showMessage("Load failed", 5000)
+            self.statusBar().showMessage("Load failed", 3000)
             return
 
         self.document = document
         self.viewer.load_document(document)
         self._update_summary(document)
-        self.statusBar().showMessage(f"Loaded {document.path.name}", 5000)
+        self.statusBar().showMessage(f"Loaded {document.path.name}", 3000)
 
     def _update_summary(self, document: ToolpathDocument | None) -> None:
         if document is None:

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from PySide6.QtCore import QElapsedTimer, QEventLoop, QSettings, QTimer, Qt
+import yaml
+from PySide6.QtCore import QElapsedTimer, QEventLoop, QStandardPaths, QTimer, Qt
 from PySide6.QtGui import QColor, QFontDatabase, QMouseEvent, QPainter, QPen, QPixmap
 from PySide6.QtGui import QScreen
 from PySide6.QtWidgets import QApplication, QSplashScreen, QWidget
@@ -13,14 +16,32 @@ from . import PROJECT_URL, __version__
 from .main_window import MainWindow
 
 
+APPLICATION_NAME = "mekatrol-pcbcam"
+ORGANIZATION_NAME = "Mekatrol"
 DEBUG_SPLASH_ENV = "MEKATROL_PCBCAM_DEBUG_SPLASH"
-LAST_SCREEN_KEY = "ui/last_screen_name"
-WINDOW_STATE_KEY = "ui/window_state"
-WINDOW_X_KEY = "ui/window_x"
-WINDOW_Y_KEY = "ui/window_y"
-WINDOW_WIDTH_KEY = "ui/window_width"
-WINDOW_HEIGHT_KEY = "ui/window_height"
-SPLASH_MINIMUM_VISIBLE_MS = 5000
+CONFIG_FILE_NAME = f"{APPLICATION_NAME}.yaml"
+DEFAULT_SPLASH_MINIMUM_VISIBLE_MS = 3000
+DEFAULT_WINDOW_WIDTH = 1280
+DEFAULT_WINDOW_HEIGHT = 840
+MINIMUM_WINDOW_WIDTH = 640
+MINIMUM_WINDOW_HEIGHT = 480
+VALID_WINDOW_STATES = {"normal", "maximized"}
+
+
+@dataclass
+class UiSaveState:
+    last_screen_name: str = ""
+    window_state: str = "normal"
+    window_x: int | None = None
+    window_y: int | None = None
+    window_width: int = DEFAULT_WINDOW_WIDTH
+    window_height: int = DEFAULT_WINDOW_HEIGHT
+
+
+@dataclass
+class AppConfig:
+    splash_minimum_visible_ms: int = DEFAULT_SPLASH_MINIMUM_VISIBLE_MS
+    ui_save_state: UiSaveState = field(default_factory=UiSaveState)
 
 
 class DebugSplashScreen(QSplashScreen):
@@ -185,13 +206,144 @@ def _debug_hold_splash_enabled() -> bool:
     }
 
 
-def _settings() -> QSettings:
-    return QSettings()
+def _config_path() -> Path:
+    config_root = QStandardPaths.writableLocation(
+        QStandardPaths.StandardLocation.GenericConfigLocation
+    )
+    base_path = Path(config_root) if config_root else Path.home() / ".config"
+    return base_path / ORGANIZATION_NAME / CONFIG_FILE_NAME
 
 
-def _resolve_startup_screen(app: QApplication) -> QScreen:
-    settings = _settings()
-    saved_name = settings.value(LAST_SCREEN_KEY, "", type=str).strip()
+def _parse_int(
+    value: object,
+    default: int,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int:
+    if isinstance(value, bool):
+        return default
+
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+
+    if minimum is not None and parsed < minimum:
+        return default
+    if maximum is not None and parsed > maximum:
+        return default
+    return parsed
+
+
+def _parse_optional_int(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return None
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_string(value: object, default: str = "") -> str:
+    if not isinstance(value, str):
+        return default
+    return value.strip()
+
+
+def _parse_window_state(value: object) -> str:
+    parsed = _parse_string(value, "normal").lower()
+    if parsed in VALID_WINDOW_STATES:
+        return parsed
+    return "normal"
+
+
+def _yaml_scalar(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=True)
+    return str(value)
+
+
+def _load_config() -> AppConfig:
+    path = _config_path()
+    data: object = {}
+
+    if path.exists():
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            loaded = {}
+        data = loaded if isinstance(loaded, dict) else {}
+
+    app_data = data.get("app", {}) if isinstance(data, dict) else {}
+    ui_data = data.get("ui_save_state", {}) if isinstance(data, dict) else {}
+
+    if not isinstance(app_data, dict):
+        app_data = {}
+    if not isinstance(ui_data, dict):
+        ui_data = {}
+
+    return AppConfig(
+        splash_minimum_visible_ms=_parse_int(
+            app_data.get("splash_minimum_visible_ms"),
+            DEFAULT_SPLASH_MINIMUM_VISIBLE_MS,
+            minimum=0,
+        ),
+        ui_save_state=UiSaveState(
+            last_screen_name=_parse_string(ui_data.get("last_screen_name")),
+            window_state=_parse_window_state(ui_data.get("window_state")),
+            window_x=_parse_optional_int(ui_data.get("window_x")),
+            window_y=_parse_optional_int(ui_data.get("window_y")),
+            window_width=_parse_int(
+                ui_data.get("window_width"),
+                DEFAULT_WINDOW_WIDTH,
+                minimum=MINIMUM_WINDOW_WIDTH,
+            ),
+            window_height=_parse_int(
+                ui_data.get("window_height"),
+                DEFAULT_WINDOW_HEIGHT,
+                minimum=MINIMUM_WINDOW_HEIGHT,
+            ),
+        ),
+    )
+
+
+def _save_config(config: AppConfig) -> None:
+    path = _config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = "\n".join(
+        [
+            "# mekatrol-pcbcam configuration.",
+            "app:",
+            "  # Minimum time to keep the splash screen visible during startup, in milliseconds.",
+            f"  splash_minimum_visible_ms: {config.splash_minimum_visible_ms}",
+            "",
+            "ui_save_state:",
+            "  # Name of the last display used by the main window. Used to pick the startup screen.",
+            f"  last_screen_name: {_yaml_scalar(config.ui_save_state.last_screen_name)}",
+            "  # Main window mode restored on startup. Allowed values: normal, maximized.",
+            f"  window_state: {_yaml_scalar(config.ui_save_state.window_state)}",
+            "  # Left edge of the window in global screen coordinates when window_state is normal.",
+            f"  window_x: {_yaml_scalar(config.ui_save_state.window_x)}",
+            "  # Top edge of the window in global screen coordinates when window_state is normal.",
+            f"  window_y: {_yaml_scalar(config.ui_save_state.window_y)}",
+            "  # Window width in pixels when window_state is normal.",
+            f"  window_width: {config.ui_save_state.window_width}",
+            "  # Window height in pixels when window_state is normal.",
+            f"  window_height: {config.ui_save_state.window_height}",
+            "",
+        ]
+    )
+    path.write_text(content, encoding="utf-8")
+
+
+def _resolve_startup_screen(app: QApplication, config: AppConfig) -> QScreen:
+    saved_name = config.ui_save_state.last_screen_name
 
     if saved_name:
         for screen in app.screens():
@@ -215,11 +367,11 @@ def _screen_for_widget(widget: QWidget) -> QScreen | None:
     return widget.screen()
 
 
-def _save_last_screen(widget: QWidget) -> None:
+def _save_last_screen(widget: QWidget, config: AppConfig) -> None:
     screen = _screen_for_widget(widget)
     if screen is None:
         return
-    _settings().setValue(LAST_SCREEN_KEY, screen.name())
+    config.ui_save_state.last_screen_name = screen.name()
 
 
 def _center_widget_on_screen(widget: QWidget, screen: QScreen) -> None:
@@ -247,19 +399,20 @@ def _clamp_window_to_screen(widget: QWidget, screen: QScreen) -> None:
     widget.move(x, y)
 
 
-def _apply_saved_window_placement(window: MainWindow, startup_screen: QScreen) -> None:
-    settings = _settings()
-    saved_state = settings.value(WINDOW_STATE_KEY, "normal", type=str).strip().lower()
+def _apply_saved_window_placement(
+    window: MainWindow, startup_screen: QScreen, config: AppConfig
+) -> None:
+    saved_state = config.ui_save_state.window_state
 
     if saved_state == "normal":
-        width = settings.value(WINDOW_WIDTH_KEY, 1280, type=int)
-        height = settings.value(WINDOW_HEIGHT_KEY, 840, type=int)
-        x = settings.value(WINDOW_X_KEY, None)
-        y = settings.value(WINDOW_Y_KEY, None)
+        width = config.ui_save_state.window_width
+        height = config.ui_save_state.window_height
+        x = config.ui_save_state.window_x
+        y = config.ui_save_state.window_y
 
-        window.resize(max(640, width), max(480, height))
+        window.resize(max(MINIMUM_WINDOW_WIDTH, width), max(MINIMUM_WINDOW_HEIGHT, height))
         if x is not None and y is not None:
-            window.move(int(x), int(y))
+            window.move(x, y)
             _clamp_window_to_screen(window, startup_screen)
         else:
             _center_widget_on_screen(window, startup_screen)
@@ -268,29 +421,32 @@ def _apply_saved_window_placement(window: MainWindow, startup_screen: QScreen) -
     _center_widget_on_screen(window, startup_screen)
 
 
-def _save_window_placement(window: MainWindow) -> None:
+def _save_window_placement(window: MainWindow, config: AppConfig) -> None:
     if window.isMinimized():
         return
 
-    settings = _settings()
-    _save_last_screen(window)
+    _save_last_screen(window, config)
 
     if window.isMaximized():
-        settings.setValue(WINDOW_STATE_KEY, "maximized")
+        config.ui_save_state.window_state = "maximized"
+        _save_config(config)
         return
 
-    settings.setValue(WINDOW_STATE_KEY, "normal")
-    settings.setValue(WINDOW_X_KEY, window.x())
-    settings.setValue(WINDOW_Y_KEY, window.y())
-    settings.setValue(WINDOW_WIDTH_KEY, window.width())
-    settings.setValue(WINDOW_HEIGHT_KEY, window.height())
+    config.ui_save_state.window_state = "normal"
+    config.ui_save_state.window_x = window.x()
+    config.ui_save_state.window_y = window.y()
+    config.ui_save_state.window_width = max(MINIMUM_WINDOW_WIDTH, window.width())
+    config.ui_save_state.window_height = max(MINIMUM_WINDOW_HEIGHT, window.height())
+    _save_config(config)
 
 
 def main() -> int:
     app = QApplication(sys.argv)
-    app.setApplicationName("mekatrol-pcbcam")
-    app.setOrganizationName("Mekatrol")
-    startup_screen = _resolve_startup_screen(app)
+    app.setApplicationName(APPLICATION_NAME)
+    app.setOrganizationName(ORGANIZATION_NAME)
+    config = _load_config()
+    _save_config(config)
+    startup_screen = _resolve_startup_screen(app, config)
 
     splash_path = _asset_path("splash.png")
     pixmap = QPixmap(str(splash_path))
@@ -299,7 +455,7 @@ def main() -> int:
     splash.setStyleSheet("font-weight: 600;")
     _center_widget_on_screen(splash, startup_screen)
     splash.show()
-    splash.begin_startup_timing(SPLASH_MINIMUM_VISIBLE_MS)
+    splash.begin_startup_timing(config.splash_minimum_visible_ms)
     app.processEvents()
 
     for message in ("Starting PCBCAM...",):
@@ -316,7 +472,7 @@ def main() -> int:
         splash.wait_for_click()
 
     window = MainWindow()
-    _apply_saved_window_placement(window, startup_screen)
+    _apply_saved_window_placement(window, startup_screen, config)
     if len(sys.argv) > 1:
         candidate = Path(sys.argv[1]).expanduser()
         if candidate.exists():
@@ -326,11 +482,8 @@ def main() -> int:
         # Normal startup keeps the splash visible for at least the configured
         # minimum duration, but does not add extra delay after slow loads.
         splash.wait_until_ready()
-    app.aboutToQuit.connect(lambda: _save_window_placement(window))
-    if (
-        _settings().value(WINDOW_STATE_KEY, "normal", type=str).strip().lower()
-        == "maximized"
-    ):
+    app.aboutToQuit.connect(lambda: _save_window_placement(window, config))
+    if config.ui_save_state.window_state == "maximized":
         window.showMaximized()
     else:
         window.show()
