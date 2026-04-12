@@ -1,0 +1,9 @@
+[instructions]
+# Project-specific coding standards for Codex.
+#
+# Python
+# - Read and follow the rules defined in pyproject.toml before making Python changes.
+# - Use Ruff as the Python formatter and linter for this repository.
+# - Preserve formatter behavior that avoids magic trailing commas / dangling commas.
+# - Keep one top-level class per file, including dataclasses.
+# - Do not introduce new Python files that contain multiple classes.
