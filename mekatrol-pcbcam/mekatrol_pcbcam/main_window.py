@@ -32,7 +32,6 @@ from .alignment_hole import AlignmentHole
 from .excellon_file_parser import ExcellonFileParser
 from .gcode_parser import GCodeParser
 from .gerber_file_parser import GerberFileParser
-from .cam_generator import CamGenerator
 from .imported_drill_file import ImportedDrillFile
 from .imported_gerber_file import ImportedGerberFile
 from .mirror_preview_widget import MirrorPreviewWidget
@@ -129,9 +128,8 @@ class MainWindow(QMainWindow):
         title = QLabel("PCB CAM Wizard")
         title.setStyleSheet("font-size: 26px; font-weight: 700;")
         subtitle = QLabel(
-            "Stage 1 implements project handling plus Gerber and Excellon import. "
-            "Later CAM steps stay visible in the wizard but remain locked until "
-            "their stage is implemented."
+            "Work through the full CAM wizard from Gerber import through NC generation. "
+            "Each step saves into the project so you can reopen and continue."
         )
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet("color: #5b6571;")
@@ -144,7 +142,7 @@ class MainWindow(QMainWindow):
         self.project_value = QLabel("Unsaved project")
         self.gerber_count_value = QLabel("Gerber files: 0")
         self.drill_count_value = QLabel("Drill files: 0")
-        self.step_status_value = QLabel("Stage 1 of the wizard is active.")
+        self.step_status_value = QLabel("Wizard ready.")
         self.step_status_value.setWordWrap(True)
         summary_layout.addWidget(self.project_value)
         summary_layout.addWidget(self.gerber_count_value)
@@ -252,7 +250,7 @@ class MainWindow(QMainWindow):
         heading.setStyleSheet("font-size: 20px; font-weight: 700;")
         body = QLabel(
             "Import Excellon drill files for PTH and NPTH holes. Drill import is "
-            "optional for Stage 1, but the preview will overlay hole sizes and "
+            "optional, but the preview will overlay hole sizes and "
             "positions so the board stack can be checked now."
         )
         body.setWordWrap(True)
@@ -272,7 +270,7 @@ class MainWindow(QMainWindow):
         self.drill_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
 
         self.drill_hint = QLabel(
-            "You can continue without drill files in Stage 1. Later drill-operation "
+            "You can continue without drill files. Later drill-operation "
             "steps will use the project data saved here."
         )
         self.drill_hint.setWordWrap(True)
@@ -1064,7 +1062,7 @@ class MainWindow(QMainWindow):
         self.next_button.setText(
             "Next"
             if current + 1 < self.IMPLEMENTED_STEP_COUNT
-            else "Next Stage Pending"
+            else "Complete"
         )
         self.project_value.setText(
             str(self.project.project_path) if self.project.project_path else "Unsaved project"
@@ -1446,9 +1444,18 @@ class MainWindow(QMainWindow):
                 return tool
         return None
 
-    def _cam_generator(self) -> CamGenerator:
+    def _cam_generator(self):
         if self.project.project_path is None:
             raise ValueError("Save the project before generating NC files.")
+        try:
+            from .cam_generator import CamGenerator
+        except ModuleNotFoundError as exc:
+            if exc.name == "shapely":
+                raise RuntimeError(
+                    "CAM generation requires the 'Shapely' package. "
+                    "Install dependencies from requirements.txt and restart the application."
+                ) from exc
+            raise
         return CamGenerator(self.project.project_path.parent / "nc")
 
     def _register_generated_output(self, operation_key: str, path: Path) -> None:
