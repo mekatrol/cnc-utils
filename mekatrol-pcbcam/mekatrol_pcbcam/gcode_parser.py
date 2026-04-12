@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 import math
 import re
@@ -8,6 +9,9 @@ from typing import Iterable, List, Sequence
 
 AXES = ("X", "Y", "Z")
 TOKEN_RE = re.compile(r"([A-Z])\s*([-+]?\d+(?:\.\d+)?)", re.IGNORECASE)
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -48,6 +52,7 @@ class GCodeParser:
 
     def parse_file(self, path: str | Path) -> ToolpathDocument:
         file_path = Path(path)
+        logger.debug("Parsing G-code file: %s", file_path)
         segments: List[Segment3D] = []
         current = Point3D(0.0, 0.0, 0.0)
         absolute_mode = True
@@ -112,6 +117,14 @@ class GCodeParser:
             rapid_count=rapid_count,
             cut_count=cut_count,
             path_length=total_length,
+        )
+        logger.debug(
+            "Parsed G-code file: %s segments=%d cut=%d rapid=%d path_length=%.3f",
+            file_path,
+            stats.segment_count,
+            stats.cut_count,
+            stats.rapid_count,
+            stats.path_length,
         )
         return ToolpathDocument(path=file_path, segments=segments, stats=stats)
 

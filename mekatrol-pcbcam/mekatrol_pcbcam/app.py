@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from dataclasses import dataclass, field
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import yaml
@@ -23,9 +25,16 @@ CONFIG_FILE_NAME = f"{APPLICATION_NAME}.yaml"
 DEFAULT_SPLASH_MINIMUM_VISIBLE_MS = 3000
 DEFAULT_WINDOW_WIDTH = 1280
 DEFAULT_WINDOW_HEIGHT = 840
+DEFAULT_LOG_LEVEL = "INFO"
+DEFAULT_LOG_MAX_BYTES = 1_048_576
+DEFAULT_LOG_BACKUP_COUNT = 5
 MINIMUM_WINDOW_WIDTH = 640
 MINIMUM_WINDOW_HEIGHT = 480
 VALID_WINDOW_STATES = {"normal", "maximized"}
+VALID_LOG_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -39,8 +48,18 @@ class UiSaveState:
 
 
 @dataclass
+class LoggingConfig:
+    level: str = DEFAULT_LOG_LEVEL
+    path: str = ""
+    max_bytes: int = DEFAULT_LOG_MAX_BYTES
+    backup_count: int = DEFAULT_LOG_BACKUP_COUNT
+    loggers: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class AppConfig:
     splash_minimum_visible_ms: int = DEFAULT_SPLASH_MINIMUM_VISIBLE_MS
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
     ui_save_state: UiSaveState = field(default_factory=UiSaveState)
 
 
@@ -214,6 +233,27 @@ def _config_path() -> Path:
     return base_path / ORGANIZATION_NAME / CONFIG_FILE_NAME
 
 
+def _application_directory() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+
+    argv0 = Path(sys.argv[0]).expanduser()
+    if argv0.name and str(argv0) not in {"", "-c"}:
+        return argv0.resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def _default_log_path() -> str:
+    return f"logs/{APPLICATION_NAME}.log"
+
+
+def _resolve_log_path(path: str) -> Path:
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    return _application_directory() / candidate
+
+
 def _parse_int(
     value: object,
     default: int,
@@ -261,6 +301,35 @@ def _parse_window_state(value: object) -> str:
     return "normal"
 
 
+def _parse_log_level(value: object, default: str = DEFAULT_LOG_LEVEL) -> str:
+    parsed = _parse_string(value, default).upper()
+    if parsed in VALID_LOG_LEVELS:
+        return parsed
+    return default
+
+
+def _parse_log_path(value: object) -> str:
+    parsed = _parse_string(value)
+    if parsed:
+        return parsed
+    return _default_log_path()
+
+
+def _parse_logger_levels(value: object, default_level: str) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+
+    parsed: dict[str, str] = {}
+    for logger_name, level in value.items():
+        if not isinstance(logger_name, str):
+            continue
+        normalized_name = logger_name.strip()
+        if not normalized_name:
+            continue
+        parsed[normalized_name] = _parse_log_level(level, default_level)
+    return parsed
+
+
 def _yaml_scalar(value: object) -> str:
     if value is None:
         return "null"
@@ -281,18 +350,38 @@ def _load_config() -> AppConfig:
         data = loaded if isinstance(loaded, dict) else {}
 
     app_data = data.get("app", {}) if isinstance(data, dict) else {}
+    logging_data = data.get("logging", {}) if isinstance(data, dict) else {}
     ui_data = data.get("ui_save_state", {}) if isinstance(data, dict) else {}
 
     if not isinstance(app_data, dict):
         app_data = {}
+    if not isinstance(logging_data, dict):
+        logging_data = {}
     if not isinstance(ui_data, dict):
         ui_data = {}
+
+    logging_level = _parse_log_level(logging_data.get("level"))
 
     return AppConfig(
         splash_minimum_visible_ms=_parse_int(
             app_data.get("splash_minimum_visible_ms"),
             DEFAULT_SPLASH_MINIMUM_VISIBLE_MS,
             minimum=0,
+        ),
+        logging=LoggingConfig(
+            level=logging_level,
+            path=_parse_log_path(logging_data.get("path")),
+            max_bytes=_parse_int(
+                logging_data.get("max_bytes"),
+                DEFAULT_LOG_MAX_BYTES,
+                minimum=1024,
+            ),
+            backup_count=_parse_int(
+                logging_data.get("backup_count"),
+                DEFAULT_LOG_BACKUP_COUNT,
+                minimum=1,
+            ),
+            loggers=_parse_logger_levels(logging_data.get("loggers"), logging_level),
         ),
         ui_save_state=UiSaveState(
             last_screen_name=_parse_string(ui_data.get("last_screen_name")),
@@ -323,6 +412,30 @@ def _save_config(config: AppConfig) -> None:
             "  # Minimum time to keep the splash screen visible during startup, in milliseconds.",
             f"  splash_minimum_visible_ms: {config.splash_minimum_visible_ms}",
             "",
+            "logging:",
+            "  # Default log level for the mekatrol_pcbcam application loggers.",
+            "  # Common values: DEBUG, INFO, WARNING, ERROR, CRITICAL.",
+            f"  level: {_yaml_scalar(config.logging.level)}",
+            "  # Log file path. Relative paths are resolved against the running application executable directory.",
+            f"  path: {_yaml_scalar(config.logging.path)}",
+            "  # Maximum size in bytes for each log file before rollover creates a new file.",
+            f"  max_bytes: {config.logging.max_bytes}",
+            "  # Number of rotated log files to keep alongside the active log file.",
+            f"  backup_count: {config.logging.backup_count}",
+            "  # Optional per-logger overrides. These names usually match Python module namespaces.",
+            "  # Example: mekatrol_pcbcam.gcode_parser: DEBUG",
+            *(
+                ["  loggers: {}"]
+                if not config.logging.loggers
+                else [
+                    "  loggers:",
+                    *[
+                        f"    {logger_name}: {_yaml_scalar(level)}"
+                        for logger_name, level in sorted(config.logging.loggers.items())
+                    ],
+                ]
+            ),
+            "",
             "ui_save_state:",
             "  # Name of the last display used by the main window. Used to pick the startup screen.",
             f"  last_screen_name: {_yaml_scalar(config.ui_save_state.last_screen_name)}",
@@ -340,6 +453,62 @@ def _save_config(config: AppConfig) -> None:
         ]
     )
     path.write_text(content, encoding="utf-8")
+
+
+def _configure_logging(config: AppConfig) -> Path:
+    configured_path = _resolve_log_path(config.logging.path)
+    fallback_path = _resolve_log_path(_default_log_path())
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        "%Y-%m-%d %H:%M:%S",
+    )
+
+    handler: logging.Handler
+    active_path = configured_path
+    try:
+        configured_path.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            configured_path,
+            maxBytes=config.logging.max_bytes,
+            backupCount=config.logging.backup_count,
+            encoding="utf-8",
+        )
+    except OSError:
+        active_path = fallback_path
+        try:
+            fallback_path.parent.mkdir(parents=True, exist_ok=True)
+            handler = RotatingFileHandler(
+                fallback_path,
+                maxBytes=config.logging.max_bytes,
+                backupCount=config.logging.backup_count,
+                encoding="utf-8",
+            )
+        except OSError:
+            handler = logging.StreamHandler(sys.stderr)
+            active_path = Path("<stderr>")
+
+    handler.setFormatter(formatter)
+    handler.setLevel(logging.NOTSET)
+
+    package_logger = logging.getLogger("mekatrol_pcbcam")
+    for existing_handler in package_logger.handlers:
+        existing_handler.close()
+    package_logger.handlers.clear()
+    package_logger.setLevel(config.logging.level)
+    package_logger.addHandler(handler)
+    package_logger.propagate = False
+
+    for logger_name, level in config.logging.loggers.items():
+        logging.getLogger(logger_name).setLevel(level)
+
+    logger.info(
+        "Logging configured: level=%s path=%s max_bytes=%d backup_count=%d",
+        config.logging.level,
+        active_path,
+        config.logging.max_bytes,
+        config.logging.backup_count,
+    )
+    return active_path
 
 
 def _resolve_startup_screen(app: QApplication, config: AppConfig) -> QScreen:
@@ -445,7 +614,10 @@ def main() -> int:
     app.setApplicationName(APPLICATION_NAME)
     app.setOrganizationName(ORGANIZATION_NAME)
     config = _load_config()
+    active_log_path = _configure_logging(config)
     _save_config(config)
+    logger.info("Application startup beginning with config at %s", _config_path())
+    logger.debug("Active log output path: %s", active_log_path)
     startup_screen = _resolve_startup_screen(app, config)
 
     splash_path = _asset_path("splash.png")
@@ -476,7 +648,10 @@ def main() -> int:
     if len(sys.argv) > 1:
         candidate = Path(sys.argv[1]).expanduser()
         if candidate.exists():
+            logger.info("Loading startup file argument: %s", candidate)
             window.load_file(str(candidate))
+        else:
+            logger.warning("Startup file argument does not exist: %s", candidate)
     splash.mark_startup_complete()
     if not _debug_hold_splash_enabled():
         # Normal startup keeps the splash visible for at least the configured
@@ -488,4 +663,5 @@ def main() -> int:
     else:
         window.show()
     splash.finish(window)
+    logger.info("Application startup complete")
     return app.exec()

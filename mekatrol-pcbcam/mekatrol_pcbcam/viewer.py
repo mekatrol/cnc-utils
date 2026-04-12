@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import math
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPen, QWheelEvent
@@ -17,6 +18,9 @@ AXIS_Z = QColor("#4ea1ff")
 RAPID = QColor("#f2c94c")
 CUT = QColor("#f97316")
 TEXT = QColor("#dfe7ef")
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -40,6 +44,7 @@ class ToolpathViewer(QOpenGLWidget):
         self._right_drag = False
         self._pivot = Point3D(0.0, 0.0, 0.0)
         self._extent = 100.0
+        logger.debug("Toolpath viewer initialized")
 
     def load_document(self, document: ToolpathDocument | None) -> None:
         self.document = document
@@ -48,6 +53,7 @@ class ToolpathViewer(QOpenGLWidget):
             self._extent = 100.0
             self.camera = CameraState()
             self.update()
+            logger.debug("Viewer reset to empty document state")
             return
 
         stats = document.stats
@@ -60,6 +66,14 @@ class ToolpathViewer(QOpenGLWidget):
         span_y = stats.max_point.y - stats.min_point.y
         span_z = stats.max_point.z - stats.min_point.z
         self._extent = max(span_x, span_y, span_z, 10.0)
+        logger.debug(
+            "Viewer loaded document: %s extent=%.3f pivot=(%.3f, %.3f, %.3f)",
+            document.path,
+            self._extent,
+            self._pivot.x,
+            self._pivot.y,
+            self._pivot.z,
+        )
         self.fit_to_view()
 
     def fit_to_view(self) -> None:
@@ -68,6 +82,12 @@ class ToolpathViewer(QOpenGLWidget):
         scale = min(width, height) * 0.72
         self.camera = CameraState(zoom=scale / max(self._extent, 1.0))
         self.update()
+        logger.debug(
+            "Viewer fit-to-view applied: width=%d height=%d zoom=%.5f",
+            width,
+            height,
+            self.camera.zoom,
+        )
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)

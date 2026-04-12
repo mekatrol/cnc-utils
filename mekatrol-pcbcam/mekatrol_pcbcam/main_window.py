@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -23,6 +24,9 @@ from .gcode_parser import GCodeParser, ToolpathDocument
 from .viewer import ToolpathViewer
 
 
+logger = logging.getLogger(__name__)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -35,6 +39,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._build_menu()
         self._update_summary(None)
+        logger.debug("Main window initialized")
 
     def _build_ui(self) -> None:
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -129,13 +134,17 @@ class MainWindow(QMainWindow):
             "NC Files (*.nc *.gcode *.tap *.ngc);;All Files (*)",
         )
         if not selected:
+            logger.debug("Open-file dialog cancelled")
             return
+        logger.info("Selected file for loading: %s", selected)
         self.load_file(selected)
 
     def load_file(self, file_path: str) -> None:
+        logger.info("Loading toolpath file: %s", file_path)
         try:
             document = self.parser.parse_file(file_path)
         except Exception as exc:
+            logger.exception("Failed to load toolpath file: %s", file_path)
             QMessageBox.critical(self, "Failed to load file", str(exc))
             self.statusBar().showMessage("Load failed", 3000)
             return
@@ -144,6 +153,13 @@ class MainWindow(QMainWindow):
         self.viewer.load_document(document)
         self._update_summary(document)
         self.statusBar().showMessage(f"Loaded {document.path.name}", 3000)
+        logger.info(
+            "Loaded toolpath file: %s segments=%d cut=%d rapid=%d",
+            document.path,
+            document.stats.segment_count,
+            document.stats.cut_count,
+            document.stats.rapid_count,
+        )
 
     def _update_summary(self, document: ToolpathDocument | None) -> None:
         if document is None:
