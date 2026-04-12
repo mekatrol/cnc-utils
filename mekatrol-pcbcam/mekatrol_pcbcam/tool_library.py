@@ -11,6 +11,14 @@ class ToolDefinition:
     identifier: str
     label: str
     category: str
+    parameters: dict[str, object]
+
+    def numeric_parameter(self, name: str, default: float = 0.0) -> float:
+        value = self.parameters.get(name, default)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
 
 
 class ToolLibrary:
@@ -120,7 +128,8 @@ class ToolLibrary:
             label = f"{label} ({', '.join(details)})"
         raw_category = item.get("category") or item.get("type") or fallback_category
         category = str(raw_category).strip()
-        return ToolDefinition(identifier, label, category)
+        parameters = dict(item)
+        return ToolDefinition(identifier, label, category, parameters)
 
     @classmethod
     def _infer_category(cls, raw_category: str) -> str | None:

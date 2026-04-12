@@ -30,13 +30,16 @@ from PySide6.QtWidgets import (
 from .app_config import AppConfig
 from .alignment_hole import AlignmentHole
 from .excellon_file_parser import ExcellonFileParser
+from .gcode_parser import GCodeParser
 from .gerber_file_parser import GerberFileParser
+from .cam_generator import CamGenerator
 from .imported_drill_file import ImportedDrillFile
 from .imported_gerber_file import ImportedGerberFile
 from .mirror_preview_widget import MirrorPreviewWidget
 from .pcb_preview_widget import PcbPreviewWidget
 from .pcb_project import PcbProject
 from .tool_library import ToolLibrary
+from .viewer import ToolpathViewer
 from .wizard_step_bar import WizardStepBar
 from .app_constants import ORGANIZATION_NAME
 
@@ -58,7 +61,7 @@ class MainWindow(QMainWindow):
         "Edge Cuts",
         "NC Preview",
     ]
-    IMPLEMENTED_STEP_COUNT = 6
+    IMPLEMENTED_STEP_COUNT = 11
 
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
@@ -66,11 +69,17 @@ class MainWindow(QMainWindow):
         self.project = PcbProject()
         self.gerber_parser = GerberFileParser()
         self.drill_parser = ExcellonFileParser()
+        self.gcode_parser = GCodeParser()
         self.imported_gerbers: list[ImportedGerberFile] = []
         self.imported_drills: list[ImportedDrillFile] = []
         self.tool_library: ToolLibrary | None = None
+        self.generated_documents = {}
 
         self.preview = PcbPreviewWidget()
+        self.toolpath_viewer = ToolpathViewer()
+        self.preview_stack = QStackedWidget()
+        self.preview_stack.addWidget(self.preview)
+        self.preview_stack.addWidget(self.toolpath_viewer)
         self.step_bar = WizardStepBar(self.STEP_TITLES)
         self.step_bar.step_selected.connect(self._handle_step_selected)
 
@@ -90,7 +99,7 @@ class MainWindow(QMainWindow):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._build_sidebar())
-        splitter.addWidget(self.preview)
+        splitter.addWidget(self.preview_stack)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([420, 1020])
@@ -149,6 +158,43 @@ class MainWindow(QMainWindow):
         self.page_stack.addWidget(self._build_layer_assignment_page())
         self.page_stack.addWidget(self._build_mirror_setup_page())
         self.page_stack.addWidget(self._build_alignment_holes_page())
+        self.page_stack.addWidget(
+            self._build_operation_page(
+                "Step 7: Front Isolation",
+                "Generate front copper isolation G-code from the assigned front copper layer.",
+                "Generate Front Isolation",
+                "_generate_front_isolation",
+                "front_isolation",
+            )
+        )
+        self.page_stack.addWidget(
+            self._build_operation_page(
+                "Step 8: Back Isolation",
+                "Generate back copper isolation G-code from the assigned back copper layer.",
+                "Generate Back Isolation",
+                "_generate_back_isolation",
+                "back_isolation",
+            )
+        )
+        self.page_stack.addWidget(
+            self._build_operation_page(
+                "Step 9: Drilling",
+                "Generate drilling G-code for imported drill holes and optional alignment holes.",
+                "Generate Drill Operations",
+                "_generate_drilling_operations",
+                "drilling",
+            )
+        )
+        self.page_stack.addWidget(
+            self._build_operation_page(
+                "Step 10: Edge Cuts",
+                "Generate edge cut G-code from the assigned board outline.",
+                "Generate Edge Cuts",
+                "_generate_edge_cuts",
+                "edge_cuts",
+            )
+        )
+        self.page_stack.addWidget(self._build_nc_preview_page())
 
         layout.addWidget(title)
         layout.addWidget(subtitle)
@@ -455,6 +501,67 @@ class MainWindow(QMainWindow):
         layout.addLayout(button_row)
         layout.addWidget(self.alignment_hole_list, 1)
         layout.addWidget(self.alignment_holes_hint)
+        return page
+
+    def _build_operation_page(
+        self,
+        heading_text: str,
+        body_text: str,
+        button_text: str,
+        handler_name: str,
+        operation_key: str,
+    ) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        heading = QLabel(heading_text)
+        heading.setStyleSheet("font-size: 20px; font-weight: 700;")
+        body = QLabel(body_text)
+        body.setWordWrap(True)
+
+        button = QPushButton(button_text)
+        button.clicked.connect(getattr(self, handler_name))
+
+        path_value = QLabel("Not generated yet")
+        path_value.setWordWrap(True)
+        path_value.setProperty("operation_key", operation_key)
+        if operation_key == "front_isolation":
+            self.front_isolation_value = path_value
+        elif operation_key == "back_isolation":
+            self.back_isolation_value = path_value
+        elif operation_key == "drilling":
+            self.drilling_value = path_value
+        elif operation_key == "edge_cuts":
+            self.edge_cuts_value = path_value
+
+        layout.addWidget(heading)
+        layout.addWidget(body)
+        layout.addWidget(button)
+        layout.addWidget(path_value)
+        layout.addStretch(1)
+        return page
+
+    def _build_nc_preview_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        heading = QLabel("Step 11: NC Preview")
+        heading.setStyleSheet("font-size: 20px; font-weight: 700;")
+        body = QLabel(
+            "Select any generated NC file to inspect it in the 3D toolpath viewer."
+        )
+        body.setWordWrap(True)
+
+        self.generated_output_list = QListWidget()
+        self.generated_output_list.currentRowChanged.connect(self._generated_output_selected)
+
+        layout.addWidget(heading)
+        layout.addWidget(body)
+        layout.addWidget(self.generated_output_list, 1)
         return page
 
     def _build_menu(self) -> None:
@@ -769,6 +876,121 @@ class MainWindow(QMainWindow):
         self.project.replace_alignment_holes([])
         self._sync_ui()
 
+    def _generate_front_isolation(self) -> None:
+        gerber = self._assigned_gerber("front_copper")
+        if gerber is None:
+            QMessageBox.information(self, "Front isolation", "Assign a front copper Gerber first.")
+            return
+        tool = self._selected_tool("v_bits")
+        if tool is None:
+            QMessageBox.information(self, "Front isolation", "Select a V-bit first.")
+            return
+        try:
+            output_path = self._cam_generator().generate_front_isolation(
+                gerber,
+                output_name="front-isolation.nc",
+                tool_tip_diameter=tool.numeric_parameter("tip_diameter", tool.numeric_parameter("diameter", 0.2)),
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Front isolation failed", str(exc))
+            return
+        self._register_generated_output("front_isolation", output_path)
+
+    def _generate_back_isolation(self) -> None:
+        gerber = self._assigned_gerber("back_copper")
+        if gerber is None:
+            QMessageBox.information(self, "Back isolation", "Assign a back copper Gerber first.")
+            return
+        if self.project.requires_mirror_setup() and not self.project.mirror_flip_edge:
+            QMessageBox.information(self, "Back isolation", "Choose a mirror edge first.")
+            return
+        tool = self._selected_tool("v_bits")
+        if tool is None:
+            QMessageBox.information(self, "Back isolation", "Select a V-bit first.")
+            return
+        bounds = self._reference_board_bounds()
+        if bounds is None:
+            QMessageBox.information(self, "Back isolation", "Board bounds are not available.")
+            return
+        try:
+            output_path = self._cam_generator().generate_back_isolation(
+                gerber,
+                output_name="back-isolation.nc",
+                tool_tip_diameter=tool.numeric_parameter("tip_diameter", tool.numeric_parameter("diameter", 0.2)),
+                mirror_edge=self.project.mirror_flip_edge or "left",
+                board_bounds=bounds,
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Back isolation failed", str(exc))
+            return
+        self._register_generated_output("back_isolation", output_path)
+
+    def _generate_drilling_operations(self) -> None:
+        tool = self._selected_tool("drilling")
+        mill_tool = self._selected_tool("milling")
+        if tool is None or mill_tool is None:
+            QMessageBox.information(
+                self,
+                "Drilling",
+                "Select drilling and milling tools first.",
+            )
+            return
+        holes = []
+        for drill in self.imported_drills:
+            holes.extend(drill.holes)
+        holes.extend(self._alignment_hole_positions())
+        if not holes:
+            QMessageBox.information(
+                self,
+                "Drilling",
+                "There are no drill or alignment holes to generate.",
+            )
+            return
+        try:
+            output_path = self._cam_generator().generate_drill_operations(
+                holes,
+                output_name="drilling.nc",
+                drill_diameter=tool.numeric_parameter("diameter", 0.1),
+                mill_diameter=mill_tool.numeric_parameter("diameter", 0.1),
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Drilling failed", str(exc))
+            return
+        self._register_generated_output("drilling", output_path)
+
+    def _generate_edge_cuts(self) -> None:
+        gerber = self._assigned_gerber("edges")
+        if gerber is None or not gerber.outline:
+            QMessageBox.information(self, "Edge cuts", "Assign an edge-cuts Gerber with an outline first.")
+            return
+        mill_tool = self._selected_tool("milling")
+        if mill_tool is None:
+            QMessageBox.information(self, "Edge cuts", "Select a milling tool first.")
+            return
+        try:
+            output_path = self._cam_generator().generate_edge_cuts(
+                gerber.outline,
+                output_name="edge-cuts.nc",
+                mill_diameter=mill_tool.numeric_parameter("diameter", 0.1),
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Edge cut generation failed", str(exc))
+            return
+        self._register_generated_output("edge_cuts", output_path)
+
+    def _generated_output_selected(self, row: int) -> None:
+        if row < 0:
+            self.toolpath_viewer.load_document(None)
+            return
+        item = self.generated_output_list.item(row)
+        if item is None:
+            return
+        operation_key = item.data(Qt.ItemDataRole.UserRole)
+        path = self.project.generated_outputs.get(str(operation_key))
+        if path is None:
+            return
+        self._load_generated_document(path)
+
     def _parse_gerber_paths(self, paths: list[Path]) -> list[ImportedGerberFile]:
         imports = [self.gerber_parser.parse_file(path) for path in paths]
         return sorted(imports, key=lambda item: item.display_name.lower())
@@ -795,6 +1017,16 @@ class MainWindow(QMainWindow):
             return bool(self.project.mirror_flip_edge)
         if index == 5:
             return True
+        if index == 6:
+            return self._operation_optional_or_generated("front_isolation", "front_copper")
+        if index == 7:
+            return self._operation_optional_or_generated("back_isolation", "back_copper")
+        if index == 8:
+            return self._drilling_optional_or_generated()
+        if index == 9:
+            return self._operation_optional_or_generated("edge_cuts", "edges")
+        if index == 10:
+            return bool(self.project.generated_outputs)
         return False
 
     def _validation_message(self, index: int) -> str:
@@ -806,6 +1038,14 @@ class MainWindow(QMainWindow):
             return "Assign at least one Gerber file to front copper, back copper, or edges."
         if index == 4:
             return "Select the mirror flip edge before moving to the next step."
+        if index == 6:
+            return "Generate the front isolation NC file before moving to the next step."
+        if index == 7:
+            return "Generate the back isolation NC file before moving to the next step."
+        if index == 8:
+            return "Generate the drilling NC file before moving to the next step."
+        if index == 9:
+            return "Generate the edge cut NC file before moving to the next step."
         return "Complete the current wizard step before continuing."
 
     def _sync_ui(self) -> None:
@@ -837,11 +1077,13 @@ class MainWindow(QMainWindow):
         self._sync_layer_assignment_page()
         self._sync_mirror_setup_page()
         self._sync_alignment_holes_page()
+        self._sync_generated_outputs()
         self.preview.load_project_geometry(
             self.imported_gerbers,
             self.imported_drills,
             self._alignment_hole_positions(),
         )
+        self.preview_stack.setCurrentIndex(1 if current >= 6 else 0)
         self._update_window_title()
 
     def _refresh_list_widgets(self) -> None:
@@ -883,11 +1125,18 @@ class MainWindow(QMainWindow):
         if self.project.current_step_index == 4:
             return "Choose the mirror edge only when both front and back copper are assigned."
         if self.project.current_step_index == 5:
-            return (
-                "Add optional alignment holes and confirm they appear outside the board in preview. "
-                "Step 7 and later are not implemented yet."
-            )
-        return "Stage 3 of the wizard is active."
+            return "Add optional alignment holes and confirm they appear outside the board in preview."
+        if self.project.current_step_index == 6:
+            return "Generate front copper isolation if a front copper layer is assigned."
+        if self.project.current_step_index == 7:
+            return "Generate back copper isolation if a back copper layer is assigned."
+        if self.project.current_step_index == 8:
+            return "Generate drilling for imported drill files and alignment holes."
+        if self.project.current_step_index == 9:
+            return "Generate edge cut operations if an outline is assigned."
+        if self.project.current_step_index == 10:
+            return "Select a generated NC file to inspect it in the 3D preview."
+        return "Stage 4 of the wizard is active."
 
     def _update_window_title(self) -> None:
         project_name = (
@@ -1187,3 +1436,76 @@ class MainWindow(QMainWindow):
             y_min - hole.offset_from_edge,
             hole.diameter,
         )
+
+    def _selected_tool(self, role: str):
+        if self.tool_library is None:
+            return None
+        selected_id = self.project.selected_tools.get(role, "")
+        for tool in self.tool_library.tools_by_category[role]:
+            if tool.identifier == selected_id:
+                return tool
+        return None
+
+    def _cam_generator(self) -> CamGenerator:
+        if self.project.project_path is None:
+            raise ValueError("Save the project before generating NC files.")
+        return CamGenerator(self.project.project_path.parent / "nc")
+
+    def _register_generated_output(self, operation_key: str, path: Path) -> None:
+        self.project.generated_outputs[operation_key] = path.resolve()
+        self.project.completed_steps.add(self.project.current_step_index)
+        self._load_generated_document(path)
+        self._sync_ui()
+
+    def _load_generated_document(self, path: Path) -> None:
+        document = self.gcode_parser.parse_file(path)
+        self.generated_documents[str(path.resolve())] = document
+        self.toolpath_viewer.load_document(document)
+
+    def _sync_generated_outputs(self) -> None:
+        generated_map = {
+            "front_isolation": getattr(self, "front_isolation_value", None),
+            "back_isolation": getattr(self, "back_isolation_value", None),
+            "drilling": getattr(self, "drilling_value", None),
+            "edge_cuts": getattr(self, "edge_cuts_value", None),
+        }
+        for key, label in generated_map.items():
+            if label is None:
+                continue
+            path = self.project.generated_outputs.get(key)
+            label.setText(str(path) if path is not None else "Not generated yet")
+
+        self.generated_output_list.blockSignals(True)
+        current_key = None
+        current_item = self.generated_output_list.currentItem()
+        if current_item is not None:
+            current_key = current_item.data(Qt.ItemDataRole.UserRole)
+        self.generated_output_list.clear()
+        for key, title in (
+            ("front_isolation", "Front Isolation"),
+            ("back_isolation", "Back Isolation"),
+            ("drilling", "Drilling"),
+            ("edge_cuts", "Edge Cuts"),
+        ):
+            path = self.project.generated_outputs.get(key)
+            if path is None:
+                continue
+            item = QListWidgetItem(f"{title}: {path.name}")
+            item.setToolTip(str(path))
+            item.setData(Qt.ItemDataRole.UserRole, key)
+            self.generated_output_list.addItem(item)
+            if current_key == key:
+                self.generated_output_list.setCurrentItem(item)
+        self.generated_output_list.blockSignals(False)
+        if self.generated_output_list.count() > 0 and self.generated_output_list.currentRow() < 0:
+            self.generated_output_list.setCurrentRow(0)
+
+    def _operation_optional_or_generated(self, operation_key: str, layer_role: str) -> bool:
+        if self.project.layer_assignments.get(layer_role) is None:
+            return True
+        return operation_key in self.project.generated_outputs
+
+    def _drilling_optional_or_generated(self) -> bool:
+        if not self.imported_drills and not self.project.alignment_holes:
+            return True
+        return "drilling" in self.project.generated_outputs

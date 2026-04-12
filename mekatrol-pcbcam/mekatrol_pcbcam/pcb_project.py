@@ -28,6 +28,7 @@ class PcbProject:
         }
         self.mirror_flip_edge: str = ""
         self.alignment_holes: list[AlignmentHole] = []
+        self.generated_outputs: dict[str, Path] = {}
         self.current_step_index = 0
         self.highest_commenced_step = 0
         self.completed_steps: set[int] = set()
@@ -169,6 +170,10 @@ class PcbProject:
                 }
                 for hole in self.alignment_holes
             ],
+            "generated_outputs": {
+                key: self._to_relative_path(value, self.project_path.parent)
+                for key, value in self.generated_outputs.items()
+            },
             "wizard": {
                 "current_step_index": self.current_step_index,
                 "highest_commenced_step": self.highest_commenced_step,
@@ -238,6 +243,14 @@ class PcbProject:
                     )
                 except (TypeError, ValueError):
                     continue
+        generated_output_data = loaded.get("generated_outputs", {})
+        if isinstance(generated_output_data, dict):
+            for key, raw_path in generated_output_data.items():
+                if isinstance(key, str) and isinstance(raw_path, str) and raw_path.strip():
+                    project.generated_outputs[key] = project._from_relative_path(
+                        raw_path,
+                        project.project_path.parent,
+                    )
         wizard_data = loaded.get("wizard", {})
         project.current_step_index = int(wizard_data.get("current_step_index", 0))
         project.highest_commenced_step = int(
@@ -265,6 +278,8 @@ class PcbProject:
                 if self.dirty_from_step is None
                 else min(self.dirty_from_step, index)
             )
+        if index <= 9:
+            self.generated_outputs = {}
         self.highest_commenced_step = min(self.highest_commenced_step, index + 1)
         self.current_step_index = min(self.current_step_index, index + 1)
 
