@@ -4,6 +4,8 @@ from pathlib import Path
 
 import yaml
 
+from .alignment_hole import AlignmentHole
+
 
 class PcbProject:
     VERSION = 1
@@ -25,6 +27,7 @@ class PcbProject:
             "edges": None,
         }
         self.mirror_flip_edge: str = ""
+        self.alignment_holes: list[AlignmentHole] = []
         self.current_step_index = 0
         self.highest_commenced_step = 0
         self.completed_steps: set[int] = set()
@@ -89,6 +92,13 @@ class PcbProject:
             self._invalidate_from(4)
         return changed
 
+    def replace_alignment_holes(self, holes: list[AlignmentHole]) -> bool:
+        changed = holes != self.alignment_holes
+        self.alignment_holes = holes
+        if changed:
+            self._invalidate_from(5)
+        return changed
+
     def requires_mirror_setup(self) -> bool:
         return (
             self.layer_assignments.get("front_copper") is not None
@@ -150,6 +160,15 @@ class PcbProject:
             "mirror": {
                 "flip_edge": self.mirror_flip_edge or None,
             },
+            "alignment_holes": [
+                {
+                    "edge": hole.edge,
+                    "offset_along_edge": hole.offset_along_edge,
+                    "offset_from_edge": hole.offset_from_edge,
+                    "diameter": hole.diameter,
+                }
+                for hole in self.alignment_holes
+            ],
             "wizard": {
                 "current_step_index": self.current_step_index,
                 "highest_commenced_step": self.highest_commenced_step,
@@ -203,6 +222,22 @@ class PcbProject:
             raw_edge = mirror_data.get("flip_edge", "")
             if isinstance(raw_edge, str):
                 project.mirror_flip_edge = raw_edge.strip()
+        alignment_data = loaded.get("alignment_holes", [])
+        if isinstance(alignment_data, list):
+            for item in alignment_data:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    project.alignment_holes.append(
+                        AlignmentHole(
+                            edge=str(item.get("edge", "")).strip(),
+                            offset_along_edge=float(item.get("offset_along_edge", 0.0)),
+                            offset_from_edge=float(item.get("offset_from_edge", 0.0)),
+                            diameter=float(item.get("diameter", 0.0)),
+                        )
+                    )
+                except (TypeError, ValueError):
+                    continue
         wizard_data = loaded.get("wizard", {})
         project.current_step_index = int(wizard_data.get("current_step_index", 0))
         project.highest_commenced_step = int(

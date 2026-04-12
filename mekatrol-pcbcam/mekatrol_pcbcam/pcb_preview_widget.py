@@ -23,6 +23,7 @@ GRID_MINOR = QColor("#1e2630")
 GRID_MAJOR = QColor("#2d3947")
 OUTLINE = QColor("#ffe066")
 DRILL = QColor("#dfe7ef")
+ALIGNMENT = QColor("#6ee7b7")
 TEXT = QColor("#dfe7ef")
 PALETTE = [
     QColor("#ff7f50"),
@@ -41,6 +42,7 @@ class PcbPreviewWidget(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._gerber_files: list[ImportedGerberFile] = []
         self._drill_files: list[ImportedDrillFile] = []
+        self._alignment_holes: list[tuple[float, float, float]] = []
         self._bounds = BoardBounds()
         self._zoom = 1.0
         self._pan_x = 0.0
@@ -52,14 +54,18 @@ class PcbPreviewWidget(QWidget):
         self,
         gerber_files: list[ImportedGerberFile],
         drill_files: list[ImportedDrillFile],
+        alignment_holes: list[tuple[float, float, float]],
     ) -> None:
         self._gerber_files = gerber_files
         self._drill_files = drill_files
+        self._alignment_holes = alignment_holes
         self._bounds = BoardBounds()
         for gerber in gerber_files:
             self._bounds.include_bounds(gerber.bounds)
         for drill in drill_files:
             self._bounds.include_bounds(drill.bounds)
+        for x, y, diameter in alignment_holes:
+            self._bounds.include_point(x, y, diameter * 0.5)
         self.fit_to_view()
 
     def fit_to_view(self) -> None:
@@ -168,6 +174,10 @@ class PcbPreviewWidget(QWidget):
             for hole in drill.holes:
                 self._draw_hole(painter, hole)
 
+        painter.setPen(QPen(ALIGNMENT, 1.8))
+        for hole in self._alignment_holes:
+            self._draw_alignment_hole(painter, hole)
+
     def _draw_outline(self, painter: QPainter, outline: list[tuple[float, float]]) -> None:
         if len(outline) < 2:
             return
@@ -222,6 +232,26 @@ class PcbPreviewWidget(QWidget):
         painter.drawEllipse(screen_center, radius, radius)
         painter.restore()
 
+    def _draw_alignment_hole(
+        self,
+        painter: QPainter,
+        hole: tuple[float, float, float],
+    ) -> None:
+        screen_center = self._world_to_screen(hole[0], hole[1])
+        radius = max(2.0, hole[2] * 0.5 * self._zoom)
+        painter.save()
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(screen_center, radius, radius)
+        painter.drawLine(
+            QPointF(screen_center.x() - radius - 5.0, screen_center.y()),
+            QPointF(screen_center.x() + radius + 5.0, screen_center.y()),
+        )
+        painter.drawLine(
+            QPointF(screen_center.x(), screen_center.y() - radius - 5.0),
+            QPointF(screen_center.x(), screen_center.y() + radius + 5.0),
+        )
+        painter.restore()
+
     def _draw_world_line(
         self,
         painter: QPainter,
@@ -250,7 +280,9 @@ class PcbPreviewWidget(QWidget):
         painter.drawText(
             16,
             50,
-            f"Gerber files: {len(self._gerber_files)}   Drill files: {len(self._drill_files)}",
+            "Gerber files: "
+            f"{len(self._gerber_files)}   Drill files: {len(self._drill_files)}   "
+            f"Alignment holes: {len(self._alignment_holes)}",
         )
         painter.drawText(
             16,

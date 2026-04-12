@@ -8,6 +8,7 @@ from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from .app_config import AppConfig
+from .alignment_hole import AlignmentHole
 from .excellon_file_parser import ExcellonFileParser
 from .gerber_file_parser import GerberFileParser
 from .imported_drill_file import ImportedDrillFile
@@ -56,7 +58,7 @@ class MainWindow(QMainWindow):
         "Edge Cuts",
         "NC Preview",
     ]
-    IMPLEMENTED_STEP_COUNT = 5
+    IMPLEMENTED_STEP_COUNT = 6
 
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
@@ -146,6 +148,7 @@ class MainWindow(QMainWindow):
         self.page_stack.addWidget(self._build_tool_selection_page())
         self.page_stack.addWidget(self._build_layer_assignment_page())
         self.page_stack.addWidget(self._build_mirror_setup_page())
+        self.page_stack.addWidget(self._build_alignment_holes_page())
 
         layout.addWidget(title)
         layout.addWidget(subtitle)
@@ -385,6 +388,73 @@ class MainWindow(QMainWindow):
         layout.addLayout(button_row)
         layout.addWidget(self.mirror_preview)
         layout.addStretch(1)
+        return page
+
+    def _build_alignment_holes_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        heading = QLabel("Step 6: Alignment Holes")
+        heading.setStyleSheet("font-size: 20px; font-weight: 700;")
+        body = QLabel(
+            "Define optional alignment holes outside the board edge. Each hole uses "
+            "an edge reference plus offsets measured along that edge and outward "
+            "from the board boundary."
+        )
+        body.setWordWrap(True)
+
+        form_card = QFrame()
+        form_card.setFrameShape(QFrame.Shape.StyledPanel)
+        form = QFormLayout(form_card)
+        form.setContentsMargins(14, 14, 14, 14)
+        form.setSpacing(10)
+        self.alignment_edge_combo = QComboBox()
+        self.alignment_edge_combo.addItems(["left", "top", "right", "bottom"])
+        self.alignment_offset_along_spin = QDoubleSpinBox()
+        self.alignment_offset_along_spin.setDecimals(3)
+        self.alignment_offset_along_spin.setRange(-10000.0, 10000.0)
+        self.alignment_offset_along_spin.setSuffix(" mm")
+        self.alignment_offset_from_edge_spin = QDoubleSpinBox()
+        self.alignment_offset_from_edge_spin.setDecimals(3)
+        self.alignment_offset_from_edge_spin.setRange(0.0, 10000.0)
+        self.alignment_offset_from_edge_spin.setValue(2.0)
+        self.alignment_offset_from_edge_spin.setSuffix(" mm")
+        self.alignment_diameter_spin = QDoubleSpinBox()
+        self.alignment_diameter_spin.setDecimals(3)
+        self.alignment_diameter_spin.setRange(0.01, 100.0)
+        self.alignment_diameter_spin.setValue(1.0)
+        self.alignment_diameter_spin.setSuffix(" mm")
+        form.addRow("Edge", self.alignment_edge_combo)
+        form.addRow("Offset along edge", self.alignment_offset_along_spin)
+        form.addRow("Offset from edge", self.alignment_offset_from_edge_spin)
+        form.addRow("Hole diameter", self.alignment_diameter_spin)
+
+        button_row = QHBoxLayout()
+        add_button = QPushButton("Add Alignment Hole")
+        add_button.clicked.connect(self._add_alignment_hole)
+        remove_button = QPushButton("Remove Selected")
+        remove_button.clicked.connect(self._remove_selected_alignment_holes)
+        clear_button = QPushButton("Clear All")
+        clear_button.clicked.connect(self._clear_alignment_holes)
+        button_row.addWidget(add_button)
+        button_row.addWidget(remove_button)
+        button_row.addWidget(clear_button)
+
+        self.alignment_hole_list = QListWidget()
+        self.alignment_holes_hint = QLabel(
+            "Alignment holes are optional. Added holes are shown in green in the preview."
+        )
+        self.alignment_holes_hint.setWordWrap(True)
+        self.alignment_holes_hint.setStyleSheet("color: #5b6571;")
+
+        layout.addWidget(heading)
+        layout.addWidget(body)
+        layout.addWidget(form_card)
+        layout.addLayout(button_row)
+        layout.addWidget(self.alignment_hole_list, 1)
+        layout.addWidget(self.alignment_holes_hint)
         return page
 
     def _build_menu(self) -> None:
@@ -668,6 +738,37 @@ class MainWindow(QMainWindow):
         self.project.set_mirror_flip_edge(edge)
         self._sync_ui()
 
+    def _add_alignment_hole(self) -> None:
+        holes = list(self.project.alignment_holes)
+        holes.append(
+            AlignmentHole(
+                edge=self.alignment_edge_combo.currentText(),
+                offset_along_edge=self.alignment_offset_along_spin.value(),
+                offset_from_edge=self.alignment_offset_from_edge_spin.value(),
+                diameter=self.alignment_diameter_spin.value(),
+            )
+        )
+        self.project.replace_alignment_holes(holes)
+        self._sync_ui()
+
+    def _remove_selected_alignment_holes(self) -> None:
+        selected_rows = sorted(
+            {index.row() for index in self.alignment_hole_list.selectedIndexes()},
+            reverse=True,
+        )
+        if not selected_rows:
+            return
+        holes = list(self.project.alignment_holes)
+        for row in selected_rows:
+            if 0 <= row < len(holes):
+                holes.pop(row)
+        self.project.replace_alignment_holes(holes)
+        self._sync_ui()
+
+    def _clear_alignment_holes(self) -> None:
+        self.project.replace_alignment_holes([])
+        self._sync_ui()
+
     def _parse_gerber_paths(self, paths: list[Path]) -> list[ImportedGerberFile]:
         imports = [self.gerber_parser.parse_file(path) for path in paths]
         return sorted(imports, key=lambda item: item.display_name.lower())
@@ -692,6 +793,8 @@ class MainWindow(QMainWindow):
             if not self.project.requires_mirror_setup():
                 return True
             return bool(self.project.mirror_flip_edge)
+        if index == 5:
+            return True
         return False
 
     def _validation_message(self, index: int) -> str:
@@ -718,6 +821,11 @@ class MainWindow(QMainWindow):
         )
         self.back_button.setEnabled(current > 0)
         self.next_button.setEnabled(current + 1 < self.IMPLEMENTED_STEP_COUNT)
+        self.next_button.setText(
+            "Next"
+            if current + 1 < self.IMPLEMENTED_STEP_COUNT
+            else "Next Stage Pending"
+        )
         self.project_value.setText(
             str(self.project.project_path) if self.project.project_path else "Unsaved project"
         )
@@ -728,7 +836,12 @@ class MainWindow(QMainWindow):
         self._sync_tool_selection_page()
         self._sync_layer_assignment_page()
         self._sync_mirror_setup_page()
-        self.preview.load_project_geometry(self.imported_gerbers, self.imported_drills)
+        self._sync_alignment_holes_page()
+        self.preview.load_project_geometry(
+            self.imported_gerbers,
+            self.imported_drills,
+            self._alignment_hole_positions(),
+        )
         self._update_window_title()
 
     def _refresh_list_widgets(self) -> None:
@@ -769,7 +882,12 @@ class MainWindow(QMainWindow):
             return "Assign the imported Gerber files to manufacturing roles."
         if self.project.current_step_index == 4:
             return "Choose the mirror edge only when both front and back copper are assigned."
-        return "Stage 2 of the wizard is active."
+        if self.project.current_step_index == 5:
+            return (
+                "Add optional alignment holes and confirm they appear outside the board in preview. "
+                "Step 7 and later are not implemented yet."
+            )
+        return "Stage 3 of the wizard is active."
 
     def _update_window_title(self) -> None:
         project_name = (
@@ -974,4 +1092,98 @@ class MainWindow(QMainWindow):
             button.blockSignals(False)
         self.mirror_preview.set_edge(
             self.project.mirror_flip_edge if requires_mirror else ""
+        )
+
+    def _sync_alignment_holes_page(self) -> None:
+        self.alignment_hole_list.clear()
+        for hole, position in zip(
+            self.project.alignment_holes,
+            self._alignment_hole_positions(),
+        ):
+            item = QListWidgetItem(
+                f"{hole.edge} | along {hole.offset_along_edge:.3f} mm | "
+                f"out {hole.offset_from_edge:.3f} mm | dia {hole.diameter:.3f} mm | "
+                f"at ({position[0]:.3f}, {position[1]:.3f})"
+            )
+            self.alignment_hole_list.addItem(item)
+
+    def _alignment_hole_positions(self) -> list[tuple[float, float, float]]:
+        reference_bounds = self._reference_board_bounds()
+        if reference_bounds is None:
+            return []
+        positions: list[tuple[float, float, float]] = []
+        for hole in self.project.alignment_holes:
+            positions.append(
+                self._alignment_hole_position_for_bounds(hole, reference_bounds)
+            )
+        return positions
+
+    def _reference_board_bounds(self) -> tuple[float, float, float, float] | None:
+        edge_file = self._assigned_gerber("edges")
+        if edge_file is not None and not edge_file.bounds.is_empty:
+            return (
+                edge_file.bounds.x_min,
+                edge_file.bounds.x_max,
+                edge_file.bounds.y_min,
+                edge_file.bounds.y_max,
+            )
+
+        bounds = None
+        for role in ("front_copper", "back_copper", "edges"):
+            gerber = self._assigned_gerber(role)
+            if gerber is None or gerber.bounds.is_empty:
+                continue
+            if bounds is None:
+                bounds = [
+                    gerber.bounds.x_min,
+                    gerber.bounds.x_max,
+                    gerber.bounds.y_min,
+                    gerber.bounds.y_max,
+                ]
+            else:
+                bounds[0] = min(bounds[0], gerber.bounds.x_min)
+                bounds[1] = max(bounds[1], gerber.bounds.x_max)
+                bounds[2] = min(bounds[2], gerber.bounds.y_min)
+                bounds[3] = max(bounds[3], gerber.bounds.y_max)
+        if bounds is None:
+            return None
+        return bounds[0], bounds[1], bounds[2], bounds[3]
+
+    def _assigned_gerber(self, role: str) -> ImportedGerberFile | None:
+        assigned_path = self.project.layer_assignments.get(role)
+        if assigned_path is None:
+            return None
+        for gerber in self.imported_gerbers:
+            if gerber.path == assigned_path:
+                return gerber
+        return None
+
+    def _alignment_hole_position_for_bounds(
+        self,
+        hole: AlignmentHole,
+        bounds: tuple[float, float, float, float],
+    ) -> tuple[float, float, float]:
+        x_min, x_max, y_min, y_max = bounds
+        if hole.edge == "left":
+            return (
+                x_min - hole.offset_from_edge,
+                y_min + hole.offset_along_edge,
+                hole.diameter,
+            )
+        if hole.edge == "right":
+            return (
+                x_max + hole.offset_from_edge,
+                y_min + hole.offset_along_edge,
+                hole.diameter,
+            )
+        if hole.edge == "top":
+            return (
+                x_min + hole.offset_along_edge,
+                y_max + hole.offset_from_edge,
+                hole.diameter,
+            )
+        return (
+            x_min + hole.offset_along_edge,
+            y_min - hole.offset_from_edge,
+            hole.diameter,
         )
