@@ -70,6 +70,10 @@ def _config_path() -> Path:
     return base_path / ORGANIZATION_NAME / CONFIG_FILE_NAME
 
 
+def _default_tools_path() -> Path:
+    return _config_path().with_name("tools.yaml")
+
+
 def _application_directory() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
@@ -594,6 +598,45 @@ def _save_config(config: AppConfig) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def _ensure_default_tools_file() -> Path:
+    path = _default_tools_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        return path
+
+    content = "\n".join(
+        [
+            "# Default mekatrol-pcbcam tool library.",
+            "# Tool names follow common CAM terminology:",
+            "# - chamfer_mill for V-bit style engraving/isolation tools",
+            "# - drill for twist drills",
+            "# - end_mill for square end mills",
+            "v_bits:",
+            "  - id: vbit_0p2_30deg",
+            "    name: V-Bit 0.2 mm Tip",
+            "    type: chamfer_mill",
+            "    tip_diameter: 0.2",
+            "    angle: 30",
+            "",
+            "drilling:",
+            "  - id: drill_0p1",
+            "    name: Twist Drill 0.1 mm",
+            "    type: drill",
+            "    diameter: 0.1",
+            "",
+            "milling:",
+            "  - id: endmill_0p1_square",
+            "    name: Square End Mill 0.1 mm",
+            "    type: end_mill",
+            "    diameter: 0.1",
+            "    corner_style: square",
+            "",
+        ]
+    )
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
 def _configure_logging(config: AppConfig) -> Path:
     configured_path = _resolve_log_path(config.logging.path)
     fallback_path = _resolve_log_path(_default_log_path())
@@ -761,8 +804,10 @@ def main() -> int:
     for warning in config_warnings:
         logger.warning("Config warning: %s", warning)
     _save_config(config)
+    default_tools_path = _ensure_default_tools_file()
     logger.info("Application startup beginning with config at %s", _config_path())
     logger.debug("Active log output path: %s", active_log_path)
+    logger.debug("Default tool library path: %s", default_tools_path)
     startup_screen = _resolve_startup_screen(app, config)
 
     splash_path = _asset_path("splash.png")

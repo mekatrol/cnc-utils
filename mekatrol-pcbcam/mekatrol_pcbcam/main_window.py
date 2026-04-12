@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QStandardPaths, Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -36,6 +36,7 @@ from .pcb_preview_widget import PcbPreviewWidget
 from .pcb_project import PcbProject
 from .tool_library import ToolLibrary
 from .wizard_step_bar import WizardStepBar
+from .app_constants import ORGANIZATION_NAME
 
 
 logger = logging.getLogger(__name__)
@@ -859,7 +860,11 @@ class MainWindow(QMainWindow):
         self._sync_ui()
 
     def _default_tool_library(self) -> ToolLibrary | None:
-        candidate = Path.cwd() / "tools.yaml"
+        config_root = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.GenericConfigLocation
+        )
+        base_path = Path(config_root) if config_root else Path.home() / ".config"
+        candidate = base_path / ORGANIZATION_NAME / "tools.yaml"
         if not candidate.exists():
             return None
         try:
