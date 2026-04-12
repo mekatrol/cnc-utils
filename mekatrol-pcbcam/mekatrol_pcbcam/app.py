@@ -190,6 +190,62 @@ def _parse_string(
     return value.strip()
 
 
+def _parse_bool(
+    value: object,
+    default: bool,
+    *,
+    field_name: str | None = None,
+    warnings: list[str] | None = None,
+) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    if value is not None and field_name is not None and warnings is not None:
+        _append_config_warning(
+            warnings,
+            field_name,
+            f"could not parse boolean from {_describe_value(value)}",
+            default,
+        )
+    return default
+
+
+def _parse_string_list(
+    value: object,
+    *,
+    field_name: str | None = None,
+    warnings: list[str] | None = None,
+) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        if field_name is not None and warnings is not None:
+            _append_config_warning(
+                warnings,
+                field_name,
+                f"expected a list of strings but got {_describe_value(value)}",
+                [],
+            )
+        return []
+    parsed: list[str] = []
+    for index, item in enumerate(value):
+        if isinstance(item, str):
+            normalized = item.strip()
+            if normalized:
+                parsed.append(normalized)
+            continue
+        if field_name is not None and warnings is not None:
+            warnings.append(
+                f"{field_name}[{index}]: expected string but got {_describe_value(item)}; skipped."
+            )
+    return parsed
+
+
 def _parse_window_state(value: object, *, warnings: list[str] | None = None) -> str:
     parsed = _parse_string(
         value,
@@ -289,6 +345,8 @@ def _parse_logger_levels(
 def _yaml_scalar(value: object) -> str:
     if value is None:
         return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
     if isinstance(value, str):
         return json.dumps(value, ensure_ascii=True)
     return str(value)
@@ -347,7 +405,7 @@ def _load_config() -> tuple[AppConfig, list[str]]:
         warnings=warnings,
     )
 
-    return AppConfig(
+    config = AppConfig(
         splash_minimum_visible_ms=_parse_int(
             app_data.get("splash_minimum_visible_ms"),
             DEFAULT_SPLASH_MINIMUM_VISIBLE_MS,
@@ -377,6 +435,24 @@ def _load_config() -> tuple[AppConfig, list[str]]:
             ),
         ),
         file_locations=FileLocations(
+            load_project_at_startup=_parse_bool(
+                file_locations_data.get("load_project_at_startup"),
+                True,
+                field_name="file_locations.load_project_at_startup",
+                warnings=warnings,
+            ),
+            recent_project_count=_parse_int(
+                file_locations_data.get("recent_project_count"),
+                10,
+                minimum=1,
+                field_name="file_locations.recent_project_count",
+                warnings=warnings,
+            ),
+            last_load_project_directory=_parse_string(
+                file_locations_data.get("last_load_project_directory"),
+                field_name="file_locations.last_load_project_directory",
+                warnings=warnings,
+            ),
             last_load_directory=_parse_string(
                 file_locations_data.get("last_load_directory"),
                 field_name="file_locations.last_load_directory",
@@ -385,6 +461,11 @@ def _load_config() -> tuple[AppConfig, list[str]]:
             last_save_directory=_parse_string(
                 file_locations_data.get("last_save_directory"),
                 field_name="file_locations.last_save_directory",
+                warnings=warnings,
+            ),
+            recent_projects=_parse_string_list(
+                file_locations_data.get("recent_projects"),
+                field_name="file_locations.recent_projects",
                 warnings=warnings,
             ),
         ),
@@ -422,7 +503,11 @@ def _load_config() -> tuple[AppConfig, list[str]]:
                 warnings=warnings,
             ),
         ),
-    ), warnings
+    )
+    config.file_locations.recent_projects = config.file_locations.recent_projects[
+        : config.file_locations.recent_project_count
+    ]
+    return config, warnings
 
 
 def _save_config(config: AppConfig) -> None:
@@ -460,11 +545,35 @@ def _save_config(config: AppConfig) -> None:
             ),
             "",
             "file_locations:",
+            "  # If true, automatically load the most recent project on startup.",
+            f"  load_project_at_startup: {_yaml_scalar(config.file_locations.load_project_at_startup)}",
+            "",
+            "  # Number of recent projects to keep in the most-recent list.",
+            f"  recent_project_count: {config.file_locations.recent_project_count}",
+            "",
+            "  # Most recently used directory for opening project files.",
+            f"  last_load_project_directory: {_yaml_scalar(config.file_locations.last_load_project_directory)}",
+            "",
             "  # Most recently used directory for file-open dialogs.",
             f"  last_load_directory: {_yaml_scalar(config.file_locations.last_load_directory)}",
             "",
             "  # Most recently used directory for file-save dialogs.",
             f"  last_save_directory: {_yaml_scalar(config.file_locations.last_save_directory)}",
+            "",
+            "  # Most recently opened or saved project files, newest first.",
+            *(
+                ["  recent_projects: []"]
+                if not config.file_locations.recent_projects
+                else [
+                    "  recent_projects:",
+                    *[
+                        f"    - {_yaml_scalar(project_path)}"
+                        for project_path in config.file_locations.recent_projects[
+                            : config.file_locations.recent_project_count
+                        ]
+                    ],
+                ]
+            ),
             "",
             "ui_save_state:",
             "  # Name of the last display used by the main window. Used to pick the startup screen.",
@@ -685,9 +794,18 @@ def main() -> int:
         candidate = Path(sys.argv[1]).expanduser()
         if candidate.exists():
             logger.info("Loading startup file argument: %s", candidate)
-            window.load_file(str(candidate))
+            window.load_project_path(candidate)
         else:
             logger.warning("Startup file argument does not exist: %s", candidate)
+    elif config.file_locations.load_project_at_startup:
+        recent_projects = config.file_locations.recent_projects or []
+        if recent_projects:
+            candidate = Path(recent_projects[0]).expanduser()
+            if candidate.exists():
+                logger.info("Loading most recent project on startup: %s", candidate)
+                window.load_project_path(candidate)
+            else:
+                logger.warning("Most recent startup project does not exist: %s", candidate)
     splash.mark_startup_complete()
     if not _debug_hold_splash_enabled():
         # Normal startup keeps the splash visible for at least the configured

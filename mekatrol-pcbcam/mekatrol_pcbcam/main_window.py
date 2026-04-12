@@ -6,7 +6,10 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QButtonGroup,
+    QComboBox,
     QFileDialog,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -15,6 +18,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QSplitter,
     QStackedWidget,
     QStatusBar,
@@ -27,8 +31,10 @@ from .excellon_file_parser import ExcellonFileParser
 from .gerber_file_parser import GerberFileParser
 from .imported_drill_file import ImportedDrillFile
 from .imported_gerber_file import ImportedGerberFile
+from .mirror_preview_widget import MirrorPreviewWidget
 from .pcb_preview_widget import PcbPreviewWidget
 from .pcb_project import PcbProject
+from .tool_library import ToolLibrary
 from .wizard_step_bar import WizardStepBar
 
 
@@ -49,7 +55,7 @@ class MainWindow(QMainWindow):
         "Edge Cuts",
         "NC Preview",
     ]
-    IMPLEMENTED_STEP_COUNT = 2
+    IMPLEMENTED_STEP_COUNT = 5
 
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
@@ -59,6 +65,7 @@ class MainWindow(QMainWindow):
         self.drill_parser = ExcellonFileParser()
         self.imported_gerbers: list[ImportedGerberFile] = []
         self.imported_drills: list[ImportedDrillFile] = []
+        self.tool_library: ToolLibrary | None = None
 
         self.preview = PcbPreviewWidget()
         self.step_bar = WizardStepBar(self.STEP_TITLES)
@@ -68,6 +75,7 @@ class MainWindow(QMainWindow):
         self.resize(1440, 920)
         self._build_ui()
         self._build_menu()
+        self.tool_library = self._default_tool_library()
         self._sync_ui()
 
     def _build_ui(self) -> None:
@@ -134,6 +142,9 @@ class MainWindow(QMainWindow):
         self.page_stack = QStackedWidget()
         self.page_stack.addWidget(self._build_gerber_page())
         self.page_stack.addWidget(self._build_drill_page())
+        self.page_stack.addWidget(self._build_tool_selection_page())
+        self.page_stack.addWidget(self._build_layer_assignment_page())
+        self.page_stack.addWidget(self._build_mirror_setup_page())
 
         layout.addWidget(title)
         layout.addWidget(subtitle)
@@ -224,6 +235,157 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.drill_hint)
         return page
 
+    def _build_tool_selection_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        heading = QLabel("Step 3: Tool Selection")
+        heading.setStyleSheet("font-size: 20px; font-weight: 700;")
+        body = QLabel(
+            "Load `tools.yaml` and choose one drilling tool, one milling tool, "
+            "and one V-bit. These choices are stored in the project and will feed "
+            "the CAM generation stages."
+        )
+        body.setWordWrap(True)
+
+        button_row = QHBoxLayout()
+        load_button = QPushButton("Load tools.yaml")
+        load_button.clicked.connect(self._browse_tool_library)
+        clear_button = QPushButton("Clear Tool Library")
+        clear_button.clicked.connect(self._clear_tool_library)
+        button_row.addWidget(load_button)
+        button_row.addWidget(clear_button)
+
+        form_card = QFrame()
+        form_card.setFrameShape(QFrame.Shape.StyledPanel)
+        form = QFormLayout(form_card)
+        form.setContentsMargins(14, 14, 14, 14)
+        form.setSpacing(10)
+        self.tool_library_value = QLabel("No tool library loaded")
+        self.tool_library_value.setWordWrap(True)
+        self.drilling_tool_combo = QComboBox()
+        self.drilling_tool_combo.currentIndexChanged.connect(
+            lambda _: self._tool_selection_changed("drilling", self.drilling_tool_combo)
+        )
+        self.milling_tool_combo = QComboBox()
+        self.milling_tool_combo.currentIndexChanged.connect(
+            lambda _: self._tool_selection_changed("milling", self.milling_tool_combo)
+        )
+        self.vbit_tool_combo = QComboBox()
+        self.vbit_tool_combo.currentIndexChanged.connect(
+            lambda _: self._tool_selection_changed("v_bits", self.vbit_tool_combo)
+        )
+        form.addRow("Library", self.tool_library_value)
+        form.addRow("Drilling", self.drilling_tool_combo)
+        form.addRow("Milling", self.milling_tool_combo)
+        form.addRow("V-bit", self.vbit_tool_combo)
+
+        self.tool_selection_hint = QLabel("Load a tool library and select all three tool types.")
+        self.tool_selection_hint.setWordWrap(True)
+        self.tool_selection_hint.setStyleSheet("color: #5b6571;")
+
+        layout.addWidget(heading)
+        layout.addWidget(body)
+        layout.addLayout(button_row)
+        layout.addWidget(form_card)
+        layout.addWidget(self.tool_selection_hint)
+        layout.addStretch(1)
+        return page
+
+    def _build_layer_assignment_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        heading = QLabel("Step 4: Layer Assignment")
+        heading.setStyleSheet("font-size: 20px; font-weight: 700;")
+        body = QLabel(
+            "Assign imported Gerber files to front copper, back copper, and edges. "
+            "Any assignment is optional, but at least one of the three roles must be "
+            "filled before the wizard can continue."
+        )
+        body.setWordWrap(True)
+
+        form_card = QFrame()
+        form_card.setFrameShape(QFrame.Shape.StyledPanel)
+        form = QFormLayout(form_card)
+        form.setContentsMargins(14, 14, 14, 14)
+        form.setSpacing(10)
+        self.front_copper_combo = QComboBox()
+        self.front_copper_combo.currentIndexChanged.connect(
+            lambda _: self._layer_assignment_changed("front_copper", self.front_copper_combo)
+        )
+        self.back_copper_combo = QComboBox()
+        self.back_copper_combo.currentIndexChanged.connect(
+            lambda _: self._layer_assignment_changed("back_copper", self.back_copper_combo)
+        )
+        self.edges_combo = QComboBox()
+        self.edges_combo.currentIndexChanged.connect(
+            lambda _: self._layer_assignment_changed("edges", self.edges_combo)
+        )
+        form.addRow("Front copper", self.front_copper_combo)
+        form.addRow("Back copper", self.back_copper_combo)
+        form.addRow("Edges", self.edges_combo)
+
+        self.layer_assignment_hint = QLabel("At least one of front copper, back copper, or edges is required.")
+        self.layer_assignment_hint.setWordWrap(True)
+        self.layer_assignment_hint.setStyleSheet("color: #5b6571;")
+
+        layout.addWidget(heading)
+        layout.addWidget(body)
+        layout.addWidget(form_card)
+        layout.addWidget(self.layer_assignment_hint)
+        layout.addStretch(1)
+        return page
+
+    def _build_mirror_setup_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        heading = QLabel("Step 5: Mirror Setup")
+        heading.setStyleSheet("font-size: 20px; font-weight: 700;")
+        body = QLabel(
+            "If both front and back copper are assigned, choose the edge used for "
+            "mirroring when the board is flipped. This step is skipped automatically "
+            "when only one copper side is active."
+        )
+        body.setWordWrap(True)
+
+        self.mirror_requirement_label = QLabel()
+        self.mirror_requirement_label.setWordWrap(True)
+
+        button_row = QHBoxLayout()
+        self.mirror_button_group = QButtonGroup(self)
+        self.mirror_buttons: dict[str, QRadioButton] = {}
+        for edge, label in (
+            ("left", "Left"),
+            ("top", "Top"),
+            ("right", "Right"),
+            ("bottom", "Bottom"),
+        ):
+            button = QRadioButton(label)
+            button.toggled.connect(
+                lambda checked, selected=edge: self._mirror_edge_changed(selected, checked)
+            )
+            self.mirror_button_group.addButton(button)
+            self.mirror_buttons[edge] = button
+            button_row.addWidget(button)
+
+        self.mirror_preview = MirrorPreviewWidget()
+
+        layout.addWidget(heading)
+        layout.addWidget(body)
+        layout.addWidget(self.mirror_requirement_label)
+        layout.addLayout(button_row)
+        layout.addWidget(self.mirror_preview)
+        layout.addStretch(1)
+        return page
+
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
 
@@ -264,6 +426,7 @@ class MainWindow(QMainWindow):
         self.project.reset()
         self.imported_gerbers = []
         self.imported_drills = []
+        self.tool_library = self._default_tool_library()
         self.statusBar().showMessage("Started new project", 3000)
         self._sync_ui()
 
@@ -271,29 +434,13 @@ class MainWindow(QMainWindow):
         selected, _ = QFileDialog.getOpenFileName(
             self,
             "Open Project",
-            self._load_dialog_directory(),
+            self._load_project_dialog_directory(),
             "PCB CAM Project (*.mpcbcam.yaml *.yaml);;All Files (*)",
         )
         if not selected:
             return
-        self._remember_load_paths([Path(selected)])
-        try:
-            project = PcbProject.load_from_path(Path(selected))
-            imported_gerbers = self._parse_gerber_paths(project.gerber_paths)
-            imported_drills = self._parse_drill_paths(project.drill_paths)
-        except Exception as exc:
-            logger.exception("Failed to open project: %s", selected)
-            QMessageBox.critical(self, "Failed to open project", str(exc))
-            return
-
-        self.project = project
-        self.project.set_current_step(
-            min(self.project.current_step_index, self.IMPLEMENTED_STEP_COUNT - 1)
-        )
-        self.imported_gerbers = imported_gerbers
-        self.imported_drills = imported_drills
-        self.statusBar().showMessage(f"Opened {Path(selected).name}", 3000)
-        self._sync_ui()
+        self._remember_project_load_path(Path(selected))
+        self.load_project_path(Path(selected), show_message=True, show_errors=True)
 
     def _save_project(self) -> None:
         if self.project.project_path is None:
@@ -323,8 +470,39 @@ class MainWindow(QMainWindow):
             logger.exception("Failed to save project: %s", path)
             QMessageBox.critical(self, "Failed to save project", str(exc))
             return
+        self._remember_recent_project(path)
         self.statusBar().showMessage(f"Saved {path.name}", 3000)
         self._sync_ui()
+
+    def load_project_path(
+        self,
+        path: Path,
+        *,
+        show_message: bool = False,
+        show_errors: bool = False,
+    ) -> bool:
+        try:
+            project = PcbProject.load_from_path(path)
+            imported_gerbers = self._parse_gerber_paths(project.gerber_paths)
+            imported_drills = self._parse_drill_paths(project.drill_paths)
+        except Exception as exc:
+            logger.exception("Failed to open project: %s", path)
+            if show_errors:
+                QMessageBox.critical(self, "Failed to open project", str(exc))
+            return False
+
+        self.project = project
+        self.project.set_current_step(
+            min(self.project.current_step_index, self.IMPLEMENTED_STEP_COUNT - 1)
+        )
+        self.imported_gerbers = imported_gerbers
+        self.imported_drills = imported_drills
+        self._load_tool_library_from_project(show_errors=show_errors)
+        self._remember_recent_project(path)
+        if show_message:
+            self.statusBar().showMessage(f"Opened {Path(path).name}", 3000)
+        self._sync_ui()
+        return True
 
     def _handle_step_selected(self, index: int) -> None:
         if not self.project.can_navigate_to(index, self.IMPLEMENTED_STEP_COUNT):
@@ -354,13 +532,12 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Wizard step incomplete",
-                "Import at least one Gerber file before moving to the next step.",
+                self._validation_message(current),
             )
             return
         self.project.completed_steps.add(current)
         self.project.clear_dirty_state_through(current + 1)
         self.project.set_current_step(current + 1)
-        self.project.completed_steps.add(1)
         self._sync_ui()
 
     def _import_gerber_files(self) -> None:
@@ -453,6 +630,43 @@ class MainWindow(QMainWindow):
         self.project.set_current_step(min(self.project.current_step_index, 1))
         self._sync_ui()
 
+    def _browse_tool_library(self) -> None:
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load tools.yaml",
+            self._load_dialog_directory(),
+            "YAML Files (*.yaml *.yml);;All Files (*)",
+        )
+        if not selected:
+            return
+        path = Path(selected)
+        self._remember_load_paths([path])
+        self._load_tool_library(path)
+
+    def _clear_tool_library(self) -> None:
+        self.tool_library = None
+        self.project.set_tool_library_path(None)
+        for role in list(self.project.selected_tools):
+            self.project.selected_tools[role] = ""
+        self._sync_ui()
+
+    def _tool_selection_changed(self, role: str, combo: QComboBox) -> None:
+        tool_id = str(combo.currentData() or "")
+        self.project.set_selected_tool(role, tool_id)
+        self._sync_ui()
+
+    def _layer_assignment_changed(self, role: str, combo: QComboBox) -> None:
+        raw_path = combo.currentData()
+        path = None if not raw_path else Path(str(raw_path))
+        self.project.set_layer_assignment(role, path)
+        self._sync_ui()
+
+    def _mirror_edge_changed(self, edge: str, checked: bool) -> None:
+        if not checked:
+            return
+        self.project.set_mirror_flip_edge(edge)
+        self._sync_ui()
+
     def _parse_gerber_paths(self, paths: list[Path]) -> list[ImportedGerberFile]:
         imports = [self.gerber_parser.parse_file(path) for path in paths]
         return sorted(imports, key=lambda item: item.display_name.lower())
@@ -466,7 +680,29 @@ class MainWindow(QMainWindow):
             return bool(self.imported_gerbers)
         if index == 1:
             return True
+        if index == 2:
+            return self.tool_library is not None and all(
+                self.project.selected_tools[role]
+                for role in ("drilling", "milling", "v_bits")
+            )
+        if index == 3:
+            return any(self.project.layer_assignments.values())
+        if index == 4:
+            if not self.project.requires_mirror_setup():
+                return True
+            return bool(self.project.mirror_flip_edge)
         return False
+
+    def _validation_message(self, index: int) -> str:
+        if index == 0:
+            return "Import at least one Gerber file before moving to the next step."
+        if index == 2:
+            return "Load tools.yaml and select a drilling tool, a milling tool, and a V-bit."
+        if index == 3:
+            return "Assign at least one Gerber file to front copper, back copper, or edges."
+        if index == 4:
+            return "Select the mirror flip edge before moving to the next step."
+        return "Complete the current wizard step before continuing."
 
     def _sync_ui(self) -> None:
         current = min(self.project.current_step_index, self.IMPLEMENTED_STEP_COUNT - 1)
@@ -488,6 +724,9 @@ class MainWindow(QMainWindow):
         self.drill_count_value.setText(f"Drill files: {len(self.imported_drills)}")
         self.step_status_value.setText(self._step_status_text())
         self._refresh_list_widgets()
+        self._sync_tool_selection_page()
+        self._sync_layer_assignment_page()
+        self._sync_mirror_setup_page()
         self.preview.load_project_geometry(self.imported_gerbers, self.imported_drills)
         self._update_window_title()
 
@@ -522,8 +761,14 @@ class MainWindow(QMainWindow):
         if self.project.current_step_index == 0 and not self.imported_gerbers:
             return "Step 1 requires at least one Gerber file before the wizard can continue."
         if self.project.current_step_index == 1:
-            return "Stage 1 ends after drill import. Tool selection and CAM generation come next."
-        return "Stage 1 of the wizard is active."
+            return "Drill import is optional. Continue when the board geometry looks correct."
+        if self.project.current_step_index == 2:
+            return "Load tools.yaml and choose the tools needed for drilling, milling, and V-bit operations."
+        if self.project.current_step_index == 3:
+            return "Assign the imported Gerber files to manufacturing roles."
+        if self.project.current_step_index == 4:
+            return "Choose the mirror edge only when both front and back copper are assigned."
+        return "Stage 2 of the wizard is active."
 
     def _update_window_title(self) -> None:
         project_name = (
@@ -541,6 +786,14 @@ class MainWindow(QMainWindow):
                 return str(candidate)
         return str(Path.home())
 
+    def _load_project_dialog_directory(self) -> str:
+        configured = self.config.file_locations.last_load_project_directory.strip()
+        if configured:
+            candidate = Path(configured).expanduser()
+            if candidate.exists() and candidate.is_dir():
+                return str(candidate)
+        return self._load_dialog_directory()
+
     def _save_dialog_directory(self) -> str:
         configured = self.config.file_locations.last_save_directory.strip()
         if configured:
@@ -555,6 +808,165 @@ class MainWindow(QMainWindow):
         directory = paths[0].expanduser().resolve().parent
         self.config.file_locations.last_load_directory = str(directory)
 
+    def _remember_project_load_path(self, path: Path) -> None:
+        directory = path.expanduser().resolve().parent
+        self.config.file_locations.last_load_project_directory = str(directory)
+
     def _remember_save_path(self, path: Path) -> None:
         directory = path.expanduser().resolve().parent
         self.config.file_locations.last_save_directory = str(directory)
+
+    def _remember_recent_project(self, path: Path) -> None:
+        resolved_path = path.expanduser().resolve()
+        resolved = str(resolved_path)
+        self.config.file_locations.last_load_project_directory = str(resolved_path.parent)
+        recent_projects = [
+            item
+            for item in (self.config.file_locations.recent_projects or [])
+            if item != resolved
+        ]
+        recent_projects.insert(0, resolved)
+        limit = max(1, self.config.file_locations.recent_project_count)
+        self.config.file_locations.recent_projects = recent_projects[:limit]
+
+    def _load_tool_library_from_project(self, *, show_errors: bool) -> None:
+        if self.project.tool_library_path is None:
+            self.tool_library = self._default_tool_library()
+            return
+        if not self.project.tool_library_path.exists():
+            self.tool_library = None
+            if show_errors:
+                QMessageBox.warning(
+                    self,
+                    "Tool library missing",
+                    f"Tool library file not found:\n{self.project.tool_library_path}",
+                )
+            return
+        self._load_tool_library(self.project.tool_library_path, show_errors=show_errors)
+
+    def _load_tool_library(self, path: Path, *, show_errors: bool = True) -> None:
+        try:
+            library = ToolLibrary.load(path)
+        except Exception as exc:
+            logger.exception("Failed to load tool library: %s", path)
+            if show_errors:
+                QMessageBox.critical(self, "Failed to load tools.yaml", str(exc))
+            return
+        self.tool_library = library
+        self.project.set_tool_library_path(path)
+        self._prune_invalid_tool_selections()
+        self.statusBar().showMessage(f"Loaded tool library {path.name}", 3000)
+        self._sync_ui()
+
+    def _default_tool_library(self) -> ToolLibrary | None:
+        candidate = Path.cwd() / "tools.yaml"
+        if not candidate.exists():
+            return None
+        try:
+            library = ToolLibrary.load(candidate)
+        except Exception:
+            logger.exception("Failed to auto-load default tools.yaml: %s", candidate)
+            return None
+        self.project.tool_library_path = candidate.resolve()
+        self._prune_invalid_tool_selections()
+        return library
+
+    def _prune_invalid_tool_selections(self) -> None:
+        if self.tool_library is None:
+            for role in self.project.selected_tools:
+                self.project.selected_tools[role] = ""
+            return
+        valid_ids = {
+            role: {tool.identifier for tool in self.tool_library.tools_by_category[role]}
+            for role in self.project.selected_tools
+        }
+        for role, selected in self.project.selected_tools.items():
+            if selected and selected not in valid_ids[role]:
+                self.project.selected_tools[role] = ""
+
+    def _sync_tool_selection_page(self) -> None:
+        if self.tool_library is None:
+            self.tool_library_value.setText("No tool library loaded")
+        else:
+            self.tool_library_value.setText(str(self.tool_library.path))
+        self._populate_tool_combo(
+            self.drilling_tool_combo,
+            "drilling",
+            self.project.selected_tools["drilling"],
+        )
+        self._populate_tool_combo(
+            self.milling_tool_combo,
+            "milling",
+            self.project.selected_tools["milling"],
+        )
+        self._populate_tool_combo(
+            self.vbit_tool_combo,
+            "v_bits",
+            self.project.selected_tools["v_bits"],
+        )
+
+    def _populate_tool_combo(
+        self,
+        combo: QComboBox,
+        role: str,
+        selected_tool_id: str,
+    ) -> None:
+        combo.blockSignals(True)
+        combo.clear()
+        if self.tool_library is None:
+            combo.addItem("Load tools.yaml first", "")
+            combo.setEnabled(False)
+        else:
+            combo.setEnabled(True)
+            combo.addItem("Select a tool...", "")
+            for tool in self.tool_library.tools_by_category[role]:
+                combo.addItem(tool.label, tool.identifier)
+            index = combo.findData(selected_tool_id)
+            combo.setCurrentIndex(0 if index < 0 else index)
+        combo.blockSignals(False)
+
+    def _sync_layer_assignment_page(self) -> None:
+        self._populate_layer_combo(
+            self.front_copper_combo,
+            self.project.layer_assignments["front_copper"],
+        )
+        self._populate_layer_combo(
+            self.back_copper_combo,
+            self.project.layer_assignments["back_copper"],
+        )
+        self._populate_layer_combo(
+            self.edges_combo,
+            self.project.layer_assignments["edges"],
+        )
+
+    def _populate_layer_combo(
+        self,
+        combo: QComboBox,
+        selected_path: Path | None,
+    ) -> None:
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("Unassigned", "")
+        for gerber in self.imported_gerbers:
+            combo.addItem(gerber.display_name, str(gerber.path))
+        target = "" if selected_path is None else str(selected_path)
+        index = combo.findData(target)
+        combo.setCurrentIndex(0 if index < 0 else index)
+        combo.setEnabled(bool(self.imported_gerbers))
+        combo.blockSignals(False)
+
+    def _sync_mirror_setup_page(self) -> None:
+        requires_mirror = self.project.requires_mirror_setup()
+        self.mirror_requirement_label.setText(
+            "Front and back copper are both assigned. Choose the mirror edge."
+            if requires_mirror
+            else "Only one copper side is assigned. Mirror setup is not required for this project."
+        )
+        for edge, button in self.mirror_buttons.items():
+            button.blockSignals(True)
+            button.setEnabled(requires_mirror)
+            button.setChecked(requires_mirror and self.project.mirror_flip_edge == edge)
+            button.blockSignals(False)
+        self.mirror_preview.set_edge(
+            self.project.mirror_flip_edge if requires_mirror else ""
+        )
