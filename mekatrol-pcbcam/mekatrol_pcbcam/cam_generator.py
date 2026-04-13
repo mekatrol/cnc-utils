@@ -160,7 +160,11 @@ class CamGenerator:
                         center[1] + half_height,
                     )
                 )
-        regions = [Polygon(region) for region in gerber.regions if len(region) >= 3]
+        regions = [
+            Polygon(region).buffer(0)
+            for region in gerber.regions
+            if len(region) >= 3
+        ]
         geometry = unary_union(traces + pads + regions)
         if geometry.is_empty:
             raise ValueError(f"No copper geometry found in {gerber.display_name}.")

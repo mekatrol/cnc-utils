@@ -194,6 +194,9 @@ class PcbPreviewWidget(QWidget):
             return
         painter.save()
         painter.setBrush(fill_color)
+        # Gerber regions can contain cut-in edges that are needed to define pours
+        # but should not be shown as visible copper boundaries.
+        painter.setPen(Qt.PenStyle.NoPen)
         points = QPolygonF([self._world_to_screen(x, y) for x, y in polygon])
         painter.drawPolygon(points)
         painter.restore()
