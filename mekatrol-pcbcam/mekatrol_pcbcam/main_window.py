@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths, Qt
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QScrollArea,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QStatusBar,
@@ -48,6 +50,7 @@ logger = logging.getLogger(__name__)
 
 class MainWindow(QMainWindow):
     STEP_TITLES = [
+        "Project",
         "Gerber Import",
         "Drill Import",
         "Tool Selection",
@@ -60,7 +63,7 @@ class MainWindow(QMainWindow):
         "Edge Cuts",
         "NC Preview",
     ]
-    IMPLEMENTED_STEP_COUNT = 11
+    IMPLEMENTED_STEP_COUNT = 12
 
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
@@ -73,6 +76,7 @@ class MainWindow(QMainWindow):
         self.imported_drills: list[ImportedDrillFile] = []
         self.tool_library: ToolLibrary | None = None
         self.generated_documents = {}
+        self.has_unsaved_changes = False
 
         self.preview = PcbPreviewWidget()
         self.toolpath_viewer = ToolpathViewer()
@@ -81,6 +85,21 @@ class MainWindow(QMainWindow):
         self.preview_stack.addWidget(self.toolpath_viewer)
         self.step_bar = WizardStepBar(self.STEP_TITLES)
         self.step_bar.step_selected.connect(self._handle_step_selected)
+        self.step_bar_scroll = QScrollArea()
+        self.step_bar_scroll.setWidget(self.step_bar)
+        self.step_bar_scroll.setWidgetResizable(False)
+        self.step_bar_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.step_bar_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.step_bar_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.step_bar_scroll.setViewportMargins(0, 0, 0, 6)
+        self.step_bar_scroll.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
 
         self.setWindowTitle("mekatrol-pcbcam")
         self.resize(1440, 920)
@@ -94,7 +113,7 @@ class MainWindow(QMainWindow):
         root_layout = QVBoxLayout(root)
         root_layout.setContentsMargins(18, 18, 18, 18)
         root_layout.setSpacing(14)
-        root_layout.addWidget(self.step_bar)
+        root_layout.addWidget(self.step_bar_scroll)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._build_sidebar())
@@ -150,6 +169,7 @@ class MainWindow(QMainWindow):
         summary_layout.addWidget(self.step_status_value)
 
         self.page_stack = QStackedWidget()
+        self.page_stack.addWidget(self._build_project_page())
         self.page_stack.addWidget(self._build_gerber_page())
         self.page_stack.addWidget(self._build_drill_page())
         self.page_stack.addWidget(self._build_tool_selection_page())
@@ -158,7 +178,7 @@ class MainWindow(QMainWindow):
         self.page_stack.addWidget(self._build_alignment_holes_page())
         self.page_stack.addWidget(
             self._build_operation_page(
-                "Step 7: Front Isolation",
+                "Step 8: Front Isolation",
                 "Generate front copper isolation G-code from the assigned front copper layer.",
                 "Generate Front Isolation",
                 "_generate_front_isolation",
@@ -167,7 +187,7 @@ class MainWindow(QMainWindow):
         )
         self.page_stack.addWidget(
             self._build_operation_page(
-                "Step 8: Back Isolation",
+                "Step 9: Back Isolation",
                 "Generate back copper isolation G-code from the assigned back copper layer.",
                 "Generate Back Isolation",
                 "_generate_back_isolation",
@@ -176,7 +196,7 @@ class MainWindow(QMainWindow):
         )
         self.page_stack.addWidget(
             self._build_operation_page(
-                "Step 9: Drilling",
+                "Step 10: Drilling",
                 "Generate drilling G-code for imported drill holes and optional alignment holes.",
                 "Generate Drill Operations",
                 "_generate_drilling_operations",
@@ -185,7 +205,7 @@ class MainWindow(QMainWindow):
         )
         self.page_stack.addWidget(
             self._build_operation_page(
-                "Step 10: Edge Cuts",
+                "Step 11: Edge Cuts",
                 "Generate edge cut G-code from the assigned board outline.",
                 "Generate Edge Cuts",
                 "_generate_edge_cuts",
@@ -200,13 +220,49 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.page_stack, 1)
         return panel
 
+    def _build_project_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        heading = QLabel("Step 1: Project")
+        heading.setStyleSheet("font-size: 20px; font-weight: 700;")
+        body = QLabel(
+            "Start a new project, reopen an existing one, or save the current setup. "
+            "If the app automatically reopens a recent project on startup, the wizard "
+            "resumes at the last completed step."
+        )
+        body.setWordWrap(True)
+
+        project_row = QHBoxLayout()
+        new_project_button = QPushButton("New Project")
+        new_project_button.clicked.connect(self._new_project)
+        open_project_button = QPushButton("Open Project...")
+        open_project_button.clicked.connect(self._open_project)
+        project_row.addWidget(new_project_button)
+        project_row.addWidget(open_project_button)
+
+        hint = QLabel(
+            "Use this step to create or reopen a project file. Gerber import happens in the next step."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #5b6571;")
+
+        layout.addWidget(heading)
+        layout.addWidget(body)
+        layout.addLayout(project_row)
+        layout.addWidget(hint)
+        layout.addStretch(1)
+        return page
+
     def _build_gerber_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 1: Import Gerber")
+        heading = QLabel("Step 2: Import Gerber")
         heading.setStyleSheet("font-size: 20px; font-weight: 700;")
         body = QLabel(
             "Import one or more Gerber files. Typical files include front copper, "
@@ -246,7 +302,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 2: Import Excellon Drill Files")
+        heading = QLabel("Step 3: Import Excellon Drill Files")
         heading.setStyleSheet("font-size: 20px; font-weight: 700;")
         body = QLabel(
             "Import Excellon drill files for PTH and NPTH holes. Drill import is "
@@ -289,7 +345,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 3: Tool Selection")
+        heading = QLabel("Step 4: Tool Selection")
         heading.setStyleSheet("font-size: 20px; font-weight: 700;")
         body = QLabel(
             "Load `tools.yaml` and choose one drilling tool, one milling tool, "
@@ -348,7 +404,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 4: Layer Assignment")
+        heading = QLabel("Step 5: Layer Assignment")
         heading.setStyleSheet("font-size: 20px; font-weight: 700;")
         body = QLabel(
             "Assign imported Gerber files to front copper, back copper, and edges. "
@@ -395,7 +451,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 5: Mirror Setup")
+        heading = QLabel("Step 6: Mirror Setup")
         heading.setStyleSheet("font-size: 20px; font-weight: 700;")
         body = QLabel(
             "If both front and back copper are assigned, choose the edge used for "
@@ -440,7 +496,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 6: Alignment Holes")
+        heading = QLabel("Step 7: Alignment Holes")
         heading.setStyleSheet("font-size: 20px; font-weight: 700;")
         body = QLabel(
             "Define optional alignment holes outside the board edge. Each hole uses "
@@ -547,7 +603,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 11: NC Preview")
+        heading = QLabel("Step 12: NC Preview")
         heading.setStyleSheet("font-size: 20px; font-weight: 700;")
         body = QLabel(
             "Select any generated NC file to inspect it in the 3D toolpath viewer."
@@ -575,6 +631,11 @@ class MainWindow(QMainWindow):
         open_project_action.triggered.connect(self._open_project)
         file_menu.addAction(open_project_action)
 
+        close_project_action = QAction("Close Project", self)
+        close_project_action.setShortcut("Ctrl+W")
+        close_project_action.triggered.connect(self._close_project)
+        file_menu.addAction(close_project_action)
+
         save_project_action = QAction("Save Project", self)
         save_project_action.setShortcut("Ctrl+S")
         save_project_action.triggered.connect(self._save_project)
@@ -599,14 +660,21 @@ class MainWindow(QMainWindow):
         view_menu.addAction(fit_action)
 
     def _new_project(self) -> None:
+        if not self._confirm_discard_or_save_changes():
+            return
         self.project.reset()
+        self.project.set_current_step(1)
         self.imported_gerbers = []
         self.imported_drills = []
         self.tool_library = self._default_tool_library()
+        self.generated_documents = {}
+        self.has_unsaved_changes = False
         self.statusBar().showMessage("Started new project", 3000)
         self._sync_ui()
 
     def _open_project(self) -> None:
+        if not self._confirm_discard_or_save_changes():
+            return
         selected, _ = QFileDialog.getOpenFileName(
             self,
             "Open Project",
@@ -616,15 +684,32 @@ class MainWindow(QMainWindow):
         if not selected:
             return
         self._remember_project_load_path(Path(selected))
-        self.load_project_path(Path(selected), show_message=True, show_errors=True)
+        self.load_project_path(
+            Path(selected),
+            show_message=True,
+            show_errors=True,
+            auto_resume=False,
+        )
 
-    def _save_project(self) -> None:
-        if self.project.project_path is None:
-            self._save_project_as()
+    def _close_project(self) -> None:
+        if not self._confirm_discard_or_save_changes():
             return
-        self._write_project(self.project.project_path)
+        self.project.reset()
+        self.project.set_current_step(0)
+        self.imported_gerbers = []
+        self.imported_drills = []
+        self.tool_library = self._default_tool_library()
+        self.generated_documents = {}
+        self.has_unsaved_changes = False
+        self.statusBar().showMessage("Closed project", 3000)
+        self._sync_ui()
 
-    def _save_project_as(self) -> None:
+    def _save_project(self) -> bool:
+        if self.project.project_path is None:
+            return self._save_project_as()
+        return self._write_project(self.project.project_path)
+
+    def _save_project_as(self) -> bool:
         selected, _ = QFileDialog.getSaveFileName(
             self,
             "Save Project As",
@@ -632,23 +717,25 @@ class MainWindow(QMainWindow):
             "PCB CAM Project (*.mpcbcam.yaml);;YAML Files (*.yaml)",
         )
         if not selected:
-            return
+            return False
         path = Path(selected)
         if path.suffix.lower() != ".yaml":
             path = path.with_suffix(".mpcbcam.yaml")
         self._remember_save_path(path)
-        self._write_project(path)
+        return self._write_project(path)
 
-    def _write_project(self, path: Path) -> None:
+    def _write_project(self, path: Path) -> bool:
         try:
             self.project.save_to_path(path)
         except Exception as exc:
             logger.exception("Failed to save project: %s", path)
             QMessageBox.critical(self, "Failed to save project", str(exc))
-            return
+            return False
         self._remember_recent_project(path)
+        self.has_unsaved_changes = False
         self.statusBar().showMessage(f"Saved {path.name}", 3000)
         self._sync_ui()
+        return True
 
     def load_project_path(
         self,
@@ -656,6 +743,7 @@ class MainWindow(QMainWindow):
         *,
         show_message: bool = False,
         show_errors: bool = False,
+        auto_resume: bool = False,
     ) -> bool:
         try:
             project = PcbProject.load_from_path(path)
@@ -668,13 +756,18 @@ class MainWindow(QMainWindow):
             return False
 
         self.project = project
-        self.project.set_current_step(
-            min(self.project.current_step_index, self.IMPLEMENTED_STEP_COUNT - 1)
+        target_step = (
+            self.project.last_completed_step_index(self.IMPLEMENTED_STEP_COUNT)
+            if auto_resume
+            else 1
         )
+        self.project.set_current_step(target_step)
         self.imported_gerbers = imported_gerbers
         self.imported_drills = imported_drills
         self._load_tool_library_from_project(show_errors=show_errors)
         self._remember_recent_project(path)
+        self.generated_documents = {}
+        self.has_unsaved_changes = False
         if show_message:
             self.statusBar().showMessage(f"Opened {Path(path).name}", 3000)
         self._sync_ui()
@@ -687,13 +780,17 @@ class MainWindow(QMainWindow):
                 4000,
             )
             return
+        if index == self.project.current_step_index:
+            return
         self.project.set_current_step(index)
+        self._mark_project_dirty()
         self._sync_ui()
 
     def _go_back(self) -> None:
         if self.project.current_step_index <= 0:
             return
         self.project.set_current_step(self.project.current_step_index - 1)
+        self._mark_project_dirty()
         self._sync_ui()
 
     def _go_next(self) -> None:
@@ -714,6 +811,7 @@ class MainWindow(QMainWindow):
         self.project.completed_steps.add(current)
         self.project.clear_dirty_state_through(current + 1)
         self.project.set_current_step(current + 1)
+        self._mark_project_dirty()
         self._sync_ui()
 
     def _import_gerber_files(self) -> None:
@@ -735,8 +833,9 @@ class MainWindow(QMainWindow):
             return
 
         self.imported_gerbers = imports
-        self.project.replace_gerber_paths(paths)
-        self.project.set_current_step(0)
+        if self.project.replace_gerber_paths(paths):
+            self._mark_project_dirty()
+        self.project.set_current_step(1)
         self.statusBar().showMessage(
             f"Imported {len(self.imported_gerbers)} Gerber file(s)",
             3000,
@@ -762,8 +861,9 @@ class MainWindow(QMainWindow):
             return
 
         self.imported_drills = imports
-        self.project.replace_drill_paths(paths)
-        self.project.set_current_step(1)
+        if self.project.replace_drill_paths(paths):
+            self._mark_project_dirty()
+        self.project.set_current_step(2)
         self.statusBar().showMessage(
             f"Imported {len(self.imported_drills)} drill file(s)",
             3000,
@@ -778,14 +878,16 @@ class MainWindow(QMainWindow):
             return
         remaining = [item for item in self.imported_gerbers if str(item.path) not in selected_paths]
         self.imported_gerbers = remaining
-        self.project.replace_gerber_paths([item.path for item in remaining])
-        self.project.set_current_step(0)
+        if self.project.replace_gerber_paths([item.path for item in remaining]):
+            self._mark_project_dirty()
+        self.project.set_current_step(1)
         self._sync_ui()
 
     def _clear_gerbers(self) -> None:
         self.imported_gerbers = []
-        self.project.replace_gerber_paths([])
-        self.project.set_current_step(0)
+        if self.project.replace_gerber_paths([]):
+            self._mark_project_dirty()
+        self.project.set_current_step(1)
         self._sync_ui()
 
     def _remove_selected_drills(self) -> None:
@@ -796,14 +898,16 @@ class MainWindow(QMainWindow):
             return
         remaining = [item for item in self.imported_drills if str(item.path) not in selected_paths]
         self.imported_drills = remaining
-        self.project.replace_drill_paths([item.path for item in remaining])
-        self.project.set_current_step(min(self.project.current_step_index, 1))
+        if self.project.replace_drill_paths([item.path for item in remaining]):
+            self._mark_project_dirty()
+        self.project.set_current_step(min(self.project.current_step_index, 2))
         self._sync_ui()
 
     def _clear_drills(self) -> None:
         self.imported_drills = []
-        self.project.replace_drill_paths([])
-        self.project.set_current_step(min(self.project.current_step_index, 1))
+        if self.project.replace_drill_paths([]):
+            self._mark_project_dirty()
+        self.project.set_current_step(min(self.project.current_step_index, 2))
         self._sync_ui()
 
     def _browse_tool_library(self) -> None:
@@ -821,26 +925,32 @@ class MainWindow(QMainWindow):
 
     def _clear_tool_library(self) -> None:
         self.tool_library = None
-        self.project.set_tool_library_path(None)
+        if self.project.set_tool_library_path(None):
+            self._mark_project_dirty()
         for role in list(self.project.selected_tools):
-            self.project.selected_tools[role] = ""
+            if self.project.selected_tools[role]:
+                self.project.selected_tools[role] = ""
+                self._mark_project_dirty()
         self._sync_ui()
 
     def _tool_selection_changed(self, role: str, combo: QComboBox) -> None:
         tool_id = str(combo.currentData() or "")
-        self.project.set_selected_tool(role, tool_id)
+        if self.project.set_selected_tool(role, tool_id):
+            self._mark_project_dirty()
         self._sync_ui()
 
     def _layer_assignment_changed(self, role: str, combo: QComboBox) -> None:
         raw_path = combo.currentData()
         path = None if not raw_path else Path(str(raw_path))
-        self.project.set_layer_assignment(role, path)
+        if self.project.set_layer_assignment(role, path):
+            self._mark_project_dirty()
         self._sync_ui()
 
     def _mirror_edge_changed(self, edge: str, checked: bool) -> None:
         if not checked:
             return
-        self.project.set_mirror_flip_edge(edge)
+        if self.project.set_mirror_flip_edge(edge):
+            self._mark_project_dirty()
         self._sync_ui()
 
     def _add_alignment_hole(self) -> None:
@@ -853,7 +963,8 @@ class MainWindow(QMainWindow):
                 diameter=self.alignment_diameter_spin.value(),
             )
         )
-        self.project.replace_alignment_holes(holes)
+        if self.project.replace_alignment_holes(holes):
+            self._mark_project_dirty()
         self._sync_ui()
 
     def _remove_selected_alignment_holes(self) -> None:
@@ -867,11 +978,13 @@ class MainWindow(QMainWindow):
         for row in selected_rows:
             if 0 <= row < len(holes):
                 holes.pop(row)
-        self.project.replace_alignment_holes(holes)
+        if self.project.replace_alignment_holes(holes):
+            self._mark_project_dirty()
         self._sync_ui()
 
     def _clear_alignment_holes(self) -> None:
-        self.project.replace_alignment_holes([])
+        if self.project.replace_alignment_holes([]):
+            self._mark_project_dirty()
         self._sync_ui()
 
     def _generate_front_isolation(self) -> None:
@@ -999,56 +1112,61 @@ class MainWindow(QMainWindow):
 
     def _step_is_valid(self, index: int) -> bool:
         if index == 0:
-            return bool(self.imported_gerbers)
-        if index == 1:
             return True
+        if index == 1:
+            return bool(self.imported_gerbers)
         if index == 2:
+            return True
+        if index == 3:
             return self.tool_library is not None and all(
                 self.project.selected_tools[role]
                 for role in ("drilling", "milling", "v_bits")
             )
-        if index == 3:
-            return any(self.project.layer_assignments.values())
         if index == 4:
+            return any(self.project.layer_assignments.values())
+        if index == 5:
             if not self.project.requires_mirror_setup():
                 return True
             return bool(self.project.mirror_flip_edge)
-        if index == 5:
-            return True
         if index == 6:
-            return self._operation_optional_or_generated("front_isolation", "front_copper")
+            return True
         if index == 7:
-            return self._operation_optional_or_generated("back_isolation", "back_copper")
+            return self._operation_optional_or_generated("front_isolation", "front_copper")
         if index == 8:
-            return self._drilling_optional_or_generated()
+            return self._operation_optional_or_generated("back_isolation", "back_copper")
         if index == 9:
-            return self._operation_optional_or_generated("edge_cuts", "edges")
+            return self._drilling_optional_or_generated()
         if index == 10:
+            return self._operation_optional_or_generated("edge_cuts", "edges")
+        if index == 11:
             return bool(self.project.generated_outputs)
         return False
 
     def _validation_message(self, index: int) -> str:
         if index == 0:
+            return "Create or load a project before moving on."
+        if index == 1:
             return "Import at least one Gerber file before moving to the next step."
-        if index == 2:
-            return "Load tools.yaml and select a drilling tool, a milling tool, and a V-bit."
         if index == 3:
-            return "Assign at least one Gerber file to front copper, back copper, or edges."
+            return "Load tools.yaml and select a drilling tool, a milling tool, and a V-bit."
         if index == 4:
+            return "Assign at least one Gerber file to front copper, back copper, or edges."
+        if index == 5:
             return "Select the mirror flip edge before moving to the next step."
-        if index == 6:
-            return "Generate the front isolation NC file before moving to the next step."
         if index == 7:
-            return "Generate the back isolation NC file before moving to the next step."
+            return "Generate the front isolation NC file before moving to the next step."
         if index == 8:
-            return "Generate the drilling NC file before moving to the next step."
+            return "Generate the back isolation NC file before moving to the next step."
         if index == 9:
+            return "Generate the drilling NC file before moving to the next step."
+        if index == 10:
             return "Generate the edge cut NC file before moving to the next step."
         return "Complete the current wizard step before continuing."
 
     def _sync_ui(self) -> None:
         current = min(self.project.current_step_index, self.IMPLEMENTED_STEP_COUNT - 1)
         self.project.current_step_index = current
+        self.step_bar.adjustSize()
         self.page_stack.setCurrentIndex(current)
         self.step_bar.set_state(
             current_step_index=current,
@@ -1081,8 +1199,13 @@ class MainWindow(QMainWindow):
             self.imported_drills,
             self._alignment_hole_positions(),
         )
-        self.preview_stack.setCurrentIndex(1 if current >= 6 else 0)
+        self.preview_stack.setCurrentIndex(1 if current >= 7 else 0)
         self._update_window_title()
+        self._scroll_current_step_into_view()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._scroll_current_step_into_view()
 
     def _refresh_list_widgets(self) -> None:
         self.gerber_list.clear()
@@ -1112,27 +1235,29 @@ class MainWindow(QMainWindow):
                 f"Changes were made at step {self.project.dirty_from_step + 1}. "
                 "Forward navigation is sequential until the wizard is replayed."
             )
-        if self.project.current_step_index == 0 and not self.imported_gerbers:
-            return "Step 1 requires at least one Gerber file before the wizard can continue."
+        if self.project.current_step_index == 0:
+            return "Project setup is active. Create, open, or save a project file before continuing."
         if self.project.current_step_index == 1:
-            return "Drill import is optional. Continue when the board geometry looks correct."
+            return "Import at least one Gerber file so the board geometry can be reviewed and assigned."
         if self.project.current_step_index == 2:
-            return "Load tools.yaml and choose the tools needed for drilling, milling, and V-bit operations."
+            return "Drill import is optional. Continue when the board geometry looks correct."
         if self.project.current_step_index == 3:
-            return "Assign the imported Gerber files to manufacturing roles."
+            return "Load tools.yaml and choose the tools needed for drilling, milling, and V-bit operations."
         if self.project.current_step_index == 4:
-            return "Choose the mirror edge only when both front and back copper are assigned."
+            return "Assign the imported Gerber files to manufacturing roles."
         if self.project.current_step_index == 5:
-            return "Add optional alignment holes and confirm they appear outside the board in preview."
+            return "Choose the mirror edge only when both front and back copper are assigned."
         if self.project.current_step_index == 6:
-            return "Generate front copper isolation if a front copper layer is assigned."
+            return "Add optional alignment holes and confirm they appear outside the board in preview."
         if self.project.current_step_index == 7:
-            return "Generate back copper isolation if a back copper layer is assigned."
+            return "Generate front copper isolation if a front copper layer is assigned."
         if self.project.current_step_index == 8:
-            return "Generate drilling for imported drill files and alignment holes."
+            return "Generate back copper isolation if a back copper layer is assigned."
         if self.project.current_step_index == 9:
-            return "Generate edge cut operations if an outline is assigned."
+            return "Generate drilling for imported drill files and alignment holes."
         if self.project.current_step_index == 10:
+            return "Generate edge cut operations if an outline is assigned."
+        if self.project.current_step_index == 11:
             return "Select a generated NC file to inspect it in the 3D preview."
         return "Stage 4 of the wizard is active."
 
@@ -1219,7 +1344,8 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Failed to load tools.yaml", str(exc))
             return
         self.tool_library = library
-        self.project.set_tool_library_path(path)
+        if self.project.set_tool_library_path(path):
+            self._mark_project_dirty()
         self._prune_invalid_tool_selections()
         self.statusBar().showMessage(f"Loaded tool library {path.name}", 3000)
         self._sync_ui()
@@ -1460,7 +1586,7 @@ class MainWindow(QMainWindow):
 
     def _register_generated_output(self, operation_key: str, path: Path) -> None:
         self.project.generated_outputs[operation_key] = path.resolve()
-        self.project.completed_steps.add(self.project.current_step_index)
+        self._mark_project_dirty()
         self._load_generated_document(path)
         self._sync_ui()
 
@@ -1507,6 +1633,30 @@ class MainWindow(QMainWindow):
         if self.generated_output_list.count() > 0 and self.generated_output_list.currentRow() < 0:
             self.generated_output_list.setCurrentRow(0)
 
+    def _scroll_current_step_into_view(self) -> None:
+        current_rect = self.step_bar.step_bounds(self.project.current_step_index)
+        if current_rect.isNull():
+            return
+
+        viewport_width = self.step_bar_scroll.viewport().width()
+        if viewport_width <= 0:
+            return
+
+        horizontal_scroll = self.step_bar_scroll.horizontalScrollBar()
+        viewport_left = horizontal_scroll.value()
+        viewport_right = viewport_left + viewport_width
+        step_left = current_rect.left()
+        step_right = current_rect.right()
+
+        if step_left >= viewport_left and step_right <= viewport_right:
+            return
+
+        margin = max(24, viewport_width // 10)
+        if step_left < viewport_left:
+            horizontal_scroll.setValue(max(0, step_left - margin))
+            return
+        horizontal_scroll.setValue(max(0, step_right - viewport_width + margin))
+
     def _operation_optional_or_generated(self, operation_key: str, layer_role: str) -> bool:
         if self.project.layer_assignments.get(layer_role) is None:
             return True
@@ -1516,3 +1666,31 @@ class MainWindow(QMainWindow):
         if not self.imported_drills and not self.project.alignment_holes:
             return True
         return "drilling" in self.project.generated_outputs
+
+    def _mark_project_dirty(self) -> None:
+        self.has_unsaved_changes = True
+
+    def _confirm_discard_or_save_changes(self) -> bool:
+        if not self.has_unsaved_changes:
+            return True
+
+        response = QMessageBox.question(
+            self,
+            "Unsaved changes",
+            "This project has unsaved changes. Save before continuing?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if response == QMessageBox.StandardButton.Save:
+            return self._save_project()
+        if response == QMessageBox.StandardButton.Discard:
+            return True
+        return False
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if not self._confirm_discard_or_save_changes():
+            event.ignore()
+            return
+        super().closeEvent(event)

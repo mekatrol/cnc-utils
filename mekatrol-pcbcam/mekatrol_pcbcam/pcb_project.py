@@ -8,8 +8,22 @@ from .alignment_hole import AlignmentHole
 
 
 class PcbProject:
-    VERSION = 1
-    TOTAL_STEPS = 11
+    VERSION = 3
+    TOTAL_STEPS = 12
+    STEP_KEYS = [
+        "project",
+        "gerber_import",
+        "drill_import",
+        "tool_selection",
+        "layer_assignment",
+        "mirror_setup",
+        "alignment_holes",
+        "front_isolation",
+        "back_isolation",
+        "drilling",
+        "edge_cuts",
+        "nc_preview",
+    ]
 
     def __init__(self) -> None:
         self.project_path: Path | None = None
@@ -43,11 +57,7 @@ class PcbProject:
         self.gerber_paths = normalized
         if changed:
             self._prune_missing_layer_assignments()
-            self._invalidate_from(0)
-        if self.gerber_paths:
-            self.completed_steps.add(0)
-        else:
-            self.completed_steps.discard(0)
+            self._invalidate_from(1)
         return changed
 
     def replace_drill_paths(self, paths: list[Path]) -> bool:
@@ -55,8 +65,7 @@ class PcbProject:
         changed = normalized != self.drill_paths
         self.drill_paths = normalized
         if changed:
-            self._invalidate_from(1)
-        self.completed_steps.add(1)
+            self._invalidate_from(2)
         return changed
 
     def set_tool_library_path(self, path: Path | None) -> bool:
@@ -64,7 +73,7 @@ class PcbProject:
         changed = resolved != self.tool_library_path
         self.tool_library_path = resolved
         if changed:
-            self._invalidate_from(2)
+            self._invalidate_from(3)
         return changed
 
     def set_selected_tool(self, role: str, tool_id: str) -> bool:
@@ -72,7 +81,7 @@ class PcbProject:
         changed = self.selected_tools.get(role, "") != normalized
         self.selected_tools[role] = normalized
         if changed:
-            self._invalidate_from(2)
+            self._invalidate_from(3)
         return changed
 
     def set_layer_assignment(self, role: str, path: Path | None) -> bool:
@@ -80,7 +89,7 @@ class PcbProject:
         changed = self.layer_assignments.get(role) != resolved
         self.layer_assignments[role] = resolved
         if changed:
-            self._invalidate_from(3)
+            self._invalidate_from(4)
         if not self.requires_mirror_setup():
             self.mirror_flip_edge = ""
         return changed
@@ -90,14 +99,14 @@ class PcbProject:
         changed = self.mirror_flip_edge != normalized
         self.mirror_flip_edge = normalized
         if changed:
-            self._invalidate_from(4)
+            self._invalidate_from(5)
         return changed
 
     def replace_alignment_holes(self, holes: list[AlignmentHole]) -> bool:
         changed = holes != self.alignment_holes
         self.alignment_holes = holes
         if changed:
-            self._invalidate_from(5)
+            self._invalidate_from(6)
         return changed
 
     def requires_mirror_setup(self) -> bool:
@@ -126,8 +135,21 @@ class PcbProject:
         if self.dirty_from_step is not None and index > self.dirty_from_step:
             self.dirty_from_step = None
 
+    def last_completed_step_index(self, implemented_step_count: int | None = None) -> int:
+        upper_bound = self.TOTAL_STEPS if implemented_step_count is None else min(
+            implemented_step_count,
+            self.TOTAL_STEPS,
+        )
+        valid_completed_steps = [
+            step for step in self.completed_steps if 0 <= step < upper_bound
+        ]
+        if not valid_completed_steps:
+            return 0
+        return max(valid_completed_steps)
+
     def save_to_path(self, path: Path) -> None:
         self.project_path = path.resolve()
+        self.completed_steps.add(0)
         self.project_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "version": self.VERSION,
@@ -175,9 +197,14 @@ class PcbProject:
                 for key, value in self.generated_outputs.items()
             },
             "wizard": {
-                "current_step_index": self.current_step_index,
-                "highest_commenced_step": self.highest_commenced_step,
-                "completed_steps": sorted(self.completed_steps),
+                "current_step": self._step_key_for_index(self.current_step_index),
+                "highest_commenced_step": self._step_key_for_index(
+                    self.highest_commenced_step
+                ),
+                "completed_steps": [
+                    self._step_key_for_index(step)
+                    for step in sorted(self.completed_steps)
+                ],
             },
         }
         self.project_path.write_text(
@@ -252,16 +279,24 @@ class PcbProject:
                         project.project_path.parent,
                     )
         wizard_data = loaded.get("wizard", {})
-        project.current_step_index = int(wizard_data.get("current_step_index", 0))
-        project.highest_commenced_step = int(
-            wizard_data.get("highest_commenced_step", project.current_step_index)
+        project.current_step_index = project._step_index_for_key(
+            wizard_data.get("current_step"),
+            0,
         )
-        project.completed_steps = {
-            int(step) for step in wizard_data.get("completed_steps", [])
-        }
-        if not project.gerber_paths:
-            project.completed_steps.discard(0)
-        project.completed_steps.add(1)
+        project.highest_commenced_step = project._step_index_for_key(
+            wizard_data.get("highest_commenced_step"),
+            project.current_step_index,
+        )
+        raw_completed_steps = wizard_data.get("completed_steps", [])
+        if isinstance(raw_completed_steps, list):
+            project.completed_steps = {
+                project._step_index_for_key(step)
+                for step in raw_completed_steps
+                if isinstance(step, str)
+            }
+        else:
+            project.completed_steps = set()
+        project.completed_steps.add(0)
         project._prune_missing_layer_assignments()
         if not project.requires_mirror_setup():
             project.mirror_flip_edge = ""
@@ -278,7 +313,7 @@ class PcbProject:
                 if self.dirty_from_step is None
                 else min(self.dirty_from_step, index)
             )
-        if index <= 9:
+        if index <= 10:
             self.generated_outputs = {}
         self.highest_commenced_step = min(self.highest_commenced_step, index + 1)
         self.current_step_index = min(self.current_step_index, index + 1)
@@ -300,3 +335,15 @@ class PcbProject:
         for role, path in list(self.layer_assignments.items()):
             if path is not None and path not in valid_paths:
                 self.layer_assignments[role] = None
+
+    def _step_key_for_index(self, index: int) -> str:
+        normalized_index = max(0, min(index, self.TOTAL_STEPS - 1))
+        return self.STEP_KEYS[normalized_index]
+
+    def _step_index_for_key(self, key: object, default: int = 0) -> int:
+        if not isinstance(key, str):
+            return default
+        try:
+            return self.STEP_KEYS.index(key.strip())
+        except ValueError:
+            return default

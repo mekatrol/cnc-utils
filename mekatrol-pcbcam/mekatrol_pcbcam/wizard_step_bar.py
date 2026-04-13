@@ -1,7 +1,15 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPainterPath, QPaintEvent, QPen
+from PySide6.QtCore import QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import (
+    QColor,
+    QFontMetrics,
+    QMouseEvent,
+    QPainter,
+    QPainterPath,
+    QPaintEvent,
+    QPen,
+)
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 
@@ -15,8 +23,9 @@ class WizardStepBar(QWidget):
         self._completed_steps: set[int] = set()
         self._enabled_steps: set[int] = {0}
         self._step_paths: list[QPainterPath] = []
+        self._step_rects: list[QRectF] = []
         self.setMinimumHeight(64)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.setMouseTracking(True)
 
     def set_state(
@@ -28,6 +37,22 @@ class WizardStepBar(QWidget):
             index for index in range(len(self._titles)) if is_step_enabled(index)
         }
         self.update()
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSizeHint()
+
+    def minimumSizeHint(self) -> QSize:
+        total_width, _ = self._layout_metrics()
+        return QSize(total_width, 64)
+
+    def step_bounds(self, index: int) -> QRect:
+        if not 0 <= index < len(self._titles):
+            return QRect()
+        if len(self._step_rects) != len(self._titles):
+            self._refresh_step_geometry()
+        if not 0 <= index < len(self._step_rects):
+            return QRect()
+        return self._step_rects[index].toRect()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         position = event.position()
@@ -44,16 +69,13 @@ class WizardStepBar(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-        rect = self.rect().adjusted(0, 4, 0, -4)
-        step_count = max(len(self._titles), 1)
-        arrow = min(24.0, rect.width() / max(step_count * 5.0, 1.0))
-        base_width = rect.width() / step_count
-
+        _, arrow = self._layout_metrics()
+        self._refresh_step_geometry()
         self._step_paths = []
+        step_count = max(len(self._titles), 1)
+
         for index, title in enumerate(self._titles):
-            left = rect.left() + (index * base_width)
-            right = rect.left() + ((index + 1) * base_width)
-            step_rect = QRectF(left, rect.top(), right - left, rect.height())
+            step_rect = self._step_rects[index]
             path = self._build_step_path(step_rect, arrow, step_count)
             self._step_paths.append(path)
 
@@ -68,11 +90,37 @@ class WizardStepBar(QWidget):
                 int(text_left_padding), 0, -int(text_right_padding), 0
             )
             painter.setPen(text)
-            painter.drawText(
-                text_rect, Qt.AlignmentFlag.AlignCenter, f"{index + 1}. {title}"
-            )
+            painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, title)
 
         painter.end()
+
+    def _refresh_step_geometry(self) -> None:
+        rect = self.rect().adjusted(0, 4, 0, -4)
+        _, arrow = self._layout_metrics()
+        self._step_rects = []
+
+        left = float(rect.left())
+        for width in self._step_widths():
+            step_rect = QRectF(left, rect.top(), float(width), rect.height())
+            self._step_rects.append(step_rect)
+            left += width - arrow
+
+    def _layout_metrics(self) -> tuple[int, float]:
+        arrow = 24.0
+        widths = self._step_widths()
+        total_width = max(
+            int(sum(widths) - max(0, len(widths) - 1) * arrow),
+            1,
+        )
+        return total_width, arrow
+
+    def _step_widths(self) -> list[int]:
+        metrics = QFontMetrics(self.font())
+        widths: list[int] = []
+        for title in self._titles:
+            label_width = metrics.horizontalAdvance(title)
+            widths.append(max(170, label_width + 56))
+        return widths
 
     def _build_step_path(
         self, rect: QRectF, arrow: float, step_count: int

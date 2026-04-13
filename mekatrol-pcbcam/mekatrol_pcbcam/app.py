@@ -848,7 +848,7 @@ def main() -> int:
             candidate = Path(recent_projects[0]).expanduser()
             if candidate.exists():
                 logger.info("Loading most recent project on startup: %s", candidate)
-                window.load_project_path(candidate)
+                window.load_project_path(candidate, auto_resume=True)
             else:
                 logger.warning("Most recent startup project does not exist: %s", candidate)
     splash.mark_startup_complete()
