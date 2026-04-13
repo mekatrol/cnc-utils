@@ -29,11 +29,11 @@ from .app_constants import (
     VALID_LOG_LEVELS,
     VALID_WINDOW_STATES,
 )
-from .debug_splash_screen import DebugSplashScreen
 from .diagnostics import InMemoryLogHandler, get_log_tracker
 from .file_locations import FileLocations
 from .logging_config import LoggingConfig
 from .main_window import MainWindow
+from .splash_screen import SplashScreen
 from .ui_save_state import UiSaveState
 
 
@@ -813,7 +813,12 @@ def main() -> int:
 
     splash_path = _asset_path("splash.svg")
     pixmap = QPixmap(str(splash_path))
-    splash = DebugSplashScreen(pixmap)
+    splash = SplashScreen(pixmap)
+    splash.setWindowFlag(Qt.WindowType.SplashScreen, False)
+    splash.setWindowFlag(Qt.WindowType.Window, True)
+    splash.setWindowFlag(Qt.WindowType.WindowTitleHint, True)
+    splash.setWindowFlag(Qt.WindowType.WindowSystemMenuHint, True)
+    splash.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, True)
     splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
     splash.setStyleSheet("font-weight: 600;")
     _center_widget_on_screen(splash, startup_screen)
@@ -821,7 +826,7 @@ def main() -> int:
     splash.begin_startup_timing(config.splash_minimum_visible_ms)
     app.processEvents()
 
-    for message in ("Starting PCBCAM...",):
+    for message in ("Close splash screen to continue.",):
         splash.show_status_message(message)
         app.processEvents()
 
@@ -859,10 +864,15 @@ def main() -> int:
         # minimum duration, but does not add extra delay after slow loads.
         splash.wait_until_ready()
     app.aboutToQuit.connect(lambda: _save_window_placement(window, config))
+    if splash.isVisible():
+        if not splash.hold_open_requested():
+            splash.close()
+        else:
+            splash.enable_manual_close()
+            splash.wait_until_closed()
     if config.ui_save_state.window_state == "maximized":
         window.showMaximized()
     else:
         window.show()
-    splash.finish(window)
     logger.info("Application startup complete")
     return app.exec()
