@@ -12,7 +12,7 @@ WHITE = "#ffffff"
 TRANSPARENT = (0, 0, 0, 0)
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "assets" / "splash.png"
+OUTPUT = ROOT / "assets" / "splash-legacy.png"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 

@@ -811,7 +811,7 @@ def main() -> int:
     logger.debug("Default tool library path: %s", default_tools_path)
     startup_screen = _resolve_startup_screen(app, config)
 
-    splash_path = _asset_path("splash.png")
+    splash_path = _asset_path("splash.svg")
     pixmap = QPixmap(str(splash_path))
     splash = DebugSplashScreen(pixmap)
     splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)

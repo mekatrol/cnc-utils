@@ -102,7 +102,10 @@ class DebugSplashScreen(QSplashScreen):
         return fixed_font
 
     def _composited_pixmap(self) -> QPixmap:
-        composed = QPixmap(self._source_pixmap.size())
+        composed = QPixmap(
+            (self._source_pixmap.width() * 3) // 2,
+            (self._source_pixmap.height() * 3) // 2,
+        )
         composed.fill(self._background_color())
 
         painter = QPainter(composed)

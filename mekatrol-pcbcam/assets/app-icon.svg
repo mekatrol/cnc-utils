@@ -2,68 +2,63 @@
   <defs>
     <linearGradient id="board" x1="124" y1="180" x2="388" y2="388" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#4bd12d"/>
-      <stop offset="1" stop-color="#28a915"/>
+      <stop offset="1" stop-color="#4bd12d"/>
     </linearGradient>
     <linearGradient id="bitMetal" x1="256" y1="66" x2="256" y2="212" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#eff7ff"/>
-      <stop offset="1" stop-color="#a9bfd3"/>
+      <stop offset="1" stop-color="#eff7ff"/>
     </linearGradient>
   </defs>
 
-  <rect x="36" y="36" width="440" height="440" rx="108" fill="none"/>
+  <rect width="512" height="512" rx="5" fill="#A3471F"/>
 
-  <g transform="translate(256 350) rotate(-8) translate(-256 -286)">
-    <path
-      d="M156 164h150l56 56v128H150V170c0-3 3-6 6-6z"
-      fill="url(#board)"
-      stroke="#ffffff"
-      stroke-width="12"
-      stroke-linejoin="round"
-    />
-    <path d="M306 164v62h62" fill="none" stroke="#ffffff" stroke-width="12" stroke-linejoin="round"/>
+  <g transform="translate(256, 256) scale(1.4) translate(-256, -240)">
+    <g transform="translate(256 330) rotate(0) translate(-256 -286)">
+      <g transform="translate(259 256) scale(1.5) translate(-259 -280)">
+        <path
+          d="M156 164h206v184H156z"
+          fill="url(#board)"
+          stroke="#eff7ff"
+          stroke-width="5"
+          stroke-linejoin="round"
+        />
 
-    <g fill="none" stroke="#0d66b8" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M188 210h80v54"/>
-      <path d="M268 264h86"/>
-      <path d="M232 310h122"/>
-      <path d="M188 210v98h44"/>
-      <path d="M232 310v38"/>
+        <g transform="translate(-5 -18)">
+          <g fill="none" stroke="#A3471F" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M188 210h80v54"/>
+            <path d="M268 264h86"/>
+            <path d="M232 308h115"/>
+            <path d="M188 210v98h44"/>
+            <path d="M232 310v38"/>
+          </g>
+
+          <g fill="#eff7ff" stroke="#A3471F" stroke-width="8">
+            <circle cx="188" cy="210" r="16"/>
+            <circle cx="340" cy="264" r="16"/>
+            <circle cx="232" cy="340" r="16"/>
+            <circle cx="268" cy="264" r="16"/>
+          </g>
+        </g>
+      </g>
     </g>
 
-    <g fill="#ffffff" stroke="#0d66b8" stroke-width="10">
-      <circle cx="188" cy="210" r="16"/>
-      <circle cx="268" cy="264" r="18"/>
-      <circle cx="354" cy="264" r="16"/>
-      <circle cx="232" cy="348" r="16"/>
+    <g>
+      <rect x="226" y="60" width="60" height="62" rx="16" fill="#A3471F"/>
+      <path
+        d="M210 116h92l-16 44-30 46-30-46z"
+        fill="url(#bitMetal)"
+        stroke="#A3471F"
+        stroke-width="10"
+        stroke-linejoin="round"
+      />
+      <path
+        d="M228 122l28 38 28-38"
+        fill="none"
+        stroke="#A3471F"
+        stroke-width="8"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
     </g>
-
-    <circle cx="268" cy="264" r="30" fill="#ffffff" stroke="#0d66b8" stroke-width="12"/>
-    <circle cx="268" cy="264" r="11" fill="#0d66b8"/>
-  </g>
-
-  <g>
-    <rect x="226" y="60" width="60" height="62" rx="16" fill="#0a4f98"/>
-    <path
-      d="M210 116h92l-16 44-30 46-30-46z"
-      fill="url(#bitMetal)"
-      stroke="#0a4f98"
-      stroke-width="10"
-      stroke-linejoin="round"
-    />
-    <path
-      d="M228 122l28 38 28-38"
-      fill="none"
-      stroke="#0a4f98"
-      stroke-width="8"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    />
-    <path
-      d="M248 206h16l18 24-26 20-26-20z"
-      fill="#ffffff"
-      stroke="#0a4f98"
-      stroke-width="8"
-      stroke-linejoin="round"
-    />
   </g>
 </svg>
