@@ -9,7 +9,7 @@ from pathlib import Path
 
 import yaml
 from PySide6.QtCore import QStandardPaths, Qt
-from PySide6.QtGui import QPixmap, QScreen
+from PySide6.QtGui import QIcon, QPixmap, QScreen
 from PySide6.QtWidgets import QApplication, QWidget
 
 from .app_config import AppConfig
@@ -798,6 +798,7 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(APPLICATION_NAME)
     app.setOrganizationName(ORGANIZATION_NAME)
+    app.setWindowIcon(QIcon(str(_asset_path("app-icon.svg"))))
     get_log_tracker().clear()
     config, config_warnings = _load_config()
     active_log_path = _configure_logging(config)
@@ -834,6 +835,7 @@ def main() -> int:
         splash.wait_for_click()
 
     window = MainWindow(config)
+    window.setWindowIcon(app.windowIcon())
     _apply_saved_window_placement(window, startup_screen, config)
     if len(sys.argv) > 1:
         candidate = Path(sys.argv[1]).expanduser()

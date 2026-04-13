@@ -8,3 +8,6 @@
 # - Keep one top-level class per file, including dataclasses.
 # - Do not introduce new Python files that contain multiple classes.
 # - Unused Python imports are not allowed.
+#
+# Design
+# - Avoid gradient colors in icons, graphics, and UI styling unless explicitly requested.

@@ -123,16 +123,6 @@ class MainWindow(QMainWindow):
         splitter.setSizes([420, 1020])
         root_layout.addWidget(splitter, 1)
 
-        nav_row = QHBoxLayout()
-        nav_row.addStretch(1)
-        self.back_button = QPushButton("Back")
-        self.back_button.clicked.connect(self._go_back)
-        self.next_button = QPushButton("Next")
-        self.next_button.clicked.connect(self._go_next)
-        nav_row.addWidget(self.back_button)
-        nav_row.addWidget(self.next_button)
-        root_layout.addLayout(nav_row)
-
         self.setCentralWidget(root)
         status = QStatusBar(self)
         status.showMessage("Wizard ready")
@@ -218,6 +208,16 @@ class MainWindow(QMainWindow):
         layout.addWidget(subtitle)
         layout.addWidget(summary_card)
         layout.addWidget(self.page_stack, 1)
+
+        nav_row = QHBoxLayout()
+        nav_row.addStretch(1)
+        self.back_button = QPushButton("Back")
+        self.back_button.clicked.connect(self._go_back)
+        self.next_button = QPushButton("Next")
+        self.next_button.clicked.connect(self._go_next)
+        nav_row.addWidget(self.back_button)
+        nav_row.addWidget(self.next_button)
+        layout.addLayout(nav_row)
         return panel
 
     def _build_project_page(self) -> QWidget:
@@ -284,6 +284,7 @@ class MainWindow(QMainWindow):
 
         self.gerber_list = QListWidget()
         self.gerber_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.gerber_list.itemChanged.connect(self._gerber_item_changed)
 
         self.gerber_hint = QLabel("Import at least one Gerber file to continue.")
         self.gerber_hint.setWordWrap(True)
@@ -324,6 +325,7 @@ class MainWindow(QMainWindow):
 
         self.drill_list = QListWidget()
         self.drill_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.drill_list.itemChanged.connect(self._drill_item_changed)
 
         self.drill_hint = QLabel(
             "You can continue without drill files. Later drill-operation "
@@ -1044,10 +1046,10 @@ class MainWindow(QMainWindow):
                 self,
                 "Drilling",
                 "Select drilling and milling tools first.",
-            )
+        )
             return
         holes = []
-        for drill in self.imported_drills:
+        for drill in self._active_drills():
             holes.extend(drill.holes)
         holes.extend(self._alignment_hole_positions())
         if not holes:
@@ -1114,9 +1116,9 @@ class MainWindow(QMainWindow):
         if index == 0:
             return True
         if index == 1:
-            return bool(self.imported_gerbers)
+            return bool(self._active_gerbers())
         if index == 2:
-            return True
+            return not self.imported_drills or bool(self._active_drills())
         if index == 3:
             return self.tool_library is not None and all(
                 self.project.selected_tools[role]
@@ -1146,7 +1148,16 @@ class MainWindow(QMainWindow):
         if index == 0:
             return "Create or load a project before moving on."
         if index == 1:
-            return "Import at least one Gerber file before moving to the next step."
+            if not self.imported_gerbers:
+                return "Import at least one Gerber file before moving to the next step."
+            return "Select at least one Gerber file before moving to the next step."
+        if index == 2:
+            if not self.imported_drills:
+                return "Drill import is optional. Continue without drill files or import at least one drill file."
+            return (
+                "Select at least one drill file before moving to the next step, "
+                "or clear the drill import if you do not want to use drill data."
+            )
         if index == 3:
             return "Load tools.yaml and select a drilling tool, a milling tool, and a V-bit."
         if index == 4:
@@ -1185,8 +1196,12 @@ class MainWindow(QMainWindow):
         self.project_value.setText(
             str(self.project.project_path) if self.project.project_path else "Unsaved project"
         )
-        self.gerber_count_value.setText(f"Gerber files: {len(self.imported_gerbers)}")
-        self.drill_count_value.setText(f"Drill files: {len(self.imported_drills)}")
+        self.gerber_count_value.setText(
+            f"Gerber files: {len(self._active_gerbers())}/{len(self.imported_gerbers)} active"
+        )
+        self.drill_count_value.setText(
+            f"Drill files: {len(self._active_drills())}/{len(self.imported_drills)} active"
+        )
         self.step_status_value.setText(self._step_status_text())
         self._refresh_list_widgets()
         self._sync_tool_selection_page()
@@ -1195,8 +1210,8 @@ class MainWindow(QMainWindow):
         self._sync_alignment_holes_page()
         self._sync_generated_outputs()
         self.preview.load_project_geometry(
-            self.imported_gerbers,
-            self.imported_drills,
+            self._active_gerbers(),
+            self._active_drills(),
             self._alignment_hole_positions(),
         )
         self.preview_stack.setCurrentIndex(1 if current >= 7 else 0)
@@ -1208,6 +1223,7 @@ class MainWindow(QMainWindow):
         self._scroll_current_step_into_view()
 
     def _refresh_list_widgets(self) -> None:
+        self.gerber_list.blockSignals(True)
         self.gerber_list.clear()
         for gerber in self.imported_gerbers:
             geometry_summary = []
@@ -1220,14 +1236,29 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(f"{gerber.display_name} ({', '.join(geometry_summary)})")
             item.setToolTip(str(gerber.path))
             item.setData(Qt.ItemDataRole.UserRole, str(gerber.path))
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                Qt.CheckState.Checked
+                if self.project.is_gerber_selected(gerber.path)
+                else Qt.CheckState.Unchecked
+            )
             self.gerber_list.addItem(item)
+        self.gerber_list.blockSignals(False)
 
+        self.drill_list.blockSignals(True)
         self.drill_list.clear()
         for drill in self.imported_drills:
             item = QListWidgetItem(f"{drill.display_name} ({len(drill.holes)} holes)")
             item.setToolTip(str(drill.path))
             item.setData(Qt.ItemDataRole.UserRole, str(drill.path))
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                Qt.CheckState.Checked
+                if self.project.is_drill_selected(drill.path)
+                else Qt.CheckState.Unchecked
+            )
             self.drill_list.addItem(item)
+        self.drill_list.blockSignals(False)
 
     def _step_status_text(self) -> str:
         if self.project.dirty_from_step is not None:
@@ -1238,9 +1269,12 @@ class MainWindow(QMainWindow):
         if self.project.current_step_index == 0:
             return "Project setup is active. Create, open, or save a project file before continuing."
         if self.project.current_step_index == 1:
-            return "Import at least one Gerber file so the board geometry can be reviewed and assigned."
+            return "Import Gerber files and leave enabled the layers you want to preview and use later."
         if self.project.current_step_index == 2:
-            return "Drill import is optional. Continue when the board geometry looks correct."
+            return (
+                "Drill import is optional, but if drill files are loaded at least one must remain "
+                "enabled to continue."
+            )
         if self.project.current_step_index == 3:
             return "Load tools.yaml and choose the tools needed for drilling, milling, and V-bit operations."
         if self.project.current_step_index == 4:
@@ -1443,12 +1477,12 @@ class MainWindow(QMainWindow):
         combo.blockSignals(True)
         combo.clear()
         combo.addItem("Unassigned", "")
-        for gerber in self.imported_gerbers:
+        for gerber in self._active_gerbers():
             combo.addItem(gerber.display_name, str(gerber.path))
         target = "" if selected_path is None else str(selected_path)
         index = combo.findData(target)
         combo.setCurrentIndex(0 if index < 0 else index)
-        combo.setEnabled(bool(self.imported_gerbers))
+        combo.setEnabled(bool(self._active_gerbers()))
         combo.blockSignals(False)
 
     def _sync_mirror_setup_page(self) -> None:
@@ -1526,7 +1560,7 @@ class MainWindow(QMainWindow):
         assigned_path = self.project.layer_assignments.get(role)
         if assigned_path is None:
             return None
-        for gerber in self.imported_gerbers:
+        for gerber in self._active_gerbers():
             if gerber.path == assigned_path:
                 return gerber
         return None
@@ -1663,9 +1697,39 @@ class MainWindow(QMainWindow):
         return operation_key in self.project.generated_outputs
 
     def _drilling_optional_or_generated(self) -> bool:
-        if not self.imported_drills and not self.project.alignment_holes:
+        if not self._active_drills() and not self.project.alignment_holes:
             return True
         return "drilling" in self.project.generated_outputs
+
+    def _active_gerbers(self) -> list[ImportedGerberFile]:
+        return [
+            gerber for gerber in self.imported_gerbers if self.project.is_gerber_selected(gerber.path)
+        ]
+
+    def _active_drills(self) -> list[ImportedDrillFile]:
+        return [
+            drill for drill in self.imported_drills if self.project.is_drill_selected(drill.path)
+        ]
+
+    def _gerber_item_changed(self, item: QListWidgetItem) -> None:
+        raw_path = item.data(Qt.ItemDataRole.UserRole)
+        if not raw_path:
+            return
+        path = Path(str(raw_path))
+        selected = item.checkState() == Qt.CheckState.Checked
+        if self.project.set_gerber_selected(path, selected):
+            self._mark_project_dirty()
+            self._sync_ui()
+
+    def _drill_item_changed(self, item: QListWidgetItem) -> None:
+        raw_path = item.data(Qt.ItemDataRole.UserRole)
+        if not raw_path:
+            return
+        path = Path(str(raw_path))
+        selected = item.checkState() == Qt.CheckState.Checked
+        if self.project.set_drill_selected(path, selected):
+            self._mark_project_dirty()
+            self._sync_ui()
 
     def _mark_project_dirty(self) -> None:
         self.has_unsaved_changes = True

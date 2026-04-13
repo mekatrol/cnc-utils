@@ -8,7 +8,7 @@ from .alignment_hole import AlignmentHole
 
 
 class PcbProject:
-    VERSION = 3
+    VERSION = 1
     TOTAL_STEPS = 12
     STEP_KEYS = [
         "project",
@@ -29,6 +29,8 @@ class PcbProject:
         self.project_path: Path | None = None
         self.gerber_paths: list[Path] = []
         self.drill_paths: list[Path] = []
+        self.selected_gerber_paths: set[Path] = set()
+        self.selected_drill_paths: set[Path] = set()
         self.tool_library_path: Path | None = None
         self.selected_tools: dict[str, str] = {
             "drilling": "",
@@ -55,6 +57,13 @@ class PcbProject:
         normalized = [path.resolve() for path in paths]
         changed = normalized != self.gerber_paths
         self.gerber_paths = normalized
+        current_selection = {
+            path for path in self.selected_gerber_paths if path in self.gerber_paths
+        }
+        for path in self.gerber_paths:
+            if path not in current_selection:
+                current_selection.add(path)
+        self.selected_gerber_paths = current_selection
         if changed:
             self._prune_missing_layer_assignments()
             self._invalidate_from(1)
@@ -64,9 +73,53 @@ class PcbProject:
         normalized = [path.resolve() for path in paths]
         changed = normalized != self.drill_paths
         self.drill_paths = normalized
+        current_selection = {
+            path for path in self.selected_drill_paths if path in self.drill_paths
+        }
+        for path in self.drill_paths:
+            if path not in current_selection:
+                current_selection.add(path)
+        self.selected_drill_paths = current_selection
         if changed:
             self._invalidate_from(2)
         return changed
+
+    def set_gerber_selected(self, path: Path, selected: bool) -> bool:
+        resolved = path.resolve()
+        if resolved not in self.gerber_paths:
+            return False
+        changed = resolved in self.selected_gerber_paths
+        if selected:
+            self.selected_gerber_paths.add(resolved)
+            changed = not changed
+        else:
+            self.selected_gerber_paths.discard(resolved)
+            changed = changed
+        if changed:
+            self._prune_missing_layer_assignments()
+            self._invalidate_from(1)
+        return changed
+
+    def set_drill_selected(self, path: Path, selected: bool) -> bool:
+        resolved = path.resolve()
+        if resolved not in self.drill_paths:
+            return False
+        changed = resolved in self.selected_drill_paths
+        if selected:
+            self.selected_drill_paths.add(resolved)
+            changed = not changed
+        else:
+            self.selected_drill_paths.discard(resolved)
+            changed = changed
+        if changed:
+            self._invalidate_from(2)
+        return changed
+
+    def is_gerber_selected(self, path: Path) -> bool:
+        return path.resolve() in self.selected_gerber_paths
+
+    def is_drill_selected(self, path: Path) -> bool:
+        return path.resolve() in self.selected_drill_paths
 
     def set_tool_library_path(self, path: Path | None) -> bool:
         resolved = None if path is None else path.resolve()
@@ -157,9 +210,19 @@ class PcbProject:
                 self._to_relative_path(item, self.project_path.parent)
                 for item in self.gerber_paths
             ],
+            "selected_gerber_files": [
+                self._to_relative_path(item, self.project_path.parent)
+                for item in self.gerber_paths
+                if item in self.selected_gerber_paths
+            ],
             "drill_files": [
                 self._to_relative_path(item, self.project_path.parent)
                 for item in self.drill_paths
+            ],
+            "selected_drill_files": [
+                self._to_relative_path(item, self.project_path.parent)
+                for item in self.drill_paths
+                if item in self.selected_drill_paths
             ],
             "tool_library": {
                 "path": (
@@ -221,10 +284,26 @@ class PcbProject:
             project._from_relative_path(item, project.project_path.parent)
             for item in loaded.get("gerber_files", [])
         ]
+        project.selected_gerber_paths = set(project.gerber_paths)
+        raw_selected_gerbers = loaded.get("selected_gerber_files")
+        if isinstance(raw_selected_gerbers, list):
+            project.selected_gerber_paths = {
+                project._from_relative_path(item, project.project_path.parent)
+                for item in raw_selected_gerbers
+                if isinstance(item, str) and item.strip()
+            }
         project.drill_paths = [
             project._from_relative_path(item, project.project_path.parent)
             for item in loaded.get("drill_files", [])
         ]
+        project.selected_drill_paths = set(project.drill_paths)
+        raw_selected_drills = loaded.get("selected_drill_files")
+        if isinstance(raw_selected_drills, list):
+            project.selected_drill_paths = {
+                project._from_relative_path(item, project.project_path.parent)
+                for item in raw_selected_drills
+                if isinstance(item, str) and item.strip()
+            }
         tool_library_data = loaded.get("tool_library", {})
         if not isinstance(tool_library_data, dict):
             tool_library_data = {}
@@ -297,6 +376,12 @@ class PcbProject:
         else:
             project.completed_steps = set()
         project.completed_steps.add(0)
+        project.selected_gerber_paths = {
+            path for path in project.selected_gerber_paths if path in project.gerber_paths
+        }
+        project.selected_drill_paths = {
+            path for path in project.selected_drill_paths if path in project.drill_paths
+        }
         project._prune_missing_layer_assignments()
         if not project.requires_mirror_setup():
             project.mirror_flip_edge = ""
@@ -331,7 +416,7 @@ class PcbProject:
         return (base_dir / candidate).resolve()
 
     def _prune_missing_layer_assignments(self) -> None:
-        valid_paths = set(self.gerber_paths)
+        valid_paths = set(self.selected_gerber_paths)
         for role, path in list(self.layer_assignments.items()):
             if path is not None and path not in valid_paths:
                 self.layer_assignments[role] = None
