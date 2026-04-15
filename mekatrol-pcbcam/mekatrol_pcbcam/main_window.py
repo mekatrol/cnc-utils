@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import copy
 import logging
+from collections.abc import Callable
+from dataclasses import fields
 from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths, Qt
@@ -39,6 +42,8 @@ from .imported_gerber_file import ImportedGerberFile
 from .mirror_preview_widget import MirrorPreviewWidget
 from .pcb_preview_widget import PcbPreviewWidget
 from .pcb_project import PcbProject
+from .theme import AppTheme, load_theme
+from .theme_settings_dialog import ThemeSettingsDialog, discover_theme_options
 from .tool_library import ToolLibrary
 from .viewer import ToolpathViewer
 from .wizard_step_bar import WizardStepBar
@@ -65,10 +70,18 @@ class MainWindow(QMainWindow):
     ]
     IMPLEMENTED_STEP_COUNT = 12
 
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        *,
+        themes_directory: Path,
+        save_config: Callable[[AppConfig], None],
+    ) -> None:
         super().__init__()
         self.config = config
         self.theme = config.theme
+        self._themes_directory = themes_directory
+        self._save_config = save_config
         self.project = PcbProject()
         self.gerber_parser = GerberFileParser()
         self.drill_parser = ExcellonFileParser()
@@ -78,6 +91,7 @@ class MainWindow(QMainWindow):
         self.tool_library: ToolLibrary | None = None
         self.generated_documents = {}
         self.has_unsaved_changes = False
+        self._muted_labels: list[QLabel] = []
 
         self.preview = PcbPreviewWidget(self.theme)
         self.toolpath_viewer = ToolpathViewer(self.theme)
@@ -145,7 +159,7 @@ class MainWindow(QMainWindow):
             "Each step saves into the project so you can reopen and continue."
         )
         subtitle.setWordWrap(True)
-        subtitle.setStyleSheet(self._muted_text_style())
+        self._apply_muted_text_style(subtitle)
 
         summary_card = QFrame()
         summary_card.setFrameShape(QFrame.Shape.StyledPanel)
@@ -251,7 +265,7 @@ class MainWindow(QMainWindow):
             "Use this step to create or reopen a project file. Gerber import happens in the next step."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet(self._muted_text_style())
+        self._apply_muted_text_style(hint)
 
         layout.addWidget(heading)
         layout.addWidget(body)
@@ -292,7 +306,7 @@ class MainWindow(QMainWindow):
 
         self.gerber_hint = QLabel("Import at least one Gerber file to continue.")
         self.gerber_hint.setWordWrap(True)
-        self.gerber_hint.setStyleSheet(self._muted_text_style())
+        self._apply_muted_text_style(self.gerber_hint)
 
         layout.addWidget(heading)
         layout.addWidget(body)
@@ -336,7 +350,7 @@ class MainWindow(QMainWindow):
             "steps will use the project data saved here."
         )
         self.drill_hint.setWordWrap(True)
-        self.drill_hint.setStyleSheet(self._muted_text_style())
+        self._apply_muted_text_style(self.drill_hint)
 
         layout.addWidget(heading)
         layout.addWidget(body)
@@ -394,7 +408,7 @@ class MainWindow(QMainWindow):
 
         self.tool_selection_hint = QLabel("Load a tool library and select all three tool types.")
         self.tool_selection_hint.setWordWrap(True)
-        self.tool_selection_hint.setStyleSheet(self._muted_text_style())
+        self._apply_muted_text_style(self.tool_selection_hint)
 
         layout.addWidget(heading)
         layout.addWidget(body)
@@ -442,7 +456,7 @@ class MainWindow(QMainWindow):
 
         self.layer_assignment_hint = QLabel("At least one of front copper, back copper, or edges is required.")
         self.layer_assignment_hint.setWordWrap(True)
-        self.layer_assignment_hint.setStyleSheet(self._muted_text_style())
+        self._apply_muted_text_style(self.layer_assignment_hint)
 
         layout.addWidget(heading)
         layout.addWidget(body)
@@ -553,7 +567,7 @@ class MainWindow(QMainWindow):
             "Alignment holes are optional. Added holes are shown in green in the preview."
         )
         self.alignment_holes_hint.setWordWrap(True)
-        self.alignment_holes_hint.setStyleSheet(self._muted_text_style())
+        self._apply_muted_text_style(self.alignment_holes_hint)
 
         layout.addWidget(heading)
         layout.addWidget(body)
@@ -664,6 +678,67 @@ class MainWindow(QMainWindow):
         fit_action.setShortcut("F")
         fit_action.triggered.connect(self.preview.fit_to_view)
         view_menu.addAction(fit_action)
+
+        settings_menu = self.menuBar().addMenu("&Settings")
+        theme_action = QAction("Theme...", self)
+        theme_action.triggered.connect(self._open_theme_settings)
+        settings_menu.addAction(theme_action)
+
+    def _apply_muted_text_style(self, label: QLabel) -> None:
+        if label not in self._muted_labels:
+            self._muted_labels.append(label)
+        label.setStyleSheet(self._muted_text_style())
+
+    def _open_theme_settings(self) -> None:
+        options = discover_theme_options(self._themes_directory)
+        if not options:
+            QMessageBox.information(
+                self,
+                "Theme settings",
+                f"No theme files were found in {self._themes_directory}.",
+            )
+            return
+
+        dialog = ThemeSettingsDialog(
+            self._themes_directory,
+            options,
+            self.config.theme_file,
+            self,
+        )
+        if dialog.exec() == 0:
+            return
+
+        selected_theme_file = dialog.selected_theme_file()
+        if not selected_theme_file or selected_theme_file == self.config.theme_file:
+            return
+
+        theme_path = self._themes_directory / selected_theme_file
+        theme, warnings = load_theme(theme_path)
+        if warnings:
+            QMessageBox.warning(
+                self,
+                "Theme warnings",
+                "\n".join(warnings),
+            )
+
+        self.config.theme_file = selected_theme_file
+        self.config.theme = theme
+        self._save_config(self.config)
+        self._replace_theme(theme)
+        self.statusBar().showMessage(f"Theme changed to {theme.theme_info.name}", 3000)
+
+    def _replace_theme(self, new_theme: AppTheme) -> None:
+        for field in fields(AppTheme):
+            setattr(self.theme, field.name, copy.deepcopy(getattr(new_theme, field.name)))
+
+        for label in self._muted_labels:
+            self._apply_muted_text_style(label)
+
+        self.step_bar.update()
+        self.preview.update()
+        self.mirror_preview.update()
+        self.toolpath_viewer.update()
+        self._sync_ui()
 
     def _new_project(self) -> None:
         if not self._confirm_discard_or_save_changes():

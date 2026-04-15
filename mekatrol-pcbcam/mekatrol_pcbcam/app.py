@@ -880,7 +880,11 @@ def main() -> int:
         app.processEvents()
         splash.wait_for_click()
 
-    window = MainWindow(config)
+    window = MainWindow(
+        config,
+        themes_directory=_themes_directory(),
+        save_config=_save_config,
+    )
     window.setWindowIcon(app.windowIcon())
     _apply_saved_window_placement(window, startup_screen, config)
     if len(sys.argv) > 1:
