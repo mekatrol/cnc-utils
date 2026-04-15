@@ -9,14 +9,22 @@ from .alignment_hole import AlignmentHole
 
 class PcbProject:
     VERSION = 1
-    TOTAL_STEPS = 12
+    STEP_PROJECT = 0
+    STEP_GERBER_IMPORT = 1
+    STEP_DRILL_IMPORT = 2
+    STEP_TOOL_SELECTION = 3
+    STEP_ALIGNMENT_HOLES = 4
+    STEP_FRONT_ISOLATION = 5
+    STEP_BACK_ISOLATION = 6
+    STEP_DRILLING = 7
+    STEP_EDGE_CUTS = 8
+    STEP_NC_PREVIEW = 9
+    TOTAL_STEPS = 10
     STEP_KEYS = [
         "project",
         "gerber_import",
         "drill_import",
         "tool_selection",
-        "layer_assignment",
-        "mirror_setup",
         "alignment_holes",
         "front_isolation",
         "back_isolation",
@@ -24,6 +32,16 @@ class PcbProject:
         "edge_cuts",
         "nc_preview",
     ]
+    LEGACY_STEP_KEY_MAP = {
+        "layer_assignment": STEP_GERBER_IMPORT,
+        "mirror_setup": STEP_GERBER_IMPORT,
+        "alignment_holes": STEP_ALIGNMENT_HOLES,
+        "front_isolation": STEP_FRONT_ISOLATION,
+        "back_isolation": STEP_BACK_ISOLATION,
+        "drilling": STEP_DRILLING,
+        "edge_cuts": STEP_EDGE_CUTS,
+        "nc_preview": STEP_NC_PREVIEW,
+    }
 
     def __init__(self) -> None:
         self.project_path: Path | None = None
@@ -67,7 +85,7 @@ class PcbProject:
         self.selected_gerber_paths = current_selection
         if changed:
             self._prune_missing_layer_assignments()
-            self._invalidate_from(1)
+            self._invalidate_from(self.STEP_GERBER_IMPORT)
         return changed
 
     def replace_drill_paths(self, paths: list[Path]) -> bool:
@@ -82,7 +100,7 @@ class PcbProject:
                 current_selection.add(path)
         self.selected_drill_paths = current_selection
         if changed:
-            self._invalidate_from(2)
+            self._invalidate_from(self.STEP_DRILL_IMPORT)
         return changed
 
     def set_gerber_selected(self, path: Path, selected: bool) -> bool:
@@ -98,7 +116,7 @@ class PcbProject:
             changed = changed
         if changed:
             self._prune_missing_layer_assignments()
-            self._invalidate_from(1)
+            self._invalidate_from(self.STEP_GERBER_IMPORT)
         return changed
 
     def set_drill_selected(self, path: Path, selected: bool) -> bool:
@@ -113,7 +131,7 @@ class PcbProject:
             self.selected_drill_paths.discard(resolved)
             changed = changed
         if changed:
-            self._invalidate_from(2)
+            self._invalidate_from(self.STEP_DRILL_IMPORT)
         return changed
 
     def is_gerber_selected(self, path: Path) -> bool:
@@ -127,7 +145,7 @@ class PcbProject:
         changed = resolved != self.tool_library_path
         self.tool_library_path = resolved
         if changed:
-            self._invalidate_from(3)
+            self._invalidate_from(self.STEP_TOOL_SELECTION)
         return changed
 
     def set_selected_tool(self, role: str, tool_id: str) -> bool:
@@ -135,15 +153,21 @@ class PcbProject:
         changed = self.selected_tools.get(role, "") != normalized
         self.selected_tools[role] = normalized
         if changed:
-            self._invalidate_from(3)
+            self._invalidate_from(self.STEP_TOOL_SELECTION)
         return changed
 
     def set_layer_assignment(self, role: str, path: Path | None) -> bool:
         resolved = None if path is None else path.resolve()
         changed = self.layer_assignments.get(role) != resolved
         self.layer_assignments[role] = resolved
+        if resolved is not None:
+            for other_role, assigned_path in self.layer_assignments.items():
+                if other_role == role or assigned_path != resolved:
+                    continue
+                self.layer_assignments[other_role] = None
+                changed = True
         if changed:
-            self._invalidate_from(4)
+            self._invalidate_from(self.STEP_GERBER_IMPORT)
         if not self.requires_mirror_setup():
             self.mirror_flip_edge = ""
         return changed
@@ -153,7 +177,7 @@ class PcbProject:
         changed = self.mirror_flip_edge != normalized
         self.mirror_flip_edge = normalized
         if changed:
-            self._invalidate_from(5)
+            self._invalidate_from(self.STEP_GERBER_IMPORT)
         return changed
 
     def set_mirror_preview_mode(self, mode: str) -> bool:
@@ -163,14 +187,14 @@ class PcbProject:
         changed = self.mirror_preview_mode != normalized
         self.mirror_preview_mode = normalized
         if changed:
-            self._invalidate_from(5)
+            self._invalidate_from(self.STEP_GERBER_IMPORT)
         return changed
 
     def replace_alignment_holes(self, holes: list[AlignmentHole]) -> bool:
         changed = holes != self.alignment_holes
         self.alignment_holes = holes
         if changed:
-            self._invalidate_from(6)
+            self._invalidate_from(self.STEP_ALIGNMENT_HOLES)
         return changed
 
     def requires_mirror_setup(self) -> bool:
@@ -398,6 +422,7 @@ class PcbProject:
             path for path in project.selected_drill_paths if path in project.drill_paths
         }
         project._prune_missing_layer_assignments()
+        project._ensure_unique_layer_assignments()
         if not project.requires_mirror_setup():
             project.mirror_flip_edge = ""
         project.dirty_from_step = None
@@ -413,7 +438,7 @@ class PcbProject:
                 if self.dirty_from_step is None
                 else min(self.dirty_from_step, index)
             )
-        if index <= 10:
+        if index <= self.STEP_EDGE_CUTS:
             self.generated_outputs = {}
         self.highest_commenced_step = min(self.highest_commenced_step, index + 1)
         self.current_step_index = min(self.current_step_index, index + 1)
@@ -431,10 +456,21 @@ class PcbProject:
         return (base_dir / candidate).resolve()
 
     def _prune_missing_layer_assignments(self) -> None:
-        valid_paths = set(self.selected_gerber_paths)
+        valid_paths = set(self.gerber_paths)
         for role, path in list(self.layer_assignments.items()):
             if path is not None and path not in valid_paths:
                 self.layer_assignments[role] = None
+
+    def _ensure_unique_layer_assignments(self) -> None:
+        seen_paths: set[Path] = set()
+        for role in ("front_copper", "back_copper", "edges"):
+            assigned_path = self.layer_assignments.get(role)
+            if assigned_path is None:
+                continue
+            if assigned_path in seen_paths:
+                self.layer_assignments[role] = None
+                continue
+            seen_paths.add(assigned_path)
 
     def _step_key_for_index(self, index: int) -> str:
         normalized_index = max(0, min(index, self.TOTAL_STEPS - 1))
@@ -443,6 +479,9 @@ class PcbProject:
     def _step_index_for_key(self, key: object, default: int = 0) -> int:
         if not isinstance(key, str):
             return default
+        legacy_index = self.LEGACY_STEP_KEY_MAP.get(key.strip())
+        if legacy_index is not None:
+            return legacy_index
         try:
             return self.STEP_KEYS.index(key.strip())
         except ValueError:

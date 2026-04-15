@@ -783,6 +783,23 @@ def _clamp_window_to_screen(widget: QWidget, screen: QScreen) -> None:
     widget.move(x, y)
 
 
+def _fit_window_frame_to_screen(widget: QWidget, screen: QScreen) -> None:
+    available = screen.availableGeometry()
+    frame = widget.frameGeometry()
+    client = widget.geometry()
+    frame_extra_width = max(0, frame.width() - client.width())
+    frame_extra_height = max(0, frame.height() - client.height())
+
+    max_width = max(MINIMUM_WINDOW_WIDTH, available.width() - frame_extra_width)
+    max_height = max(MINIMUM_WINDOW_HEIGHT, available.height() - frame_extra_height)
+    widget.resize(min(widget.width(), max_width), min(widget.height(), max_height))
+
+    frame = widget.frameGeometry()
+    x = max(available.left(), min(frame.left(), available.right() - frame.width() + 1))
+    y = max(available.top(), min(frame.top(), available.bottom() - frame.height() + 1))
+    widget.move(x, y)
+
+
 def _apply_saved_window_placement(
     window: MainWindow, startup_screen: QScreen, config: AppConfig
 ) -> None:
@@ -927,5 +944,7 @@ def main() -> int:
         window.showMaximized()
     else:
         window.show()
+        app.processEvents()
+        _fit_window_frame_to_screen(window, startup_screen)
     logger.info("Application startup complete")
     return app.exec()

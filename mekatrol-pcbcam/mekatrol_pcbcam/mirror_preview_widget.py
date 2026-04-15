@@ -12,7 +12,7 @@ class MirrorPreviewWidget(QWidget):
         super().__init__(parent)
         self._theme = theme
         self._edge = ""
-        self.setMinimumHeight(170)
+        self.setMinimumHeight(120)
 
     def set_edge(self, edge: str) -> None:
         self._edge = edge

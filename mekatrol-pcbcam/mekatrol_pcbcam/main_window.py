@@ -60,8 +60,6 @@ class MainWindow(QMainWindow):
         "Gerber Import",
         "Drill Import",
         "Tool Selection",
-        "Layer Assignment",
-        "Mirror Setup",
         "Alignment Holes",
         "Front Isolation",
         "Back Isolation",
@@ -69,7 +67,7 @@ class MainWindow(QMainWindow):
         "Edge Cuts",
         "NC Preview",
     ]
-    IMPLEMENTED_STEP_COUNT = 12
+    IMPLEMENTED_STEP_COUNT = 10
 
     def __init__(
         self,
@@ -192,12 +190,10 @@ class MainWindow(QMainWindow):
         self.page_stack.addWidget(self._build_gerber_page())
         self.page_stack.addWidget(self._build_drill_page())
         self.page_stack.addWidget(self._build_tool_selection_page())
-        self.page_stack.addWidget(self._build_layer_assignment_page())
-        self.page_stack.addWidget(self._build_mirror_setup_page())
         self.page_stack.addWidget(self._build_alignment_holes_page())
         self.page_stack.addWidget(
             self._build_operation_page(
-                "Step 8: Front Isolation",
+                "Step 6: Front Isolation",
                 "Generate front copper isolation G-code from the assigned front copper layer.",
                 "Generate Front Isolation",
                 "_generate_front_isolation",
@@ -206,7 +202,7 @@ class MainWindow(QMainWindow):
         )
         self.page_stack.addWidget(
             self._build_operation_page(
-                "Step 9: Back Isolation",
+                "Step 7: Back Isolation",
                 "Generate back copper isolation G-code from the assigned back copper layer.",
                 "Generate Back Isolation",
                 "_generate_back_isolation",
@@ -215,7 +211,7 @@ class MainWindow(QMainWindow):
         )
         self.page_stack.addWidget(
             self._build_operation_page(
-                "Step 10: Drilling",
+                "Step 8: Drilling",
                 "Generate drilling G-code for imported drill holes and optional alignment holes.",
                 "Generate Drill Operations",
                 "_generate_drilling_operations",
@@ -224,7 +220,7 @@ class MainWindow(QMainWindow):
         )
         self.page_stack.addWidget(
             self._build_operation_page(
-                "Step 11: Edge Cuts",
+                "Step 9: Edge Cuts",
                 "Generate edge cut G-code from the assigned board outline.",
                 "Generate Edge Cuts",
                 "_generate_edge_cuts",
@@ -233,10 +229,25 @@ class MainWindow(QMainWindow):
         )
         self.page_stack.addWidget(self._build_nc_preview_page())
 
+        self.page_scroll = QScrollArea()
+        self.page_scroll.setObjectName("pageScroll")
+        self.page_scroll.setWidgetResizable(True)
+        self.page_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.page_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.page_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        page_scroll_content = QWidget()
+        page_scroll_content.setObjectName("pageScrollContent")
+        page_scroll_layout = QVBoxLayout(page_scroll_content)
+        page_scroll_layout.setContentsMargins(0, 0, 12, 0)
+        page_scroll_layout.setSpacing(0)
+        page_scroll_layout.addWidget(self.page_stack)
+        self.page_scroll.setWidget(page_scroll_content)
+
         layout.addWidget(title)
         layout.addWidget(subtitle)
         layout.addWidget(summary_card)
-        layout.addWidget(self.page_stack, 1)
+        layout.addWidget(self.page_scroll, 1)
 
         nav_row = QHBoxLayout()
         nav_row.addStretch(1)
@@ -294,9 +305,8 @@ class MainWindow(QMainWindow):
         heading = QLabel("Step 2: Import Gerber")
         heading.setObjectName("pageHeading")
         body = QLabel(
-            "Import one or more Gerber files. Typical files include front copper, "
-            "back copper, and edge cuts. All imported geometry is shown in the "
-            "preview so you can validate the board before moving on."
+            "Import Gerber files, assign front/back/edge roles, and set mirroring "
+            "here so the rest of the wizard uses the same board view."
         )
         body.setWordWrap(True)
 
@@ -314,6 +324,8 @@ class MainWindow(QMainWindow):
         self.gerber_list = QListWidget()
         self.gerber_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.gerber_list.itemChanged.connect(self._gerber_item_changed)
+        self.gerber_list.setMinimumHeight(150)
+        self.gerber_list.setMaximumHeight(210)
 
         self.gerber_hint = QLabel("Import at least one Gerber file to continue.")
         self.gerber_hint.setWordWrap(True)
@@ -324,6 +336,8 @@ class MainWindow(QMainWindow):
         layout.addLayout(button_row)
         layout.addWidget(self.gerber_list, 1)
         layout.addWidget(self.gerber_hint)
+        layout.addWidget(self._build_layer_assignment_section())
+        layout.addWidget(self._build_mirror_setup_section())
         return page
 
     def _build_drill_page(self) -> QWidget:
@@ -431,28 +445,23 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
         return page
 
-    def _build_layer_assignment_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
-
-        heading = QLabel("Step 5: Layer Assignment")
-        heading.setObjectName("pageHeading")
-        body = QLabel(
-            "Assign imported Gerber files to front copper, back copper, and edges. "
-            "Any assignment is optional, but at least one of the three roles must be "
-            "filled before the wizard can continue."
-        )
-        body.setWordWrap(True)
-
+    def _build_layer_assignment_section(self) -> QWidget:
         form_card = QFrame()
         form_card.setFrameShape(QFrame.Shape.StyledPanel)
         form_card.setObjectName("sidebarPanelCard")
         self._sidebar_panels.append(form_card)
-        form = QFormLayout(form_card)
-        form.setContentsMargins(14, 14, 14, 14)
-        form.setSpacing(10)
+        layout = QVBoxLayout(form_card)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+        heading = QLabel("Layer Assignment")
+        heading.setObjectName("sectionHeading")
+        body = QLabel(
+            "Each role must use a different Gerber file."
+        )
+        body.setWordWrap(True)
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setSpacing(8)
         self.front_copper_combo = QComboBox()
         self.front_copper_combo.currentIndexChanged.connect(
             lambda _: self._layer_assignment_changed("front_copper", self.front_copper_combo)
@@ -475,26 +484,24 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(heading)
         layout.addWidget(body)
-        layout.addWidget(form_card)
+        layout.addLayout(form)
         layout.addWidget(self.layer_assignment_hint)
-        layout.addStretch(1)
-        return page
+        return form_card
 
-    def _build_mirror_setup_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
-
-        heading = QLabel("Step 6: Mirror Setup")
-        heading.setObjectName("pageHeading")
+    def _build_mirror_setup_section(self) -> QWidget:
+        card = QFrame()
+        card.setFrameShape(QFrame.Shape.StyledPanel)
+        card.setObjectName("sidebarPanelCard")
+        self._sidebar_panels.append(card)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+        heading = QLabel("Mirror Setup")
+        heading.setObjectName("sectionHeading")
         body = QLabel(
-            "If both front and back copper are assigned, choose the edge used for "
-            "mirroring when the board is flipped. This step is skipped automatically "
-            "when only one copper side is active."
+            "Choose the board-flip edge when both copper sides are assigned."
         )
         body.setWordWrap(True)
-
         self.mirror_requirement_label = QLabel()
         self.mirror_requirement_label.setWordWrap(True)
 
@@ -532,7 +539,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.mirror_preview_mode_combo)
         layout.addWidget(self.mirror_preview)
         layout.addStretch(1)
-        return page
+        return card
 
     def _build_alignment_holes_page(self) -> QWidget:
         page = QWidget()
@@ -540,7 +547,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 7: Alignment Holes")
+        heading = QLabel("Step 5: Alignment Holes")
         heading.setObjectName("pageHeading")
         body = QLabel(
             "Define optional alignment holes outside the board edge. Each hole uses "
@@ -649,7 +656,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 12: NC Preview")
+        heading = QLabel("Step 10: NC Preview")
         heading.setObjectName("pageHeading")
         body = QLabel(
             "Select any generated NC file to inspect it in the 3D toolpath viewer."
@@ -704,6 +711,13 @@ class MainWindow(QMainWindow):
         fit_action.setShortcut("F")
         fit_action.triggered.connect(self.preview.fit_to_view)
         view_menu.addAction(fit_action)
+        maximize_action = QAction("Maximize Window", self)
+        maximize_action.setShortcut("Ctrl+Shift+M")
+        maximize_action.triggered.connect(self.showMaximized)
+        view_menu.addAction(maximize_action)
+        restore_action = QAction("Restore Window", self)
+        restore_action.triggered.connect(self.showNormal)
+        view_menu.addAction(restore_action)
 
         settings_menu = self.menuBar().addMenu("&Settings")
         theme_action = QAction("Theme...", self)
@@ -830,6 +844,13 @@ class MainWindow(QMainWindow):
             #stepBarScroll QScrollBar:vertical,
             #stepBarScroll QWidget#qt_scrollarea_viewport {{
                 background-color: {self.theme.main_window_background};
+                color: {self.theme.main_window_text};
+                border: none;
+            }}
+            #pageScroll,
+            #pageScroll > QWidget,
+            #pageScroll QWidget#qt_scrollarea_viewport {{
+                background-color: {self.theme.main_window_sidebar_background};
                 color: {self.theme.main_window_text};
                 border: none;
             }}
@@ -1445,7 +1466,9 @@ class MainWindow(QMainWindow):
         if index == 0:
             return True
         if index == 1:
-            return bool(self._active_gerbers())
+            return bool(self._active_gerbers()) and any(
+                self.project.layer_assignments.values()
+            )
         if index == 2:
             return not self.imported_drills or bool(self._active_drills())
         if index == 3:
@@ -1454,20 +1477,16 @@ class MainWindow(QMainWindow):
                 for role in ("drilling", "milling", "v_bits")
             )
         if index == 4:
-            return any(self.project.layer_assignments.values())
+            return True
         if index == 5:
-            return True
-        if index == 6:
-            return True
-        if index == 7:
             return self._operation_optional_or_generated("front_isolation", "front_copper")
-        if index == 8:
+        if index == 6:
             return self._operation_optional_or_generated("back_isolation", "back_copper")
-        if index == 9:
+        if index == 7:
             return self._drilling_optional_or_generated()
-        if index == 10:
+        if index == 8:
             return self._operation_optional_or_generated("edge_cuts", "edges")
-        if index == 11:
+        if index == 9:
             return bool(self.project.generated_outputs)
         return False
 
@@ -1477,7 +1496,9 @@ class MainWindow(QMainWindow):
         if index == 1:
             if not self.imported_gerbers:
                 return "Import at least one Gerber file before moving to the next step."
-            return "Select at least one Gerber file before moving to the next step."
+            if not self._active_gerbers():
+                return "Select at least one Gerber file before moving to the next step."
+            return "Assign at least one active Gerber file to front copper, back copper, or edges."
         if index == 2:
             if not self.imported_drills:
                 return "Drill import is optional. Continue without drill files or import at least one drill file."
@@ -1487,17 +1508,13 @@ class MainWindow(QMainWindow):
             )
         if index == 3:
             return "Load tools.yaml and select a drilling tool, a milling tool, and a V-bit."
-        if index == 4:
-            return "Assign at least one Gerber file to front copper, back copper, or edges."
         if index == 5:
-            return "Choose a mirror edge or leave it set to None before moving to the next step."
-        if index == 7:
             return "Generate the front isolation NC file before moving to the next step."
-        if index == 8:
+        if index == 6:
             return "Generate the back isolation NC file before moving to the next step."
-        if index == 9:
+        if index == 7:
             return "Generate the drilling NC file before moving to the next step."
-        if index == 10:
+        if index == 8:
             return "Generate the edge cut NC file before moving to the next step."
         return "Complete the current wizard step before continuing."
 
@@ -1550,7 +1567,7 @@ class MainWindow(QMainWindow):
             mirror_edge=self.project.mirror_flip_edge,
             preview_mode=self.project.mirror_preview_mode,
         )
-        self.preview_stack.setCurrentIndex(1 if current >= 7 else 0)
+        self.preview_stack.setCurrentIndex(1 if current >= PcbProject.STEP_FRONT_ISOLATION else 0)
         self._update_window_title()
         self._scroll_current_step_into_view()
 
@@ -1605,7 +1622,10 @@ class MainWindow(QMainWindow):
         if self.project.current_step_index == 0:
             return "Project setup is active. Create, open, or save a project file before continuing."
         if self.project.current_step_index == 1:
-            return "Import Gerber files and leave enabled the layers you want to preview and use later."
+            return (
+                "Import Gerber files, assign unique manufacturing roles, and choose any "
+                "mirror settings needed for the rest of the wizard."
+            )
         if self.project.current_step_index == 2:
             return (
                 "Drill import is optional, but if drill files are loaded at least one must remain "
@@ -1614,20 +1634,16 @@ class MainWindow(QMainWindow):
         if self.project.current_step_index == 3:
             return "Load tools.yaml and choose the tools needed for drilling, milling, and V-bit operations."
         if self.project.current_step_index == 4:
-            return "Assign the imported Gerber files to manufacturing roles."
-        if self.project.current_step_index == 5:
-            return "Choose a mirror edge to flip the back layer in preview, or leave it at None for no mirroring."
-        if self.project.current_step_index == 6:
             return "Add optional alignment holes and confirm they appear outside the board in preview."
-        if self.project.current_step_index == 7:
+        if self.project.current_step_index == 5:
             return "Generate front copper isolation if a front copper layer is assigned."
-        if self.project.current_step_index == 8:
+        if self.project.current_step_index == 6:
             return "Generate back copper isolation if a back copper layer is assigned."
-        if self.project.current_step_index == 9:
+        if self.project.current_step_index == 7:
             return "Generate drilling for imported drill files and alignment holes."
-        if self.project.current_step_index == 10:
+        if self.project.current_step_index == 8:
             return "Generate edge cut operations if an outline is assigned."
-        if self.project.current_step_index == 11:
+        if self.project.current_step_index == 9:
             return "Select a generated NC file to inspect it in the 3D preview."
         return "Stage 4 of the wizard is active."
 
@@ -1794,31 +1810,49 @@ class MainWindow(QMainWindow):
     def _sync_layer_assignment_page(self) -> None:
         self._populate_layer_combo(
             self.front_copper_combo,
+            "front_copper",
             self.project.layer_assignments["front_copper"],
         )
         self._populate_layer_combo(
             self.back_copper_combo,
+            "back_copper",
             self.project.layer_assignments["back_copper"],
         )
         self._populate_layer_combo(
             self.edges_combo,
+            "edges",
             self.project.layer_assignments["edges"],
         )
 
     def _populate_layer_combo(
         self,
         combo: QComboBox,
+        role: str,
         selected_path: Path | None,
     ) -> None:
         combo.blockSignals(True)
         combo.clear()
         combo.addItem("Unassigned", "")
+        assigned_elsewhere = {
+            path
+            for other_role, path in self.project.layer_assignments.items()
+            if other_role != role and path is not None
+        }
         for gerber in self._active_gerbers():
+            if gerber.path in assigned_elsewhere:
+                continue
             combo.addItem(gerber.display_name, str(gerber.path))
+        if selected_path is not None and combo.findData(str(selected_path)) < 0:
+            assigned_gerber = self._imported_gerber_by_path(selected_path)
+            if assigned_gerber is not None:
+                label = assigned_gerber.display_name
+            else:
+                label = f"{selected_path.name} (missing)"
+            combo.addItem(label, str(selected_path))
         target = "" if selected_path is None else str(selected_path)
         index = combo.findData(target)
         combo.setCurrentIndex(0 if index < 0 else index)
-        combo.setEnabled(bool(self._active_gerbers()))
+        combo.setEnabled(bool(self.imported_gerbers))
         combo.blockSignals(False)
 
     def _sync_mirror_setup_page(self) -> None:
@@ -1884,6 +1918,16 @@ class MainWindow(QMainWindow):
                 edge_file.bounds.y_max,
             )
 
+        for gerber in self._active_gerbers():
+            if not gerber.outline or gerber.bounds.is_empty:
+                continue
+            return (
+                gerber.bounds.x_min,
+                gerber.bounds.x_max,
+                gerber.bounds.y_min,
+                gerber.bounds.y_max,
+            )
+
         bounds = None
         for role in ("front_copper", "back_copper", "edges"):
             gerber = self._assigned_gerber(role)
@@ -1909,8 +1953,12 @@ class MainWindow(QMainWindow):
         assigned_path = self.project.layer_assignments.get(role)
         if assigned_path is None:
             return None
-        for gerber in self._active_gerbers():
-            if gerber.path == assigned_path:
+        return self._imported_gerber_by_path(assigned_path)
+
+    def _imported_gerber_by_path(self, path: Path) -> ImportedGerberFile | None:
+        resolved_path = path.resolve()
+        for gerber in self.imported_gerbers:
+            if gerber.path == resolved_path:
                 return gerber
         return None
 

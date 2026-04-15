@@ -90,8 +90,12 @@ class PcbPreviewWidget(QWidget):
         bounds_drills = (
             self._drill_files if reference_drill_files is None else reference_drill_files
         )
+        gerber_bounds = BoardBounds()
         for gerber in bounds_gerbers:
+            gerber_bounds.include_bounds(gerber.bounds)
             self._include_gerber_bounds(gerber)
+        if self._mirror_preview_mode != "overlay":
+            self._include_mirrored_panel_bounds(gerber_bounds)
         for drill in bounds_drills:
             self._bounds.include_bounds(drill.bounds)
         for x, y, diameter in self._alignment_holes:
@@ -399,6 +403,24 @@ class PcbPreviewWidget(QWidget):
                 self._bounds.include_point(point[0], point[1])
         for point in self._transform_polygon(gerber, gerber.outline, mirrored=True):
             self._bounds.include_point(point[0], point[1])
+
+    def _include_mirrored_panel_bounds(self, source_bounds: BoardBounds) -> None:
+        if (
+            source_bounds.is_empty
+            or self._mirror_axis_bounds is None
+            or not self._mirror_edge
+            or (self._back_copper_path is None and self._edges_path is None)
+        ):
+            return
+        corners = [
+            (source_bounds.x_min, source_bounds.y_min),
+            (source_bounds.x_min, source_bounds.y_max),
+            (source_bounds.x_max, source_bounds.y_min),
+            (source_bounds.x_max, source_bounds.y_max),
+        ]
+        for point in corners:
+            mirrored_point = self._mirror_point(point)
+            self._bounds.include_point(mirrored_point[0], mirrored_point[1])
 
     def _include_segment_bounds(
         self,
