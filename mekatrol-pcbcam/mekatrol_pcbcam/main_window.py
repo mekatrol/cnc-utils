@@ -231,7 +231,7 @@ class MainWindow(QMainWindow):
         body = QLabel(
             "Start a new project, reopen an existing one, or save the current setup. "
             "If the app automatically reopens a recent project on startup, the wizard "
-            "resumes at the last completed step."
+            "resumes at the saved wizard step."
         )
         body.setWordWrap(True)
 
@@ -758,11 +758,11 @@ class MainWindow(QMainWindow):
             return False
 
         self.project = project
-        target_step = (
-            self.project.last_completed_step_index(self.IMPLEMENTED_STEP_COUNT)
-            if auto_resume
-            else 1
+        saved_step = min(
+            self.project.current_step_index,
+            self.IMPLEMENTED_STEP_COUNT - 1,
         )
+        target_step = saved_step if auto_resume else max(1, saved_step)
         self.project.set_current_step(target_step)
         self.imported_gerbers = imported_gerbers
         self.imported_drills = imported_drills
