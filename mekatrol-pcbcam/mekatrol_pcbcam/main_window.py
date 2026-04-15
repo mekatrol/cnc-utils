@@ -1057,15 +1057,37 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Failed to import Gerber files", str(exc))
             return
 
-        self.imported_gerbers = imports
-        if self.project.replace_gerber_paths(paths):
+        self.imported_gerbers = self._merge_imported_gerbers(imports)
+        if self.project.replace_gerber_paths(
+            [item.path for item in self.imported_gerbers]
+        ):
             self._mark_project_dirty()
         self.project.set_current_step(1)
         self.statusBar().showMessage(
-            f"Imported {len(self.imported_gerbers)} Gerber file(s)",
+            f"Imported {len(imports)} Gerber file(s)",
             3000,
         )
         self._sync_ui()
+
+    def _merge_imported_gerbers(
+        self,
+        imports: list[ImportedGerberFile],
+    ) -> list[ImportedGerberFile]:
+        merged = list(self.imported_gerbers)
+        index_by_path = {
+            item.path.resolve(): index for index, item in enumerate(merged)
+        }
+
+        for imported in imports:
+            resolved_path = imported.path.resolve()
+            existing_index = index_by_path.get(resolved_path)
+            if existing_index is None:
+                index_by_path[resolved_path] = len(merged)
+                merged.append(imported)
+                continue
+            merged[existing_index] = imported
+
+        return merged
 
     def _import_drill_files(self) -> None:
         selected, _ = QFileDialog.getOpenFileNames(
@@ -1436,6 +1458,8 @@ class MainWindow(QMainWindow):
             self._active_gerbers(),
             self._active_drills(),
             self._alignment_hole_positions(),
+            reference_gerber_files=self.imported_gerbers,
+            reference_drill_files=self.imported_drills,
         )
         self.preview_stack.setCurrentIndex(1 if current >= 7 else 0)
         self._update_window_title()

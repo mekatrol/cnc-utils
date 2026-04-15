@@ -41,14 +41,23 @@ class PcbPreviewWidget(QWidget):
         gerber_files: list[ImportedGerberFile],
         drill_files: list[ImportedDrillFile],
         alignment_holes: list[tuple[float, float, float]],
+        *,
+        reference_gerber_files: list[ImportedGerberFile] | None = None,
+        reference_drill_files: list[ImportedDrillFile] | None = None,
     ) -> None:
         self._gerber_files = gerber_files
         self._drill_files = drill_files
         self._alignment_holes = alignment_holes
         self._bounds = BoardBounds()
-        for gerber in gerber_files:
+        bounds_gerbers = (
+            gerber_files if reference_gerber_files is None else reference_gerber_files
+        )
+        bounds_drills = (
+            drill_files if reference_drill_files is None else reference_drill_files
+        )
+        for gerber in bounds_gerbers:
             self._bounds.include_bounds(gerber.bounds)
-        for drill in drill_files:
+        for drill in bounds_drills:
             self._bounds.include_bounds(drill.bounds)
         for x, y, diameter in alignment_holes:
             self._bounds.include_point(x, y, diameter * 0.5)
