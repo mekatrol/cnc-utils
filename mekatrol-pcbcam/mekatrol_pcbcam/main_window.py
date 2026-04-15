@@ -1107,15 +1107,37 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Failed to import drill files", str(exc))
             return
 
-        self.imported_drills = imports
-        if self.project.replace_drill_paths(paths):
+        self.imported_drills = self._merge_imported_drills(imports)
+        if self.project.replace_drill_paths(
+            [item.path for item in self.imported_drills]
+        ):
             self._mark_project_dirty()
         self.project.set_current_step(2)
         self.statusBar().showMessage(
-            f"Imported {len(self.imported_drills)} drill file(s)",
+            f"Imported {len(imports)} drill file(s)",
             3000,
         )
         self._sync_ui()
+
+    def _merge_imported_drills(
+        self,
+        imports: list[ImportedDrillFile],
+    ) -> list[ImportedDrillFile]:
+        merged = list(self.imported_drills)
+        index_by_path = {
+            item.path.resolve(): index for index, item in enumerate(merged)
+        }
+
+        for imported in imports:
+            resolved_path = imported.path.resolve()
+            existing_index = index_by_path.get(resolved_path)
+            if existing_index is None:
+                index_by_path[resolved_path] = len(merged)
+                merged.append(imported)
+                continue
+            merged[existing_index] = imported
+
+        return merged
 
     def _remove_selected_gerbers(self) -> None:
         selected_paths = {
