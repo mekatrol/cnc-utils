@@ -43,6 +43,7 @@ class PcbProject:
             "edges": None,
         }
         self.mirror_flip_edge: str = ""
+        self.mirror_preview_mode: str = "side_by_side"
         self.alignment_holes: list[AlignmentHole] = []
         self.generated_outputs: dict[str, Path] = {}
         self.current_step_index = 0
@@ -155,6 +156,16 @@ class PcbProject:
             self._invalidate_from(5)
         return changed
 
+    def set_mirror_preview_mode(self, mode: str) -> bool:
+        normalized = mode.strip() or "side_by_side"
+        if normalized not in {"overlay", "side_by_side"}:
+            normalized = "side_by_side"
+        changed = self.mirror_preview_mode != normalized
+        self.mirror_preview_mode = normalized
+        if changed:
+            self._invalidate_from(5)
+        return changed
+
     def replace_alignment_holes(self, holes: list[AlignmentHole]) -> bool:
         changed = holes != self.alignment_holes
         self.alignment_holes = holes
@@ -245,6 +256,7 @@ class PcbProject:
             },
             "mirror": {
                 "flip_edge": self.mirror_flip_edge or None,
+                "preview_mode": self.mirror_preview_mode,
             },
             "alignment_holes": [
                 {
@@ -333,6 +345,9 @@ class PcbProject:
             raw_edge = mirror_data.get("flip_edge", "")
             if isinstance(raw_edge, str):
                 project.mirror_flip_edge = raw_edge.strip()
+            raw_mode = mirror_data.get("preview_mode", "side_by_side")
+            if isinstance(raw_mode, str):
+                project.set_mirror_preview_mode(raw_mode)
         alignment_data = loaded.get("alignment_holes", [])
         if isinstance(alignment_data, list):
             for item in alignment_data:

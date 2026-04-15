@@ -54,12 +54,15 @@ class CamGenerator:
         mirrored = self._mirror_geometry(geometry, mirror_edge, board_bounds)
         paths = self._isolation_paths(mirrored, tool_tip_diameter)
         output_path = self.output_directory / output_name
+        tool_comment = f"V-bit tip {tool_tip_diameter:.3f} mm"
+        if mirror_edge:
+            tool_comment += f" mirrored on {mirror_edge}"
         self._write_line_operation(
             output_path,
             paths,
             cut_depth=self.isolation_depth,
             spindle_speed=12000,
-            tool_comment=f"V-bit tip {tool_tip_diameter:.3f} mm mirrored on {mirror_edge}",
+            tool_comment=tool_comment,
         )
         return output_path
 

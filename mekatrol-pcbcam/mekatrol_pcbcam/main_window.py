@@ -502,6 +502,7 @@ class MainWindow(QMainWindow):
         self.mirror_button_group = QButtonGroup(self)
         self.mirror_buttons: dict[str, QRadioButton] = {}
         for edge, label in (
+            ("", "None"),
             ("left", "Left"),
             ("top", "Top"),
             ("right", "Right"),
@@ -515,12 +516,20 @@ class MainWindow(QMainWindow):
             self.mirror_buttons[edge] = button
             button_row.addWidget(button)
 
+        self.mirror_preview_mode_combo = QComboBox()
+        self.mirror_preview_mode_combo.addItem("Overlay", "overlay")
+        self.mirror_preview_mode_combo.addItem("Side by side", "side_by_side")
+        self.mirror_preview_mode_combo.currentIndexChanged.connect(
+            self._mirror_preview_mode_changed
+        )
+
         self.mirror_preview = MirrorPreviewWidget(self.theme)
 
         layout.addWidget(heading)
         layout.addWidget(body)
         layout.addWidget(self.mirror_requirement_label)
         layout.addLayout(button_row)
+        layout.addWidget(self.mirror_preview_mode_combo)
         layout.addWidget(self.mirror_preview)
         layout.addStretch(1)
         return page
@@ -1272,6 +1281,12 @@ class MainWindow(QMainWindow):
             self._mark_project_dirty()
         self._sync_ui()
 
+    def _mirror_preview_mode_changed(self, index: int) -> None:
+        mode = str(self.mirror_preview_mode_combo.itemData(index) or "side_by_side")
+        if self.project.set_mirror_preview_mode(mode):
+            self._mark_project_dirty()
+        self._sync_ui()
+
     def _add_alignment_hole(self) -> None:
         holes = list(self.project.alignment_holes)
         holes.append(
@@ -1331,9 +1346,6 @@ class MainWindow(QMainWindow):
         if gerber is None:
             QMessageBox.information(self, "Back isolation", "Assign a back copper Gerber first.")
             return
-        if self.project.requires_mirror_setup() and not self.project.mirror_flip_edge:
-            QMessageBox.information(self, "Back isolation", "Choose a mirror edge first.")
-            return
         tool = self._selected_tool("v_bits")
         if tool is None:
             QMessageBox.information(self, "Back isolation", "Select a V-bit first.")
@@ -1347,7 +1359,7 @@ class MainWindow(QMainWindow):
                 gerber,
                 output_name="back-isolation.nc",
                 tool_tip_diameter=tool.numeric_parameter("tip_diameter", tool.numeric_parameter("diameter", 0.2)),
-                mirror_edge=self.project.mirror_flip_edge or "left",
+                mirror_edge=self.project.mirror_flip_edge,
                 board_bounds=bounds,
             )
         except Exception as exc:
@@ -1444,9 +1456,7 @@ class MainWindow(QMainWindow):
         if index == 4:
             return any(self.project.layer_assignments.values())
         if index == 5:
-            if not self.project.requires_mirror_setup():
-                return True
-            return bool(self.project.mirror_flip_edge)
+            return True
         if index == 6:
             return True
         if index == 7:
@@ -1480,7 +1490,7 @@ class MainWindow(QMainWindow):
         if index == 4:
             return "Assign at least one Gerber file to front copper, back copper, or edges."
         if index == 5:
-            return "Select the mirror flip edge before moving to the next step."
+            return "Choose a mirror edge or leave it set to None before moving to the next step."
         if index == 7:
             return "Generate the front isolation NC file before moving to the next step."
         if index == 8:
@@ -1532,6 +1542,13 @@ class MainWindow(QMainWindow):
             self._alignment_hole_positions(),
             reference_gerber_files=self.imported_gerbers,
             reference_drill_files=self.imported_drills,
+        )
+        self.preview.set_mirror_setup(
+            back_copper_path=self.project.layer_assignments["back_copper"],
+            edges_path=self.project.layer_assignments["edges"],
+            board_bounds=self._reference_board_bounds(),
+            mirror_edge=self.project.mirror_flip_edge,
+            preview_mode=self.project.mirror_preview_mode,
         )
         self.preview_stack.setCurrentIndex(1 if current >= 7 else 0)
         self._update_window_title()
@@ -1599,7 +1616,7 @@ class MainWindow(QMainWindow):
         if self.project.current_step_index == 4:
             return "Assign the imported Gerber files to manufacturing roles."
         if self.project.current_step_index == 5:
-            return "Choose the mirror edge only when both front and back copper are assigned."
+            return "Choose a mirror edge to flip the back layer in preview, or leave it at None for no mirroring."
         if self.project.current_step_index == 6:
             return "Add optional alignment holes and confirm they appear outside the board in preview."
         if self.project.current_step_index == 7:
@@ -1807,15 +1824,28 @@ class MainWindow(QMainWindow):
     def _sync_mirror_setup_page(self) -> None:
         requires_mirror = self.project.requires_mirror_setup()
         self.mirror_requirement_label.setText(
-            "Front and back copper are both assigned. Choose the mirror edge."
+            "Front and back copper are both assigned. Choose a mirror edge or None for no mirroring, then select Overlay or Side by side preview."
             if requires_mirror
             else "Only one copper side is assigned. Mirror setup is not required for this project."
         )
         for edge, button in self.mirror_buttons.items():
             button.blockSignals(True)
             button.setEnabled(requires_mirror)
-            button.setChecked(requires_mirror and self.project.mirror_flip_edge == edge)
+            button.setChecked(
+                requires_mirror
+                and (
+                    self.project.mirror_flip_edge == edge
+                    or (not self.project.mirror_flip_edge and edge == "")
+                )
+            )
             button.blockSignals(False)
+        self.mirror_preview_mode_combo.blockSignals(True)
+        index = self.mirror_preview_mode_combo.findData(
+            self.project.mirror_preview_mode
+        )
+        self.mirror_preview_mode_combo.setCurrentIndex(0 if index < 0 else index)
+        self.mirror_preview_mode_combo.setEnabled(requires_mirror)
+        self.mirror_preview_mode_combo.blockSignals(False)
         self.mirror_preview.set_edge(
             self.project.mirror_flip_edge if requires_mirror else ""
         )

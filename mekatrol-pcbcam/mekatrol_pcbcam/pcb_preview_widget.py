@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import (
@@ -30,11 +31,16 @@ class PcbPreviewWidget(QWidget):
         self._drill_files: list[ImportedDrillFile] = []
         self._alignment_holes: list[tuple[float, float, float]] = []
         self._bounds = BoardBounds()
+        self._mirror_axis_bounds: tuple[float, float, float, float] | None = None
         self._zoom = 1.0
         self._pan_x = 0.0
         self._pan_y = 0.0
         self._last_pos = QPointF()
         self._dragging = False
+        self._back_copper_path = None
+        self._edges_path = None
+        self._mirror_edge = ""
+        self._mirror_preview_mode = "side_by_side"
 
     def load_project_geometry(
         self,
@@ -48,20 +54,48 @@ class PcbPreviewWidget(QWidget):
         self._gerber_files = gerber_files
         self._drill_files = drill_files
         self._alignment_holes = alignment_holes
+        self._rebuild_bounds(
+            reference_gerber_files=reference_gerber_files,
+            reference_drill_files=reference_drill_files,
+        )
+        self.fit_to_view()
+
+    def set_mirror_setup(
+        self,
+        *,
+        back_copper_path: Path | None,
+        edges_path: Path | None,
+        board_bounds: tuple[float, float, float, float] | None,
+        mirror_edge: str,
+        preview_mode: str,
+    ) -> None:
+        self._back_copper_path = back_copper_path
+        self._edges_path = edges_path
+        self._mirror_axis_bounds = board_bounds
+        self._mirror_edge = mirror_edge.strip()
+        self._mirror_preview_mode = preview_mode.strip() or "side_by_side"
+        self._rebuild_bounds()
+        self.fit_to_view()
+
+    def _rebuild_bounds(
+        self,
+        *,
+        reference_gerber_files: list[ImportedGerberFile] | None = None,
+        reference_drill_files: list[ImportedDrillFile] | None = None,
+    ) -> None:
         self._bounds = BoardBounds()
         bounds_gerbers = (
-            gerber_files if reference_gerber_files is None else reference_gerber_files
+            self._gerber_files if reference_gerber_files is None else reference_gerber_files
         )
         bounds_drills = (
-            drill_files if reference_drill_files is None else reference_drill_files
+            self._drill_files if reference_drill_files is None else reference_drill_files
         )
         for gerber in bounds_gerbers:
-            self._bounds.include_bounds(gerber.bounds)
+            self._include_gerber_bounds(gerber)
         for drill in bounds_drills:
             self._bounds.include_bounds(drill.bounds)
-        for x, y, diameter in alignment_holes:
+        for x, y, diameter in self._alignment_holes:
             self._bounds.include_point(x, y, diameter * 0.5)
-        self.fit_to_view()
 
     def fit_to_view(self) -> None:
         self._pan_x = 0.0
@@ -156,24 +190,9 @@ class PcbPreviewWidget(QWidget):
         for index, gerber in enumerate(self._gerber_files):
             palette = self._theme.gerber_palette()
             color = palette[index % len(palette)]
-            painter.setPen(QPen(self._theme.named_color("pcb_preview_outline"), 2.2))
-            self._draw_outline(painter, gerber.outline)
-
-            fill_color = QColor(color)
-            fill_color.setAlpha(55)
-            stroke_color = QColor(color)
-            stroke_color.setAlpha(190)
-            painter.setPen(QPen(stroke_color, 1.4))
-            for region in gerber.regions:
-                self._draw_polygon(painter, region, fill_color)
-            for trace_start, trace_end, width in gerber.traces:
-                pen = QPen(stroke_color, max(1.2, width * self._zoom))
-                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-                painter.setPen(pen)
-                self._draw_world_line(painter, trace_start, trace_end)
-            painter.setPen(QPen(stroke_color, 1.2))
-            for center, aperture in gerber.pads:
-                self._draw_pad(painter, center, aperture, fill_color, stroke_color)
+            self._draw_gerber(painter, gerber, color, mirrored=False)
+            if self._should_duplicate_edges_gerber(gerber):
+                self._draw_gerber(painter, gerber, color, mirrored=True)
 
         painter.setPen(QPen(self._theme.named_color("pcb_preview_drill"), 1.3))
         for drill in self._drill_files:
@@ -183,6 +202,50 @@ class PcbPreviewWidget(QWidget):
         painter.setPen(QPen(self._theme.named_color("pcb_preview_alignment"), 1.8))
         for hole in self._alignment_holes:
             self._draw_alignment_hole(painter, hole)
+
+    def _draw_gerber(
+        self,
+        painter: QPainter,
+        gerber: ImportedGerberFile,
+        color: QColor,
+        *,
+        mirrored: bool,
+    ) -> None:
+        painter.setPen(QPen(self._theme.named_color("pcb_preview_outline"), 2.2))
+        self._draw_outline(
+            painter,
+            self._transform_polygon(gerber, gerber.outline, mirrored=mirrored),
+        )
+
+        fill_color = QColor(color)
+        fill_color.setAlpha(55)
+        stroke_color = QColor(color)
+        stroke_color.setAlpha(190)
+        painter.setPen(QPen(stroke_color, 1.4))
+        for region in gerber.regions:
+            self._draw_polygon(
+                painter,
+                self._transform_polygon(gerber, region, mirrored=mirrored),
+                fill_color,
+            )
+        for trace_start, trace_end, width in gerber.traces:
+            pen = QPen(stroke_color, max(1.2, width * self._zoom))
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            self._draw_world_line(
+                painter,
+                self._transform_point(gerber, trace_start, mirrored=mirrored),
+                self._transform_point(gerber, trace_end, mirrored=mirrored),
+            )
+        painter.setPen(QPen(stroke_color, 1.2))
+        for center, aperture in gerber.pads:
+            self._draw_pad(
+                painter,
+                self._transform_point(gerber, center, mirrored=mirrored),
+                aperture,
+                fill_color,
+                stroke_color,
+            )
 
     def _draw_outline(self, painter: QPainter, outline: list[tuple[float, float]]) -> None:
         if len(outline) < 2:
@@ -299,6 +362,131 @@ class PcbPreviewWidget(QWidget):
             f"Bounds: X {self._bounds.x_min:.2f}..{self._bounds.x_max:.2f}   "
             f"Y {self._bounds.y_min:.2f}..{self._bounds.y_max:.2f}",
         )
+
+    def _include_gerber_bounds(self, gerber: ImportedGerberFile) -> None:
+        if self._should_duplicate_edges_gerber(gerber):
+            self._bounds.include_bounds(gerber.bounds)
+            if self._mirror_preview_mode != "overlay":
+                self._include_mirrored_gerber_bounds(gerber)
+            return
+        if self._mirror_preview_mode == "overlay" or not self._should_mirror_gerber(gerber):
+            self._bounds.include_bounds(gerber.bounds)
+            return
+        self._include_mirrored_gerber_bounds(gerber)
+
+    def _include_mirrored_gerber_bounds(self, gerber: ImportedGerberFile) -> None:
+        for start, end, width in gerber.traces:
+            self._include_segment_bounds(
+                self._transform_point(gerber, start, mirrored=True),
+                self._transform_point(gerber, end, mirrored=True),
+                width * 0.5,
+            )
+        for center, aperture in gerber.pads:
+            transformed_center = self._transform_point(gerber, center, mirrored=True)
+            if aperture["type"] == "circle":
+                radius = float(aperture["diameter"]) * 0.5
+                self._bounds.include_point(
+                    transformed_center[0],
+                    transformed_center[1],
+                    radius,
+                )
+            else:
+                half_width = float(aperture["width"]) * 0.5
+                half_height = float(aperture["height"]) * 0.5
+                self._include_rect_bounds(transformed_center, half_width, half_height)
+        for region in gerber.regions:
+            for point in self._transform_polygon(gerber, region, mirrored=True):
+                self._bounds.include_point(point[0], point[1])
+        for point in self._transform_polygon(gerber, gerber.outline, mirrored=True):
+            self._bounds.include_point(point[0], point[1])
+
+    def _include_segment_bounds(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+        margin: float,
+    ) -> None:
+        self._bounds.include_point(start[0], start[1], margin)
+        self._bounds.include_point(end[0], end[1], margin)
+
+    def _include_rect_bounds(
+        self,
+        center: tuple[float, float],
+        half_width: float,
+        half_height: float,
+    ) -> None:
+        self._bounds.include_point(center[0] - half_width, center[1] - half_height)
+        self._bounds.include_point(center[0] + half_width, center[1] + half_height)
+
+    def _transform_polygon(
+        self,
+        gerber: ImportedGerberFile,
+        polygon: list[tuple[float, float]],
+        mirrored: bool = False,
+    ) -> list[tuple[float, float]]:
+        return [self._transform_point(gerber, point, mirrored=mirrored) for point in polygon]
+
+    def _transform_point(
+        self,
+        gerber: ImportedGerberFile,
+        point: tuple[float, float],
+        mirrored: bool = False,
+    ) -> tuple[float, float]:
+        if not mirrored:
+            if self._should_duplicate_edges_gerber(gerber):
+                return point
+            if not self._should_mirror_gerber(gerber):
+                return point
+        elif not self._should_mirror_gerber(gerber):
+            return point
+        mirrored_point = self._mirror_point(point)
+        if self._mirror_preview_mode != "overlay":
+            return mirrored_point
+        return self._overlay_point(mirrored_point)
+
+    def _should_mirror_gerber(self, gerber: ImportedGerberFile) -> bool:
+        if (
+            (self._back_copper_path is None and self._edges_path is None)
+            or not self._mirror_edge
+            or self._mirror_axis_bounds is None
+        ):
+            return False
+        return gerber.path in {self._back_copper_path, self._edges_path}
+
+    def _should_duplicate_edges_gerber(self, gerber: ImportedGerberFile) -> bool:
+        return (
+            self._edges_path is not None
+            and gerber.path == self._edges_path
+            and self._should_mirror_gerber(gerber)
+        )
+
+    def _mirror_point(self, point: tuple[float, float]) -> tuple[float, float]:
+        x, y = point
+        x_min, x_max, y_min, y_max = self._mirror_axis_bounds or (0.0, 0.0, 0.0, 0.0)
+        if self._mirror_edge == "left":
+            return ((2.0 * x_min) - x, y)
+        if self._mirror_edge == "right":
+            return ((2.0 * x_max) - x, y)
+        if self._mirror_edge == "top":
+            return (x, (2.0 * y_max) - y)
+        if self._mirror_edge == "bottom":
+            return (x, (2.0 * y_min) - y)
+        return point
+
+    def _overlay_point(self, point: tuple[float, float]) -> tuple[float, float]:
+        x, y = point
+        x_min, x_max, y_min, y_max = self._mirror_axis_bounds or (0.0, 0.0, 0.0, 0.0)
+        width = x_max - x_min
+        height = y_max - y_min
+        if self._mirror_edge == "left":
+            return (x + width, y)
+        if self._mirror_edge == "right":
+            return (x - width, y)
+        if self._mirror_edge == "top":
+            return (x, y - height)
+        if self._mirror_edge == "bottom":
+            return (x, y + height)
+        return point
 
     def _nice_spacing(self, value: float) -> float:
         if value <= 0:
