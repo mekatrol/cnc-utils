@@ -14,6 +14,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QSplashScreen
 
 from . import PROJECT_URL, __version__
+from .theme import AppTheme
 
 
 class SplashScreen(QSplashScreen):
@@ -63,8 +64,9 @@ class SplashScreen(QSplashScreen):
     overloading one loop with unrelated conditions.
     """
 
-    def __init__(self, pixmap: QPixmap) -> None:
+    def __init__(self, pixmap: QPixmap, theme: AppTheme) -> None:
         super().__init__(pixmap)
+        self._theme = theme
         # Debug mode pauses startup until the splash is clicked. This loop is only
         # active in that special environment-controlled path.
         self._debug_click_loop: QEventLoop | None = None
@@ -210,34 +212,13 @@ class SplashScreen(QSplashScreen):
         )
 
     def _border_color(self) -> QColor:
-        window_color = self._theme_window_color()
-        luminance = (
-            0.2126 * window_color.redF()
-            + 0.7152 * window_color.greenF()
-            + 0.0722 * window_color.blueF()
-        )
-        return QColor("#f3f5f7") if luminance < 0.5 else QColor("#1f2328")
+        return self._theme.named_color("splash_border")
 
     def _background_color(self) -> QColor:
-        window_color = self._theme_window_color()
-        luminance = (
-            0.2126 * window_color.redF()
-            + 0.7152 * window_color.greenF()
-            + 0.0722 * window_color.blueF()
-        )
-        return QColor("#16181d") if luminance < 0.5 else QColor("#f5f6f8")
-
-    def _theme_window_color(self) -> QColor:
-        return self.palette().window().color()
+        return self._theme.named_color("splash_background")
 
     def message_color(self) -> QColor:
-        background = self._background_color()
-        luminance = (
-            0.2126 * background.redF()
-            + 0.7152 * background.greenF()
-            + 0.0722 * background.blueF()
-        )
-        return QColor("#f3f5f7") if luminance < 0.5 else QColor("#1f2328")
+        return self._theme.named_color("splash_message_text")
 
     def _metadata_font(self):
         # A fixed-width font keeps the aligned "Version" and "Website" labels
@@ -308,12 +289,7 @@ class SplashScreen(QSplashScreen):
         )
 
         painter.save()
-        website_color = (
-            QColor("#2f81f7")
-            if self._background_color().lightnessF() < 0.5
-            else QColor("#0969da")
-        )
-        painter.setPen(website_color)
+        painter.setPen(self._theme.named_color("splash_link"))
         painter.drawText(
             website_url_rect, Qt.AlignmentFlag.AlignLeft, website_url_text
         )

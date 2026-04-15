@@ -4,30 +4,22 @@ import logging
 import math
 
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPen, QWheelEvent
+from PySide6.QtGui import QMouseEvent, QPainter, QPaintEvent, QPen, QWheelEvent
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 from .camera_state import CameraState
 from .point_3d import Point3D
+from .theme import AppTheme
 from .toolpath_document import ToolpathDocument
-
-BACKGROUND = QColor("#11151c")
-GRID_MAJOR = QColor("#2f3945")
-GRID_MINOR = QColor("#202831")
-AXIS_X = QColor("#d84d4d")
-AXIS_Y = QColor("#3ecf8e")
-AXIS_Z = QColor("#4ea1ff")
-RAPID = QColor("#f2c94c")
-CUT = QColor("#f97316")
-TEXT = QColor("#dfe7ef")
 
 
 logger = logging.getLogger(__name__)
 
 
 class ToolpathViewer(QOpenGLWidget):
-    def __init__(self, parent=None) -> None:
+    def __init__(self, theme: AppTheme, parent=None) -> None:
         super().__init__(parent)
+        self._theme = theme
         self.setMinimumSize(720, 480)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.document: ToolpathDocument | None = None
@@ -85,7 +77,7 @@ class ToolpathViewer(QOpenGLWidget):
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.fillRect(self.rect(), BACKGROUND)
+        painter.fillRect(self.rect(), self._theme.named_color("toolpath_background"))
         self._draw_grid(painter)
         self._draw_axes(painter)
         self._draw_toolpath(painter)
@@ -146,8 +138,8 @@ class ToolpathViewer(QOpenGLWidget):
     def _draw_grid(self, painter: QPainter) -> None:
         spacing = self._nice_spacing(self._extent / 10.0)
         half = max(self._extent * 0.75, spacing * 5.0)
-        minor_pen = QPen(GRID_MINOR, 1)
-        major_pen = QPen(GRID_MAJOR, 1)
+        minor_pen = QPen(self._theme.named_color("toolpath_grid_minor"), 1)
+        major_pen = QPen(self._theme.named_color("toolpath_grid_major"), 1)
         value = -half
         while value <= half + 1e-9:
             is_major = abs(round(value / spacing)) % 5 == 0
@@ -166,19 +158,19 @@ class ToolpathViewer(QOpenGLWidget):
 
     def _draw_axes(self, painter: QPainter) -> None:
         axis_length = max(self._extent * 0.6, 10.0)
-        painter.setPen(QPen(AXIS_X, 2))
+        painter.setPen(QPen(self._theme.named_color("toolpath_axis_x"), 2))
         self._draw_line(
             painter,
             Point3D(0.0, 0.0, 0.0),
             Point3D(axis_length, 0.0, 0.0),
         )
-        painter.setPen(QPen(AXIS_Y, 2))
+        painter.setPen(QPen(self._theme.named_color("toolpath_axis_y"), 2))
         self._draw_line(
             painter,
             Point3D(0.0, 0.0, 0.0),
             Point3D(0.0, axis_length, 0.0),
         )
-        painter.setPen(QPen(AXIS_Z, 2))
+        painter.setPen(QPen(self._theme.named_color("toolpath_axis_z"), 2))
         self._draw_line(
             painter,
             Point3D(0.0, 0.0, 0.0),
@@ -191,14 +183,16 @@ class ToolpathViewer(QOpenGLWidget):
         for segment in self.document.segments:
             painter.setPen(
                 QPen(
-                    RAPID if segment.rapid else CUT,
+                    self._theme.named_color("toolpath_rapid")
+                    if segment.rapid
+                    else self._theme.named_color("toolpath_cut"),
                     1.8 if not segment.rapid else 1.2,
                 )
             )
             self._draw_line(painter, segment.start, segment.end)
 
     def _draw_overlay(self, painter: QPainter) -> None:
-        painter.setPen(TEXT)
+        painter.setPen(self._theme.named_color("toolpath_text"))
         painter.drawText(16, 28, "mekatrol-pcbcam")
         if not self.document:
             painter.drawText(16, 50, "Open an .nc file to inspect its motion path.")

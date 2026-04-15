@@ -4,18 +4,22 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPainter, QPaintEvent, QPainterPath, QPen
 from PySide6.QtWidgets import QPushButton
 
+from .theme import AppTheme
+
 
 class WizardStepButton(QPushButton):
     def __init__(
         self,
         step_number: int,
         title: str,
+        theme: AppTheme,
         *,
         is_first: bool,
         is_last: bool,
         parent=None,
     ) -> None:
         super().__init__(parent)
+        self.theme = theme
         self.step_number = step_number
         self.title = title
         self.is_first = is_first
@@ -61,21 +65,21 @@ class WizardStepButton(QPushButton):
         path.closeSubpath()
 
         if not self.isEnabled():
-            fill = QColor("#2a313a")
-            border = QColor("#414b56")
-            text = QColor("#7f8a96")
+            fill = self.theme.named_color("wizard_step_disabled_fill")
+            border = self.theme.named_color("wizard_step_disabled_border")
+            text = self.theme.named_color("wizard_step_disabled_text")
         elif self.is_current:
-            fill = QColor("#f97316")
-            border = QColor("#fdba74")
-            text = QColor("#1a120b")
+            fill = self.theme.named_color("wizard_step_current_fill")
+            border = self.theme.named_color("wizard_step_current_border")
+            text = self.theme.named_color("wizard_step_current_text")
         elif self.is_completed:
-            fill = QColor("#273847")
-            border = QColor("#58b09c")
-            text = QColor("#dfe7ef")
+            fill = self.theme.named_color("wizard_step_completed_fill")
+            border = self.theme.named_color("wizard_step_completed_border")
+            text = self.theme.named_color("wizard_step_completed_text")
         else:
-            fill = QColor("#1a2430")
-            border = QColor("#465565")
-            text = QColor("#c7d2de")
+            fill = self.theme.named_color("wizard_step_pending_fill")
+            border = self.theme.named_color("wizard_step_pending_border")
+            text = self.theme.named_color("wizard_step_pending_text")
 
         painter.fillPath(path, fill)
         painter.setPen(QPen(border, 1.2))

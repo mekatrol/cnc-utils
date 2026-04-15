@@ -12,12 +12,15 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
+from .theme import AppTheme
+
 
 class WizardStepBar(QWidget):
     step_selected = Signal(int)
 
-    def __init__(self, titles: list[str], parent=None) -> None:
+    def __init__(self, titles: list[str], theme: AppTheme, parent=None) -> None:
         super().__init__(parent)
+        self._theme = theme
         self._titles = titles
         self._current_step_index = 0
         self._completed_steps: set[int] = set()
@@ -145,9 +148,25 @@ class WizardStepBar(QWidget):
 
     def _colors_for_step(self, index: int) -> tuple[QColor, QColor, QColor]:
         if index not in self._enabled_steps:
-            return QColor("#2a313a"), QColor("#414b56"), QColor("#7f8a96")
+            return (
+                self._theme.named_color("wizard_step_disabled_fill"),
+                self._theme.named_color("wizard_step_disabled_border"),
+                self._theme.named_color("wizard_step_disabled_text"),
+            )
         if index == self._current_step_index:
-            return QColor("#ff7a1a"), QColor("#ffae66"), QColor("#18120d")
+            return (
+                self._theme.named_color("wizard_step_current_fill"),
+                self._theme.named_color("wizard_step_current_border"),
+                self._theme.named_color("wizard_step_current_text"),
+            )
         if index in self._completed_steps:
-            return QColor("#1ccfd0"), QColor("#7ee7e8"), QColor("#0b1d20")
-        return QColor("#233243"), QColor("#425365"), QColor("#c7d2de")
+            return (
+                self._theme.named_color("wizard_step_completed_fill"),
+                self._theme.named_color("wizard_step_completed_border"),
+                self._theme.named_color("wizard_step_completed_text"),
+            )
+        return (
+            self._theme.named_color("wizard_step_pending_fill"),
+            self._theme.named_color("wizard_step_pending_border"),
+            self._theme.named_color("wizard_step_pending_text"),
+        )

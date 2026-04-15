@@ -68,6 +68,7 @@ class MainWindow(QMainWindow):
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
         self.config = config
+        self.theme = config.theme
         self.project = PcbProject()
         self.gerber_parser = GerberFileParser()
         self.drill_parser = ExcellonFileParser()
@@ -78,12 +79,12 @@ class MainWindow(QMainWindow):
         self.generated_documents = {}
         self.has_unsaved_changes = False
 
-        self.preview = PcbPreviewWidget()
-        self.toolpath_viewer = ToolpathViewer()
+        self.preview = PcbPreviewWidget(self.theme)
+        self.toolpath_viewer = ToolpathViewer(self.theme)
         self.preview_stack = QStackedWidget()
         self.preview_stack.addWidget(self.preview)
         self.preview_stack.addWidget(self.toolpath_viewer)
-        self.step_bar = WizardStepBar(self.STEP_TITLES)
+        self.step_bar = WizardStepBar(self.STEP_TITLES, self.theme)
         self.step_bar.step_selected.connect(self._handle_step_selected)
         self.step_bar_scroll = QScrollArea()
         self.step_bar_scroll.setWidget(self.step_bar)
@@ -107,6 +108,9 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self.tool_library = self._default_tool_library()
         self._sync_ui()
+
+    def _muted_text_style(self) -> str:
+        return f"color: {self.theme.main_window_muted_text};"
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -141,7 +145,7 @@ class MainWindow(QMainWindow):
             "Each step saves into the project so you can reopen and continue."
         )
         subtitle.setWordWrap(True)
-        subtitle.setStyleSheet("color: #5b6571;")
+        subtitle.setStyleSheet(self._muted_text_style())
 
         summary_card = QFrame()
         summary_card.setFrameShape(QFrame.Shape.StyledPanel)
@@ -247,7 +251,7 @@ class MainWindow(QMainWindow):
             "Use this step to create or reopen a project file. Gerber import happens in the next step."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #5b6571;")
+        hint.setStyleSheet(self._muted_text_style())
 
         layout.addWidget(heading)
         layout.addWidget(body)
@@ -288,7 +292,7 @@ class MainWindow(QMainWindow):
 
         self.gerber_hint = QLabel("Import at least one Gerber file to continue.")
         self.gerber_hint.setWordWrap(True)
-        self.gerber_hint.setStyleSheet("color: #5b6571;")
+        self.gerber_hint.setStyleSheet(self._muted_text_style())
 
         layout.addWidget(heading)
         layout.addWidget(body)
@@ -332,7 +336,7 @@ class MainWindow(QMainWindow):
             "steps will use the project data saved here."
         )
         self.drill_hint.setWordWrap(True)
-        self.drill_hint.setStyleSheet("color: #5b6571;")
+        self.drill_hint.setStyleSheet(self._muted_text_style())
 
         layout.addWidget(heading)
         layout.addWidget(body)
@@ -390,7 +394,7 @@ class MainWindow(QMainWindow):
 
         self.tool_selection_hint = QLabel("Load a tool library and select all three tool types.")
         self.tool_selection_hint.setWordWrap(True)
-        self.tool_selection_hint.setStyleSheet("color: #5b6571;")
+        self.tool_selection_hint.setStyleSheet(self._muted_text_style())
 
         layout.addWidget(heading)
         layout.addWidget(body)
@@ -438,7 +442,7 @@ class MainWindow(QMainWindow):
 
         self.layer_assignment_hint = QLabel("At least one of front copper, back copper, or edges is required.")
         self.layer_assignment_hint.setWordWrap(True)
-        self.layer_assignment_hint.setStyleSheet("color: #5b6571;")
+        self.layer_assignment_hint.setStyleSheet(self._muted_text_style())
 
         layout.addWidget(heading)
         layout.addWidget(body)
@@ -482,7 +486,7 @@ class MainWindow(QMainWindow):
             self.mirror_buttons[edge] = button
             button_row.addWidget(button)
 
-        self.mirror_preview = MirrorPreviewWidget()
+        self.mirror_preview = MirrorPreviewWidget(self.theme)
 
         layout.addWidget(heading)
         layout.addWidget(body)
@@ -549,7 +553,7 @@ class MainWindow(QMainWindow):
             "Alignment holes are optional. Added holes are shown in green in the preview."
         )
         self.alignment_holes_hint.setWordWrap(True)
-        self.alignment_holes_hint.setStyleSheet("color: #5b6571;")
+        self.alignment_holes_hint.setStyleSheet(self._muted_text_style())
 
         layout.addWidget(heading)
         layout.addWidget(body)

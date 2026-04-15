@@ -34,6 +34,7 @@ from .file_locations import FileLocations
 from .logging_config import LoggingConfig
 from .main_window import MainWindow
 from .splash_screen import SplashScreen
+from .theme import DEFAULT_THEME_FILE_NAME, ensure_default_theme_file, load_theme
 from .ui_save_state import UiSaveState
 
 
@@ -67,11 +68,26 @@ def _config_path() -> Path:
         QStandardPaths.StandardLocation.GenericConfigLocation
     )
     base_path = Path(config_root) if config_root else Path.home() / ".config"
-    return base_path / ORGANIZATION_NAME / CONFIG_FILE_NAME
+    return base_path / ORGANIZATION_NAME / APPLICATION_NAME / CONFIG_FILE_NAME
 
 
 def _default_tools_path() -> Path:
     return _config_path().with_name("tools.yaml")
+
+
+def _themes_directory() -> Path:
+    return _config_path().with_name("themes")
+
+
+def _resolve_theme_file_name(name: str) -> str:
+    candidate = Path(name.strip()).name if name.strip() else DEFAULT_THEME_FILE_NAME
+    if not candidate.lower().endswith(".yaml"):
+        candidate = f"{candidate}.yaml"
+    return candidate or DEFAULT_THEME_FILE_NAME
+
+
+def _resolve_theme_path(config: AppConfig) -> Path:
+    return _themes_directory() / _resolve_theme_file_name(config.theme_file)
 
 
 def _application_directory() -> Path:
@@ -417,6 +433,12 @@ def _load_config() -> tuple[AppConfig, list[str]]:
             field_name="app.splash_minimum_visible_ms",
             warnings=warnings,
         ),
+        theme_file=_parse_string(
+            app_data.get("theme_file"),
+            DEFAULT_THEME_FILE_NAME,
+            field_name="app.theme_file",
+            warnings=warnings,
+        ),
         logging=LoggingConfig(
             level=logging_level,
             path=_parse_log_path(logging_data.get("path"), warnings=warnings),
@@ -523,6 +545,8 @@ def _save_config(config: AppConfig) -> None:
             "app:",
             "  # Minimum time to keep the splash screen visible during startup, in milliseconds.",
             f"  splash_minimum_visible_ms: {config.splash_minimum_visible_ms}",
+            "  # Theme file to load from the themes subfolder in the config directory.",
+            f"  theme_file: {_yaml_scalar(config.theme_file)}",
             "",
             "logging:",
             "  # Default log level for the mekatrol_pcbcam application loggers.",
@@ -801,19 +825,36 @@ def main() -> int:
     app.setWindowIcon(QIcon(str(_asset_path("app-icon.svg"))))
     get_log_tracker().clear()
     config, config_warnings = _load_config()
+    default_theme_path = ensure_default_theme_file(_themes_directory())
+    config.theme_file = _resolve_theme_file_name(config.theme_file)
+    theme_path = _resolve_theme_path(config)
+    theme_warnings: list[str] = []
+    if not theme_path.exists():
+        theme_warnings.append(
+            f"Theme file {theme_path} does not exist. Falling back to {default_theme_path.name}."
+        )
+        config.theme_file = DEFAULT_THEME_FILE_NAME
+        theme_path = default_theme_path
+    theme, loaded_theme_warnings = load_theme(theme_path)
+    theme_warnings.extend(loaded_theme_warnings)
+    config.theme = theme
     active_log_path = _configure_logging(config)
     for warning in config_warnings:
         logger.warning("Config warning: %s", warning)
+    for warning in theme_warnings:
+        logger.warning("Theme warning: %s", warning)
     _save_config(config)
     default_tools_path = _ensure_default_tools_file()
     logger.info("Application startup beginning with config at %s", _config_path())
     logger.debug("Active log output path: %s", active_log_path)
     logger.debug("Default tool library path: %s", default_tools_path)
+    logger.debug("Themes directory: %s", _themes_directory())
+    logger.debug("Active theme path: %s", theme_path)
     startup_screen = _resolve_startup_screen(app, config)
 
     splash_path = _asset_path("splash.svg")
     pixmap = QPixmap(str(splash_path))
-    splash = SplashScreen(pixmap)
+    splash = SplashScreen(pixmap, config.theme)
     splash.setWindowFlag(Qt.WindowType.SplashScreen, False)
     splash.setWindowFlag(Qt.WindowType.Window, True)
     splash.setWindowFlag(Qt.WindowType.WindowTitleHint, True)

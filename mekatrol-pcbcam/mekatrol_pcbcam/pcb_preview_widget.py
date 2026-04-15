@@ -17,27 +17,13 @@ from PySide6.QtWidgets import QWidget
 from .board_bounds import BoardBounds
 from .imported_drill_file import ImportedDrillFile
 from .imported_gerber_file import ImportedGerberFile
-
-BACKGROUND = QColor("#11151c")
-GRID_MINOR = QColor("#1e2630")
-GRID_MAJOR = QColor("#2d3947")
-OUTLINE = QColor("#ffe066")
-DRILL = QColor("#dfe7ef")
-ALIGNMENT = QColor("#6ee7b7")
-TEXT = QColor("#dfe7ef")
-PALETTE = [
-    QColor("#ff7f50"),
-    QColor("#5dd39e"),
-    QColor("#7aa2ff"),
-    QColor("#f28482"),
-    QColor("#ffd166"),
-    QColor("#a78bfa"),
-]
+from .theme import AppTheme
 
 
 class PcbPreviewWidget(QWidget):
-    def __init__(self, parent=None) -> None:
+    def __init__(self, theme: AppTheme, parent=None) -> None:
         super().__init__(parent)
+        self._theme = theme
         self.setMinimumSize(720, 480)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._gerber_files: list[ImportedGerberFile] = []
@@ -116,7 +102,7 @@ class PcbPreviewWidget(QWidget):
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.fillRect(self.rect(), BACKGROUND)
+        painter.fillRect(self.rect(), self._theme.named_color("pcb_preview_background"))
         self._draw_grid(painter)
         self._draw_geometry(painter)
         self._draw_overlay(painter)
@@ -128,7 +114,12 @@ class PcbPreviewWidget(QWidget):
         spacing = self._nice_spacing(max(self._bounds.width, self._bounds.height) / 10.0)
         x = math.floor(self._bounds.x_min / spacing) * spacing
         while x <= self._bounds.x_max + spacing:
-            pen = QPen(GRID_MAJOR if abs(round(x / spacing)) % 5 == 0 else GRID_MINOR, 1)
+            pen = QPen(
+                self._theme.named_color("pcb_preview_grid_major")
+                if abs(round(x / spacing)) % 5 == 0
+                else self._theme.named_color("pcb_preview_grid_minor"),
+                1,
+            )
             painter.setPen(pen)
             self._draw_world_line(
                 painter,
@@ -138,7 +129,12 @@ class PcbPreviewWidget(QWidget):
             x += spacing
         y = math.floor(self._bounds.y_min / spacing) * spacing
         while y <= self._bounds.y_max + spacing:
-            pen = QPen(GRID_MAJOR if abs(round(y / spacing)) % 5 == 0 else GRID_MINOR, 1)
+            pen = QPen(
+                self._theme.named_color("pcb_preview_grid_major")
+                if abs(round(y / spacing)) % 5 == 0
+                else self._theme.named_color("pcb_preview_grid_minor"),
+                1,
+            )
             painter.setPen(pen)
             self._draw_world_line(
                 painter,
@@ -149,8 +145,9 @@ class PcbPreviewWidget(QWidget):
 
     def _draw_geometry(self, painter: QPainter) -> None:
         for index, gerber in enumerate(self._gerber_files):
-            color = PALETTE[index % len(PALETTE)]
-            painter.setPen(QPen(OUTLINE, 2.2))
+            palette = self._theme.gerber_palette()
+            color = palette[index % len(palette)]
+            painter.setPen(QPen(self._theme.named_color("pcb_preview_outline"), 2.2))
             self._draw_outline(painter, gerber.outline)
 
             fill_color = QColor(color)
@@ -169,12 +166,12 @@ class PcbPreviewWidget(QWidget):
             for center, aperture in gerber.pads:
                 self._draw_pad(painter, center, aperture, fill_color, stroke_color)
 
-        painter.setPen(QPen(DRILL, 1.3))
+        painter.setPen(QPen(self._theme.named_color("pcb_preview_drill"), 1.3))
         for drill in self._drill_files:
             for hole in drill.holes:
                 self._draw_hole(painter, hole)
 
-        painter.setPen(QPen(ALIGNMENT, 1.8))
+        painter.setPen(QPen(self._theme.named_color("pcb_preview_alignment"), 1.8))
         for hole in self._alignment_holes:
             self._draw_alignment_hole(painter, hole)
 
@@ -231,7 +228,7 @@ class PcbPreviewWidget(QWidget):
         screen_center = self._world_to_screen(hole[0], hole[1])
         radius = max(1.5, hole[2] * 0.5 * self._zoom)
         painter.save()
-        painter.setBrush(BACKGROUND)
+        painter.setBrush(self._theme.named_color("pcb_preview_background"))
         painter.drawEllipse(screen_center, radius, radius)
         painter.restore()
 
@@ -274,7 +271,7 @@ class PcbPreviewWidget(QWidget):
         return QPointF(screen_x, screen_y)
 
     def _draw_overlay(self, painter: QPainter) -> None:
-        painter.setPen(TEXT)
+        painter.setPen(self._theme.named_color("pcb_preview_text"))
         painter.drawText(16, 28, "PCB Preview")
         if self._bounds.is_empty:
             painter.drawText(16, 50, "Import Gerber and drill files to preview the board.")
