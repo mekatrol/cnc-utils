@@ -34,7 +34,13 @@ from .file_locations import FileLocations
 from .logging_config import LoggingConfig
 from .main_window import MainWindow
 from .splash_screen import SplashScreen
-from .theme import DEFAULT_THEME_FILE_NAME, ensure_default_theme_file, load_theme
+from .theme import (
+    DEFAULT_THEME_FILE_NAME,
+    ensure_default_theme_file,
+    ensure_high_contrast_theme_file,
+    ensure_light_theme_file,
+    load_theme,
+)
 from .ui_save_state import UiSaveState
 
 
@@ -826,6 +832,8 @@ def main() -> int:
     get_log_tracker().clear()
     config, config_warnings = _load_config()
     default_theme_path = ensure_default_theme_file(_themes_directory())
+    ensure_high_contrast_theme_file(_themes_directory())
+    ensure_light_theme_file(_themes_directory())
     config.theme_file = _resolve_theme_file_name(config.theme_file)
     theme_path = _resolve_theme_path(config)
     theme_warnings: list[str] = []

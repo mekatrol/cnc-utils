@@ -47,7 +47,7 @@ class PcbProject:
         self.generated_outputs: dict[str, Path] = {}
         self.current_step_index = 0
         self.highest_commenced_step = 0
-        self.completed_steps: set[int] = set()
+        self.completed_steps: set[int] = {0}
         self.dirty_from_step: int | None = None
 
     def reset(self) -> None:

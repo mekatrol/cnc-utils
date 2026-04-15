@@ -71,6 +71,7 @@ class WizardStepBar(QWidget):
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.fillRect(self.rect(), self._theme.named_color("wizard_step_bar_background"))
 
         _, arrow = self._layout_metrics()
         self._refresh_step_geometry()

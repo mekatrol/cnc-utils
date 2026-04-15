@@ -10,12 +10,20 @@ from .theme_info import ThemeInfo
 
 
 DEFAULT_THEME_FILE_NAME = "default_dark.yaml"
+HIGH_CONTRAST_THEME_FILE_NAME = "high_contrast.yaml"
+LIGHT_THEME_FILE_NAME = "light.yaml"
 
 
 @dataclass
 class AppTheme:
     theme_info: ThemeInfo = field(default_factory=ThemeInfo)
+    main_window_background: str = "#2f3138"
+    main_window_sidebar_background: str = "#2f3138"
+    main_window_panel_background: str = "#353842"
+    main_window_panel_border: str = "#262830"
+    main_window_text: str = "#f3f5f7"
     main_window_muted_text: str = "#5b6571"
+    wizard_step_bar_background: str = "#2f3138"
     wizard_step_disabled_fill: str = "#2a313a"
     wizard_step_disabled_border: str = "#414b56"
     wizard_step_disabled_text: str = "#7f8a96"
@@ -83,6 +91,128 @@ def default_theme() -> AppTheme:
     return AppTheme()
 
 
+def high_contrast_theme() -> AppTheme:
+    return AppTheme(
+        theme_info=ThemeInfo(
+            name="High Contrast",
+            description="Extreme-contrast theme for maximum separation between UI elements.",
+            author="Mekatrol",
+        ),
+        main_window_background="#000000",
+        main_window_sidebar_background="#000000",
+        main_window_panel_background="#000000",
+        main_window_panel_border="#ffffff",
+        main_window_text="#ffffff",
+        main_window_muted_text="#ffffff",
+        wizard_step_bar_background="#000000",
+        wizard_step_disabled_fill="#000000",
+        wizard_step_disabled_border="#ffffff",
+        wizard_step_disabled_text="#ffffff",
+        wizard_step_current_fill="#ffff00",
+        wizard_step_current_border="#000000",
+        wizard_step_current_text="#000000",
+        wizard_step_completed_fill="#00ff00",
+        wizard_step_completed_border="#000000",
+        wizard_step_completed_text="#000000",
+        wizard_step_pending_fill="#0000ff",
+        wizard_step_pending_border="#ffffff",
+        wizard_step_pending_text="#ffffff",
+        pcb_preview_background="#000000",
+        pcb_preview_grid_minor="#404040",
+        pcb_preview_grid_major="#ffffff",
+        pcb_preview_outline="#ffff00",
+        pcb_preview_drill="#ffffff",
+        pcb_preview_alignment="#00ffff",
+        pcb_preview_text="#ffffff",
+        pcb_preview_gerber_palette=[
+            "#ff0000",
+            "#00ff00",
+            "#00ffff",
+            "#ff00ff",
+            "#ffff00",
+            "#ffffff",
+        ],
+        mirror_preview_background="#000000",
+        mirror_preview_board_outline="#ffffff",
+        mirror_preview_highlight="#ffff00",
+        mirror_preview_text="#ffffff",
+        toolpath_background="#000000",
+        toolpath_grid_major="#ffffff",
+        toolpath_grid_minor="#404040",
+        toolpath_axis_x="#ff0000",
+        toolpath_axis_y="#00ff00",
+        toolpath_axis_z="#00ffff",
+        toolpath_rapid="#ffff00",
+        toolpath_cut="#ff00ff",
+        toolpath_text="#ffffff",
+        splash_background="#000000",
+        splash_border="#ffffff",
+        splash_message_text="#ffffff",
+        splash_link="#00ffff",
+    )
+
+
+def light_theme() -> AppTheme:
+    return AppTheme(
+        theme_info=ThemeInfo(
+            name="Light",
+            description="Light theme with clean surfaces and clear contrast for daytime use.",
+            author="Mekatrol",
+        ),
+        main_window_background="#eef3f8",
+        main_window_sidebar_background="#f3f7fb",
+        main_window_panel_background="#ffffff",
+        main_window_panel_border="#c5d1dd",
+        main_window_text="#233548",
+        main_window_muted_text="#49586a",
+        wizard_step_bar_background="#eef3f8",
+        wizard_step_disabled_fill="#dfe5ec",
+        wizard_step_disabled_border="#aab7c5",
+        wizard_step_disabled_text="#536274",
+        wizard_step_current_fill="#ffc48e",
+        wizard_step_current_border="#d97d32",
+        wizard_step_current_text="#402a17",
+        wizard_step_completed_fill="#bfe5c8",
+        wizard_step_completed_border="#3f9b5d",
+        wizard_step_completed_text="#173622",
+        wizard_step_pending_fill="#bfd6f2",
+        wizard_step_pending_border="#5e89ba",
+        wizard_step_pending_text="#1f3d5d",
+        pcb_preview_background="#f6f8fb",
+        pcb_preview_grid_minor="#e1e8f0",
+        pcb_preview_grid_major="#c6d3e2",
+        pcb_preview_outline="#3f6fb3",
+        pcb_preview_drill="#4f5f70",
+        pcb_preview_alignment="#249c8b",
+        pcb_preview_text="#3d4b5b",
+        pcb_preview_gerber_palette=[
+            "#3f6fb3",
+            "#5f97d0",
+            "#249c8b",
+            "#4faa5d",
+            "#cd6d92",
+            "#7f68c2",
+        ],
+        mirror_preview_background="#f6f8fb",
+        mirror_preview_board_outline="#5d6d7d",
+        mirror_preview_highlight="#d97d32",
+        mirror_preview_text="#3d4b5b",
+        toolpath_background="#f5f8fb",
+        toolpath_grid_major="#c6d3e2",
+        toolpath_grid_minor="#e1e8f0",
+        toolpath_axis_x="#c95858",
+        toolpath_axis_y="#3d9c60",
+        toolpath_axis_z="#3f6fb3",
+        toolpath_rapid="#cb9232",
+        toolpath_cut="#b3538f",
+        toolpath_text="#3d4b5b",
+        splash_background="#f5f8fb",
+        splash_border="#b8c5d3",
+        splash_message_text="#3d4b5b",
+        splash_link="#3f6fb3",
+    )
+
+
 def load_theme(path: Path) -> tuple[AppTheme, list[str]]:
     warnings: list[str] = []
     loaded: object = {}
@@ -141,10 +271,46 @@ def load_theme(path: Path) -> tuple[AppTheme, list[str]]:
                 warnings,
             ),
         ),
+        main_window_background=_parse_color(
+            colors_data.get("main_window_background"),
+            defaults.main_window_background,
+            "colors.main_window_background",
+            warnings,
+        ),
+        main_window_sidebar_background=_parse_color(
+            colors_data.get("main_window_sidebar_background"),
+            defaults.main_window_sidebar_background,
+            "colors.main_window_sidebar_background",
+            warnings,
+        ),
+        main_window_panel_background=_parse_color(
+            colors_data.get("main_window_panel_background"),
+            defaults.main_window_panel_background,
+            "colors.main_window_panel_background",
+            warnings,
+        ),
+        main_window_panel_border=_parse_color(
+            colors_data.get("main_window_panel_border"),
+            defaults.main_window_panel_border,
+            "colors.main_window_panel_border",
+            warnings,
+        ),
+        main_window_text=_parse_color(
+            colors_data.get("main_window_text"),
+            defaults.main_window_text,
+            "colors.main_window_text",
+            warnings,
+        ),
         main_window_muted_text=_parse_color(
             colors_data.get("main_window_muted_text"),
             defaults.main_window_muted_text,
             "colors.main_window_muted_text",
+            warnings,
+        ),
+        wizard_step_bar_background=_parse_color(
+            colors_data.get("wizard_step_bar_background"),
+            defaults.wizard_step_bar_background,
+            "colors.wizard_step_bar_background",
             warnings,
         ),
         wizard_step_disabled_fill=_parse_color(
@@ -388,8 +554,20 @@ def save_theme(path: Path, theme: AppTheme) -> None:
             f"  author: {_yaml_scalar(theme.theme_info.author)}",
             "",
             "colors:",
+            "  # Background behind the overall wizard layout.",
+            f"  main_window_background: {_yaml_scalar(theme.main_window_background)}",
+            "  # Background used for the left sidebar and step area.",
+            f"  main_window_sidebar_background: {_yaml_scalar(theme.main_window_sidebar_background)}",
+            "  # Background used for cards, lists, and form panels in the main window.",
+            f"  main_window_panel_background: {_yaml_scalar(theme.main_window_panel_background)}",
+            "  # Border color used for cards, lists, and form panels in the main window.",
+            f"  main_window_panel_border: {_yaml_scalar(theme.main_window_panel_border)}",
+            "  # Primary text color used across the main window shell.",
+            f"  main_window_text: {_yaml_scalar(theme.main_window_text)}",
             "  # Secondary text used for explanatory hints and muted labels in the main window.",
             f"  main_window_muted_text: {_yaml_scalar(theme.main_window_muted_text)}",
+            "  # Background behind the horizontal wizard step bar.",
+            f"  wizard_step_bar_background: {_yaml_scalar(theme.wizard_step_bar_background)}",
             "  # Wizard step background when a step is locked or unavailable.",
             f"  wizard_step_disabled_fill: {_yaml_scalar(theme.wizard_step_disabled_fill)}",
             "  # Wizard step outline when a step is locked or unavailable.",
@@ -477,10 +655,38 @@ def save_theme(path: Path, theme: AppTheme) -> None:
 def ensure_default_theme_file(themes_directory: Path) -> Path:
     path = themes_directory / DEFAULT_THEME_FILE_NAME
     themes_directory.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        return path
-    save_theme(path, default_theme())
+    if _built_in_theme_file_needs_refresh(path):
+        save_theme(path, default_theme())
     return path
+
+
+def ensure_high_contrast_theme_file(themes_directory: Path) -> Path:
+    path = themes_directory / HIGH_CONTRAST_THEME_FILE_NAME
+    themes_directory.mkdir(parents=True, exist_ok=True)
+    if _built_in_theme_file_needs_refresh(path):
+        save_theme(path, high_contrast_theme())
+    return path
+
+
+def ensure_light_theme_file(themes_directory: Path) -> Path:
+    path = themes_directory / LIGHT_THEME_FILE_NAME
+    themes_directory.mkdir(parents=True, exist_ok=True)
+    if _built_in_theme_file_needs_refresh(path):
+        save_theme(path, light_theme())
+    return path
+
+
+def _built_in_theme_file_needs_refresh(path: Path) -> bool:
+    if not path.exists():
+        return True
+
+    _theme, warnings = load_theme(path)
+    return any(
+        warning.startswith("Failed to read theme file")
+        or warning.startswith("Failed to parse YAML theme file")
+        or warning.startswith("Theme file ")
+        for warning in warnings
+    )
 
 
 def _parse_text(
@@ -555,8 +761,17 @@ def _parse_palette(
 
 
 def _yaml_scalar(value: object) -> str:
-    dumped = yaml.safe_dump(value, default_flow_style=True).strip()
-    return dumped if dumped != "..." else "null"
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        return yaml.safe_dump(
+            value,
+            default_flow_style=True,
+            explicit_end=False,
+        ).splitlines()[0]
+    return str(value)
 
 
 def _is_valid_color_string(value: str) -> bool:

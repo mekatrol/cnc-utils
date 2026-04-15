@@ -92,6 +92,7 @@ class MainWindow(QMainWindow):
         self.generated_documents = {}
         self.has_unsaved_changes = False
         self._muted_labels: list[QLabel] = []
+        self._sidebar_panels: list[QWidget] = []
 
         self.preview = PcbPreviewWidget(self.theme)
         self.toolpath_viewer = ToolpathViewer(self.theme)
@@ -101,6 +102,7 @@ class MainWindow(QMainWindow):
         self.step_bar = WizardStepBar(self.STEP_TITLES, self.theme)
         self.step_bar.step_selected.connect(self._handle_step_selected)
         self.step_bar_scroll = QScrollArea()
+        self.step_bar_scroll.setObjectName("stepBarScroll")
         self.step_bar_scroll.setWidget(self.step_bar)
         self.step_bar_scroll.setWidgetResizable(False)
         self.step_bar_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -117,6 +119,7 @@ class MainWindow(QMainWindow):
         )
 
         self.setWindowTitle("mekatrol-pcbcam")
+        self.setObjectName("mainWindow")
         self.resize(1440, 920)
         self._build_ui()
         self._build_menu()
@@ -128,6 +131,8 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         root = QWidget()
+        root.setObjectName("mainWindowRoot")
+        self._root_widget = root
         root_layout = QVBoxLayout(root)
         root_layout.setContentsMargins(18, 18, 18, 18)
         root_layout.setSpacing(14)
@@ -145,9 +150,12 @@ class MainWindow(QMainWindow):
         status = QStatusBar(self)
         status.showMessage("Wizard ready")
         self.setStatusBar(status)
+        self._apply_window_theme()
 
     def _build_sidebar(self) -> QWidget:
         panel = QWidget()
+        panel.setObjectName("sidebarPanel")
+        self._sidebar_panel = panel
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
@@ -163,6 +171,8 @@ class MainWindow(QMainWindow):
 
         summary_card = QFrame()
         summary_card.setFrameShape(QFrame.Shape.StyledPanel)
+        summary_card.setObjectName("sidebarPanelCard")
+        self._sidebar_panels.append(summary_card)
         summary_layout = QVBoxLayout(summary_card)
         summary_layout.setContentsMargins(14, 14, 14, 14)
         summary_layout.setSpacing(8)
@@ -384,6 +394,8 @@ class MainWindow(QMainWindow):
 
         form_card = QFrame()
         form_card.setFrameShape(QFrame.Shape.StyledPanel)
+        form_card.setObjectName("sidebarPanelCard")
+        self._sidebar_panels.append(form_card)
         form = QFormLayout(form_card)
         form.setContentsMargins(14, 14, 14, 14)
         form.setSpacing(10)
@@ -435,6 +447,8 @@ class MainWindow(QMainWindow):
 
         form_card = QFrame()
         form_card.setFrameShape(QFrame.Shape.StyledPanel)
+        form_card.setObjectName("sidebarPanelCard")
+        self._sidebar_panels.append(form_card)
         form = QFormLayout(form_card)
         form.setContentsMargins(14, 14, 14, 14)
         form.setSpacing(10)
@@ -527,6 +541,8 @@ class MainWindow(QMainWindow):
 
         form_card = QFrame()
         form_card.setFrameShape(QFrame.Shape.StyledPanel)
+        form_card.setObjectName("sidebarPanelCard")
+        self._sidebar_panels.append(form_card)
         form = QFormLayout(form_card)
         form.setContentsMargins(14, 14, 14, 14)
         form.setSpacing(10)
@@ -689,6 +705,68 @@ class MainWindow(QMainWindow):
             self._muted_labels.append(label)
         label.setStyleSheet(self._muted_text_style())
 
+    def _apply_window_theme(self) -> None:
+        self.setStyleSheet(
+            f"""
+            QMainWindow#mainWindow {{
+                background-color: {self.theme.main_window_background};
+                color: {self.theme.main_window_text};
+            }}
+            #mainWindowRoot {{
+                background-color: {self.theme.main_window_background};
+                color: {self.theme.main_window_text};
+            }}
+            QMenuBar {{
+                background-color: {self.theme.main_window_background};
+                color: {self.theme.main_window_text};
+            }}
+            QMenuBar::item:selected {{
+                background-color: {self.theme.main_window_panel_background};
+            }}
+            QStatusBar {{
+                background-color: {self.theme.main_window_background};
+                color: {self.theme.main_window_text};
+            }}
+            QStatusBar::item {{
+                border: none;
+            }}
+            #stepBarScroll,
+            #stepBarScroll > QWidget,
+            #stepBarScroll QScrollBar:horizontal,
+            #stepBarScroll QScrollBar:vertical,
+            #stepBarScroll QWidget#qt_scrollarea_viewport {{
+                background-color: {self.theme.main_window_background};
+                color: {self.theme.main_window_text};
+                border: none;
+            }}
+            #sidebarPanel {{
+                background-color: {self.theme.main_window_sidebar_background};
+                color: {self.theme.main_window_text};
+            }}
+            #sidebarPanel QLabel {{
+                color: {self.theme.main_window_text};
+                background: transparent;
+            }}
+            #sidebarPanelCard,
+            #sidebarPanel QListWidget,
+            #sidebarPanel QComboBox,
+            #sidebarPanel QDoubleSpinBox {{
+                background-color: {self.theme.main_window_panel_background};
+                color: {self.theme.main_window_text};
+                border: 1px solid {self.theme.main_window_panel_border};
+            }}
+            #sidebarPanel QPushButton {{
+                background-color: {self.theme.main_window_panel_background};
+                color: {self.theme.main_window_text};
+                border: 1px solid {self.theme.main_window_panel_border};
+                padding: 4px 10px;
+            }}
+            #sidebarPanel QPushButton:disabled {{
+                color: {self.theme.main_window_muted_text};
+            }}
+            """
+        )
+
     def _open_theme_settings(self) -> None:
         options = discover_theme_options(self._themes_directory)
         if not options:
@@ -734,6 +812,7 @@ class MainWindow(QMainWindow):
         for label in self._muted_labels:
             self._apply_muted_text_style(label)
 
+        self._apply_window_theme()
         self.step_bar.update()
         self.preview.update()
         self.mirror_preview.update()
