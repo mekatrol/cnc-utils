@@ -157,7 +157,7 @@ class MainWindow(QMainWindow):
         panel.setObjectName("sidebarPanel")
         self._sidebar_panel = panel
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 0, 18, 0)
         layout.setSpacing(12)
 
         title = QLabel("PCB CAM Wizard")
