@@ -162,7 +162,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         title = QLabel("PCB CAM Wizard")
-        title.setStyleSheet("font-size: 26px; font-weight: 700;")
+        title.setObjectName("sidebarTitle")
         subtitle = QLabel(
             "Work through the full CAM wizard from Gerber import through NC generation. "
             "Each step saves into the project so you can reopen and continue."
@@ -256,7 +256,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         heading = QLabel("Step 1: Project")
-        heading.setStyleSheet("font-size: 20px; font-weight: 700;")
+        heading.setObjectName("pageHeading")
         body = QLabel(
             "Start a new project, reopen an existing one, or save the current setup. "
             "If the app automatically reopens a recent project on startup, the wizard "
@@ -292,7 +292,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         heading = QLabel("Step 2: Import Gerber")
-        heading.setStyleSheet("font-size: 20px; font-weight: 700;")
+        heading.setObjectName("pageHeading")
         body = QLabel(
             "Import one or more Gerber files. Typical files include front copper, "
             "back copper, and edge cuts. All imported geometry is shown in the "
@@ -333,7 +333,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         heading = QLabel("Step 3: Import Excellon Drill Files")
-        heading.setStyleSheet("font-size: 20px; font-weight: 700;")
+        heading.setObjectName("pageHeading")
         body = QLabel(
             "Import Excellon drill files for PTH and NPTH holes. Drill import is "
             "optional, but the preview will overlay hole sizes and "
@@ -377,7 +377,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         heading = QLabel("Step 4: Tool Selection")
-        heading.setStyleSheet("font-size: 20px; font-weight: 700;")
+        heading.setObjectName("pageHeading")
         body = QLabel(
             "Choose one drilling tool, one milling tool, and one V-bit from the "
             "configured tool library. These choices are stored in the project and "
@@ -438,7 +438,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         heading = QLabel("Step 5: Layer Assignment")
-        heading.setStyleSheet("font-size: 20px; font-weight: 700;")
+        heading.setObjectName("pageHeading")
         body = QLabel(
             "Assign imported Gerber files to front copper, back copper, and edges. "
             "Any assignment is optional, but at least one of the three roles must be "
@@ -487,7 +487,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         heading = QLabel("Step 6: Mirror Setup")
-        heading.setStyleSheet("font-size: 20px; font-weight: 700;")
+        heading.setObjectName("pageHeading")
         body = QLabel(
             "If both front and back copper are assigned, choose the edge used for "
             "mirroring when the board is flipped. This step is skipped automatically "
@@ -532,7 +532,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         heading = QLabel("Step 7: Alignment Holes")
-        heading.setStyleSheet("font-size: 20px; font-weight: 700;")
+        heading.setObjectName("pageHeading")
         body = QLabel(
             "Define optional alignment holes outside the board edge. Each hole uses "
             "an edge reference plus offsets measured along that edge and outward "
@@ -608,7 +608,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         heading = QLabel(heading_text)
-        heading.setStyleSheet("font-size: 20px; font-weight: 700;")
+        heading.setObjectName("pageHeading")
         body = QLabel(body_text)
         body.setWordWrap(True)
 
@@ -641,7 +641,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         heading = QLabel("Step 12: NC Preview")
-        heading.setStyleSheet("font-size: 20px; font-weight: 700;")
+        heading.setObjectName("pageHeading")
         body = QLabel(
             "Select any generated NC file to inspect it in the 3D toolpath viewer."
         )
@@ -765,28 +765,55 @@ class MainWindow(QMainWindow):
             QMessageBox QComboBox,
             QMessageBox QDoubleSpinBox {{
                 background-color: {self.theme.main_window_panel_background};
-                color: {self.theme.main_window_text};
+                color: {self.theme.main_window_input_text};
                 border: 1px solid {self.theme.main_window_panel_border};
+            }}
+            QDialog QRadioButton,
+            QMessageBox QRadioButton {{
+                color: {self.theme.main_window_text};
+            }}
+            QDialog QRadioButton::indicator,
+            QMessageBox QRadioButton::indicator,
+            #sidebarPanel QRadioButton::indicator {{
+                width: 14px;
+                height: 14px;
+                border-radius: 7px;
+                border: 2px solid {self.theme.radio_indicator_border};
+                background-color: {self.theme.radio_indicator_fill};
+            }}
+            QDialog QRadioButton::indicator:checked,
+            QMessageBox QRadioButton::indicator:checked,
+            #sidebarPanel QRadioButton::indicator:checked {{
+                border: 2px solid {self.theme.radio_indicator_checked_border};
+                background-color: {self.theme.radio_indicator_checked_fill};
+            }}
+            QDialog QRadioButton::indicator:disabled,
+            QMessageBox QRadioButton::indicator:disabled,
+            #sidebarPanel QRadioButton::indicator:disabled {{
+                border: 2px solid {self.theme.radio_indicator_disabled_border};
+                background-color: {self.theme.radio_indicator_disabled_fill};
             }}
             QComboBox QAbstractItemView,
             QDialog QComboBox QAbstractItemView,
             QMessageBox QComboBox QAbstractItemView {{
                 background-color: {self.theme.main_window_panel_background};
-                color: {self.theme.main_window_text};
+                color: {self.theme.main_window_input_text};
                 border: 1px solid {self.theme.main_window_panel_border};
                 selection-background-color: {self.theme.wizard_step_pending_fill};
-                selection-color: {self.theme.main_window_text};
+                selection-color: {self.theme.main_window_input_text};
             }}
             QDialog QPushButton,
             QMessageBox QPushButton {{
                 background-color: {self.theme.main_window_panel_background};
-                color: {self.theme.main_window_text};
+                color: {self.theme.main_window_button_text};
                 border: 1px solid {self.theme.main_window_panel_border};
                 padding: 4px 10px;
             }}
             QDialog QPushButton:disabled,
-            QMessageBox QPushButton:disabled {{
-                color: {self.theme.main_window_muted_text};
+            QDialog QRadioButton:disabled,
+            QMessageBox QPushButton:disabled,
+            QMessageBox QRadioButton:disabled {{
+                color: {self.theme.main_window_disabled_text};
             }}
             #stepBarScroll,
             #stepBarScroll > QWidget,
@@ -805,22 +832,45 @@ class MainWindow(QMainWindow):
                 color: {self.theme.main_window_text};
                 background: transparent;
             }}
+            #sidebarTitle {{
+                color: {self.theme.main_window_heading_text};
+                font-size: 26px;
+                font-weight: 700;
+            }}
+            #pageHeading {{
+                color: {self.theme.main_window_heading_text};
+                font-size: 20px;
+                font-weight: 700;
+            }}
             #sidebarPanelCard,
             #sidebarPanel QListWidget,
             #sidebarPanel QComboBox,
             #sidebarPanel QDoubleSpinBox {{
                 background-color: {self.theme.main_window_panel_background};
-                color: {self.theme.main_window_text};
+                color: {self.theme.main_window_input_text};
                 border: 1px solid {self.theme.main_window_panel_border};
+            }}
+            #sidebarPanel QRadioButton {{
+                color: {self.theme.main_window_text};
+            }}
+            #sidebarPanel QRadioButton:disabled {{
+                color: {self.theme.main_window_disabled_text};
+            }}
+            #sidebarPanel QComboBox QAbstractItemView {{
+                background-color: {self.theme.main_window_panel_background};
+                border: 1px solid {self.theme.main_window_panel_border};
+                color: {self.theme.main_window_input_text};
+                selection-background-color: {self.theme.wizard_step_pending_fill};
+                selection-color: {self.theme.main_window_input_text};
             }}
             #sidebarPanel QPushButton {{
                 background-color: {self.theme.main_window_panel_background};
-                color: {self.theme.main_window_text};
+                color: {self.theme.main_window_button_text};
                 border: 1px solid {self.theme.main_window_panel_border};
                 padding: 4px 10px;
             }}
             #sidebarPanel QPushButton:disabled {{
-                color: {self.theme.main_window_muted_text};
+                color: {self.theme.main_window_disabled_text};
             }}
             """
 

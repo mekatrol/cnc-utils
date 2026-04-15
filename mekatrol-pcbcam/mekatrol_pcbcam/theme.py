@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 import yaml
 
 from .theme_info import ThemeInfo
 
-
-DEFAULT_THEME_FILE_NAME = "default_dark.yaml"
+DEFAULT_THEME_FILE_NAME = "dark.yaml"
 HIGH_CONTRAST_THEME_FILE_NAME = "high_contrast.yaml"
 LIGHT_THEME_FILE_NAME = "light.yaml"
 
@@ -22,7 +21,17 @@ class AppTheme:
     main_window_panel_background: str = "#353842"
     main_window_panel_border: str = "#262830"
     main_window_text: str = "#f3f5f7"
+    main_window_heading_text: str = "#f3f5f7"
+    main_window_input_text: str = "#f3f5f7"
+    main_window_button_text: str = "#f3f5f7"
+    main_window_disabled_text: str = "#8d97a3"
     main_window_muted_text: str = "#5b6571"
+    radio_indicator_fill: str = "#2f3138"
+    radio_indicator_border: str = "#aeb8c4"
+    radio_indicator_checked_fill: str = "#ffae66"
+    radio_indicator_checked_border: str = "#ffd0a3"
+    radio_indicator_disabled_fill: str = "#2a313a"
+    radio_indicator_disabled_border: str = "#586371"
     wizard_step_bar_background: str = "#2f3138"
     wizard_step_disabled_fill: str = "#2a313a"
     wizard_step_disabled_border: str = "#414b56"
@@ -103,7 +112,17 @@ def high_contrast_theme() -> AppTheme:
         main_window_panel_background="#000000",
         main_window_panel_border="#ffffff",
         main_window_text="#ffffff",
+        main_window_heading_text="#ffffff",
+        main_window_input_text="#ffffff",
+        main_window_button_text="#ffffff",
+        main_window_disabled_text="#ffffff",
         main_window_muted_text="#ffffff",
+        radio_indicator_fill="#000000",
+        radio_indicator_border="#ffffff",
+        radio_indicator_checked_fill="#ffff00",
+        radio_indicator_checked_border="#ffffff",
+        radio_indicator_disabled_fill="#000000",
+        radio_indicator_disabled_border="#ffffff",
         wizard_step_bar_background="#000000",
         wizard_step_disabled_fill="#000000",
         wizard_step_disabled_border="#ffffff",
@@ -164,7 +183,17 @@ def light_theme() -> AppTheme:
         main_window_panel_background="#ffffff",
         main_window_panel_border="#c5d1dd",
         main_window_text="#233548",
+        main_window_heading_text="#16324b",
+        main_window_input_text="#233548",
+        main_window_button_text="#233548",
+        main_window_disabled_text="#6e7f92",
         main_window_muted_text="#49586a",
+        radio_indicator_fill="#ffffff",
+        radio_indicator_border="#5f7285",
+        radio_indicator_checked_fill="#d97d32",
+        radio_indicator_checked_border="#8f5727",
+        radio_indicator_disabled_fill="#eef3f8",
+        radio_indicator_disabled_border="#aab7c5",
         wizard_step_bar_background="#eef3f8",
         wizard_step_disabled_fill="#dfe5ec",
         wizard_step_disabled_border="#aab7c5",
@@ -301,10 +330,70 @@ def load_theme(path: Path) -> tuple[AppTheme, list[str]]:
             "colors.main_window_text",
             warnings,
         ),
+        main_window_heading_text=_parse_color(
+            colors_data.get("main_window_heading_text"),
+            defaults.main_window_heading_text,
+            "colors.main_window_heading_text",
+            warnings,
+        ),
+        main_window_input_text=_parse_color(
+            colors_data.get("main_window_input_text"),
+            defaults.main_window_input_text,
+            "colors.main_window_input_text",
+            warnings,
+        ),
+        main_window_button_text=_parse_color(
+            colors_data.get("main_window_button_text"),
+            defaults.main_window_button_text,
+            "colors.main_window_button_text",
+            warnings,
+        ),
+        main_window_disabled_text=_parse_color(
+            colors_data.get("main_window_disabled_text"),
+            defaults.main_window_disabled_text,
+            "colors.main_window_disabled_text",
+            warnings,
+        ),
         main_window_muted_text=_parse_color(
             colors_data.get("main_window_muted_text"),
             defaults.main_window_muted_text,
             "colors.main_window_muted_text",
+            warnings,
+        ),
+        radio_indicator_fill=_parse_color(
+            colors_data.get("radio_indicator_fill"),
+            defaults.radio_indicator_fill,
+            "colors.radio_indicator_fill",
+            warnings,
+        ),
+        radio_indicator_border=_parse_color(
+            colors_data.get("radio_indicator_border"),
+            defaults.radio_indicator_border,
+            "colors.radio_indicator_border",
+            warnings,
+        ),
+        radio_indicator_checked_fill=_parse_color(
+            colors_data.get("radio_indicator_checked_fill"),
+            defaults.radio_indicator_checked_fill,
+            "colors.radio_indicator_checked_fill",
+            warnings,
+        ),
+        radio_indicator_checked_border=_parse_color(
+            colors_data.get("radio_indicator_checked_border"),
+            defaults.radio_indicator_checked_border,
+            "colors.radio_indicator_checked_border",
+            warnings,
+        ),
+        radio_indicator_disabled_fill=_parse_color(
+            colors_data.get("radio_indicator_disabled_fill"),
+            defaults.radio_indicator_disabled_fill,
+            "colors.radio_indicator_disabled_fill",
+            warnings,
+        ),
+        radio_indicator_disabled_border=_parse_color(
+            colors_data.get("radio_indicator_disabled_border"),
+            defaults.radio_indicator_disabled_border,
+            "colors.radio_indicator_disabled_border",
             warnings,
         ),
         wizard_step_bar_background=_parse_color(
@@ -564,8 +653,28 @@ def save_theme(path: Path, theme: AppTheme) -> None:
             f"  main_window_panel_border: {_yaml_scalar(theme.main_window_panel_border)}",
             "  # Primary text color used across the main window shell.",
             f"  main_window_text: {_yaml_scalar(theme.main_window_text)}",
+            "  # Heading text color for section titles and prominent labels.",
+            f"  main_window_heading_text: {_yaml_scalar(theme.main_window_heading_text)}",
+            "  # Text color inside editable and selectable form controls.",
+            f"  main_window_input_text: {_yaml_scalar(theme.main_window_input_text)}",
+            "  # Button label text color.",
+            f"  main_window_button_text: {_yaml_scalar(theme.main_window_button_text)}",
+            "  # Disabled text color for controls that are temporarily unavailable.",
+            f"  main_window_disabled_text: {_yaml_scalar(theme.main_window_disabled_text)}",
             "  # Secondary text used for explanatory hints and muted labels in the main window.",
             f"  main_window_muted_text: {_yaml_scalar(theme.main_window_muted_text)}",
+            "  # Radio button circle fill in its normal state.",
+            f"  radio_indicator_fill: {_yaml_scalar(theme.radio_indicator_fill)}",
+            "  # Radio button circle outline in its normal state.",
+            f"  radio_indicator_border: {_yaml_scalar(theme.radio_indicator_border)}",
+            "  # Radio button inner dot fill when selected.",
+            f"  radio_indicator_checked_fill: {_yaml_scalar(theme.radio_indicator_checked_fill)}",
+            "  # Radio button circle outline when selected.",
+            f"  radio_indicator_checked_border: {_yaml_scalar(theme.radio_indicator_checked_border)}",
+            "  # Radio button circle fill when disabled.",
+            f"  radio_indicator_disabled_fill: {_yaml_scalar(theme.radio_indicator_disabled_fill)}",
+            "  # Radio button circle outline when disabled.",
+            f"  radio_indicator_disabled_border: {_yaml_scalar(theme.radio_indicator_disabled_border)}",
             "  # Background behind the horizontal wizard step bar.",
             f"  wizard_step_bar_background: {_yaml_scalar(theme.wizard_step_bar_background)}",
             "  # Wizard step background when a step is locked or unavailable.",
@@ -680,6 +789,27 @@ def _built_in_theme_file_needs_refresh(path: Path) -> bool:
     if not path.exists():
         return True
 
+    try:
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return True
+
+    if not isinstance(loaded, dict):
+        return True
+
+    colors_data = loaded.get("colors", {})
+    if not isinstance(colors_data, dict):
+        return True
+
+    expected_color_fields = {
+        field.name
+        for field in fields(AppTheme)
+        if field.name not in {"theme_info", "pcb_preview_gerber_palette"}
+    }
+    expected_color_fields.add("pcb_preview_gerber_palette")
+    if any(field_name not in colors_data for field_name in expected_color_fields):
+        return True
+
     _theme, warnings = load_theme(path)
     return any(
         warning.startswith("Failed to read theme file")
@@ -690,10 +820,7 @@ def _built_in_theme_file_needs_refresh(path: Path) -> bool:
 
 
 def _parse_text(
-    value: object,
-    default: str,
-    field_name: str,
-    warnings: list[str],
+    value: object, default: str, field_name: str, warnings: list[str]
 ) -> str:
     if not isinstance(value, str):
         if value is not None:
@@ -709,10 +836,7 @@ def _parse_text(
 
 
 def _parse_color(
-    value: object,
-    default: str,
-    field_name: str,
-    warnings: list[str],
+    value: object, default: str, field_name: str, warnings: list[str]
 ) -> str:
     if not isinstance(value, str):
         if value is not None:
@@ -723,17 +847,12 @@ def _parse_color(
     normalized = value.strip()
     if _is_valid_color_string(normalized):
         return normalized
-    warnings.append(
-        f"{field_name}: invalid color {value!r}; using {default!r}."
-    )
+    warnings.append(f"{field_name}: invalid color {value!r}; using {default!r}.")
     return default
 
 
 def _parse_palette(
-    value: object,
-    default: list[str],
-    field_name: str,
-    warnings: list[str],
+    value: object, default: list[str], field_name: str, warnings: list[str]
 ) -> list[str]:
     if value is None:
         return list(default)
@@ -767,9 +886,7 @@ def _yaml_scalar(value: object) -> str:
         return "true" if value else "false"
     if isinstance(value, str):
         return yaml.safe_dump(
-            value,
-            default_flow_style=True,
-            explicit_end=False,
+            value, default_flow_style=True, explicit_end=False
         ).splitlines()[0]
     return str(value)
 
