@@ -9,6 +9,7 @@ from pathlib import Path
 from PySide6.QtCore import QStandardPaths, Qt
 from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QComboBox,
     QDoubleSpinBox,
@@ -47,7 +48,7 @@ from .theme_settings_dialog import ThemeSettingsDialog, discover_theme_options
 from .tool_library import ToolLibrary
 from .viewer import ToolpathViewer
 from .wizard_step_bar import WizardStepBar
-from .app_constants import ORGANIZATION_NAME
+from .app_constants import APPLICATION_NAME, ORGANIZATION_NAME
 
 
 logger = logging.getLogger(__name__)
@@ -378,9 +379,9 @@ class MainWindow(QMainWindow):
         heading = QLabel("Step 4: Tool Selection")
         heading.setStyleSheet("font-size: 20px; font-weight: 700;")
         body = QLabel(
-            "Load `tools.yaml` and choose one drilling tool, one milling tool, "
-            "and one V-bit. These choices are stored in the project and will feed "
-            "the CAM generation stages."
+            "Choose one drilling tool, one milling tool, and one V-bit from the "
+            "configured tool library. These choices are stored in the project and "
+            "will feed the CAM generation stages."
         )
         body.setWordWrap(True)
 
@@ -705,9 +706,8 @@ class MainWindow(QMainWindow):
             self._muted_labels.append(label)
         label.setStyleSheet(self._muted_text_style())
 
-    def _apply_window_theme(self) -> None:
-        self.setStyleSheet(
-            f"""
+    def _theme_stylesheet(self) -> str:
+        return f"""
             QMainWindow#mainWindow {{
                 background-color: {self.theme.main_window_background};
                 color: {self.theme.main_window_text};
@@ -723,12 +723,70 @@ class MainWindow(QMainWindow):
             QMenuBar::item:selected {{
                 background-color: {self.theme.main_window_panel_background};
             }}
+            QMenu {{
+                background-color: {self.theme.main_window_panel_background};
+                color: {self.theme.main_window_text};
+                border: 1px solid {self.theme.main_window_panel_border};
+            }}
+            QMenu::item {{
+                background-color: transparent;
+                color: {self.theme.main_window_text};
+            }}
+            QMenu::item:selected {{
+                background-color: {self.theme.wizard_step_pending_fill};
+                color: {self.theme.main_window_text};
+            }}
+            QMenu::separator {{
+                height: 1px;
+                margin: 4px 8px;
+                background-color: {self.theme.main_window_panel_border};
+            }}
             QStatusBar {{
                 background-color: {self.theme.main_window_background};
                 color: {self.theme.main_window_text};
             }}
             QStatusBar::item {{
                 border: none;
+            }}
+            QDialog,
+            QMessageBox {{
+                background-color: {self.theme.main_window_background};
+                color: {self.theme.main_window_text};
+            }}
+            QDialog QLabel,
+            QMessageBox QLabel {{
+                color: {self.theme.main_window_text};
+                background: transparent;
+            }}
+            QDialog QListWidget,
+            QDialog QComboBox,
+            QDialog QDoubleSpinBox,
+            QMessageBox QListWidget,
+            QMessageBox QComboBox,
+            QMessageBox QDoubleSpinBox {{
+                background-color: {self.theme.main_window_panel_background};
+                color: {self.theme.main_window_text};
+                border: 1px solid {self.theme.main_window_panel_border};
+            }}
+            QComboBox QAbstractItemView,
+            QDialog QComboBox QAbstractItemView,
+            QMessageBox QComboBox QAbstractItemView {{
+                background-color: {self.theme.main_window_panel_background};
+                color: {self.theme.main_window_text};
+                border: 1px solid {self.theme.main_window_panel_border};
+                selection-background-color: {self.theme.wizard_step_pending_fill};
+                selection-color: {self.theme.main_window_text};
+            }}
+            QDialog QPushButton,
+            QMessageBox QPushButton {{
+                background-color: {self.theme.main_window_panel_background};
+                color: {self.theme.main_window_text};
+                border: 1px solid {self.theme.main_window_panel_border};
+                padding: 4px 10px;
+            }}
+            QDialog QPushButton:disabled,
+            QMessageBox QPushButton:disabled {{
+                color: {self.theme.main_window_muted_text};
             }}
             #stepBarScroll,
             #stepBarScroll > QWidget,
@@ -765,7 +823,14 @@ class MainWindow(QMainWindow):
                 color: {self.theme.main_window_muted_text};
             }}
             """
-        )
+
+    def _apply_window_theme(self) -> None:
+        stylesheet = self._theme_stylesheet()
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(stylesheet)
+            return
+        self.setStyleSheet(stylesheet)
 
     def _open_theme_settings(self) -> None:
         options = discover_theme_options(self._themes_directory)
@@ -1547,7 +1612,7 @@ class MainWindow(QMainWindow):
             QStandardPaths.StandardLocation.GenericConfigLocation
         )
         base_path = Path(config_root) if config_root else Path.home() / ".config"
-        candidate = base_path / ORGANIZATION_NAME / "tools.yaml"
+        candidate = base_path / ORGANIZATION_NAME / APPLICATION_NAME / "tools.yaml"
         if not candidate.exists():
             return None
         try:
@@ -1602,7 +1667,7 @@ class MainWindow(QMainWindow):
         combo.blockSignals(True)
         combo.clear()
         if self.tool_library is None:
-            combo.addItem("Load tools.yaml first", "")
+            combo.addItem("No tool library available", "")
             combo.setEnabled(False)
         else:
             combo.setEnabled(True)

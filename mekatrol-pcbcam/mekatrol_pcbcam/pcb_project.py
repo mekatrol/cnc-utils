@@ -182,7 +182,7 @@ class PcbProject:
             return True
         if self.dirty_from_step is not None:
             return index <= self.dirty_from_step + 1
-        return index <= self.highest_commenced_step + 1
+        return index <= self.highest_commenced_step
 
     def clear_dirty_state_through(self, index: int) -> None:
         if self.dirty_from_step is not None and index > self.dirty_from_step:

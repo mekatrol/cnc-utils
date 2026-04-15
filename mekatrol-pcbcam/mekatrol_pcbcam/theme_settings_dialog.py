@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
@@ -15,14 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from .theme import load_theme
-
-
-@dataclass(frozen=True)
-class ThemeOption:
-    file_name: str
-    display_name: str
-    description: str
-    author: str
+from .theme_option import ThemeOption
 
 
 def discover_theme_options(themes_directory: Path) -> list[ThemeOption]:
