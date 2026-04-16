@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import fields
 from pathlib import Path
 
-from PySide6.QtCore import QStandardPaths, Qt
+from PySide6.QtCore import QStandardPaths, QSize, QTimer, Qt
 from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -54,6 +54,24 @@ from .app_constants import APPLICATION_NAME, ORGANIZATION_NAME
 logger = logging.getLogger(__name__)
 
 
+class CurrentPageStackedWidget(QStackedWidget):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.currentChanged.connect(lambda _: self.updateGeometry())
+
+    def sizeHint(self) -> QSize:
+        current = self.currentWidget()
+        if current is not None:
+            return current.minimumSizeHint()
+        return super().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:
+        current = self.currentWidget()
+        if current is not None:
+            return current.minimumSizeHint()
+        return super().minimumSizeHint()
+
+
 class MainWindow(QMainWindow):
     STEP_TITLES = [
         "Project",
@@ -92,12 +110,36 @@ class MainWindow(QMainWindow):
         self.has_unsaved_changes = False
         self._muted_labels: list[QLabel] = []
         self._sidebar_panels: list[QWidget] = []
+        self._last_sidebar_page_index: int | None = None
 
         self.preview = PcbPreviewWidget(self.theme)
         self.toolpath_viewer = ToolpathViewer(self.theme)
         self.preview_stack = QStackedWidget()
         self.preview_stack.addWidget(self.preview)
         self.preview_stack.addWidget(self.toolpath_viewer)
+        self.preview_panel = QWidget()
+        self.preview_panel.setObjectName("previewPanel")
+        preview_layout = QVBoxLayout(self.preview_panel)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.setSpacing(8)
+        self.preview_toolbar = QWidget()
+        self.preview_toolbar.setObjectName("previewToolbar")
+        toolbar_layout = QHBoxLayout(self.preview_toolbar)
+        toolbar_layout.setContentsMargins(0, 0, 0, 0)
+        toolbar_layout.setSpacing(8)
+        self.preview_mode_label = QLabel("Mirror View")
+        self.preview_mode_label.setObjectName("previewModeLabel")
+        self.mirror_preview_mode_combo = QComboBox()
+        self.mirror_preview_mode_combo.addItem("Overlay", "overlay")
+        self.mirror_preview_mode_combo.addItem("Side by side", "side_by_side")
+        self.mirror_preview_mode_combo.currentIndexChanged.connect(
+            self._mirror_preview_mode_changed
+        )
+        toolbar_layout.addStretch(1)
+        toolbar_layout.addWidget(self.preview_mode_label)
+        toolbar_layout.addWidget(self.mirror_preview_mode_combo)
+        preview_layout.addWidget(self.preview_toolbar)
+        preview_layout.addWidget(self.preview_stack, 1)
         self.step_bar = WizardStepBar(self.STEP_TITLES, self.theme)
         self.step_bar.step_selected.connect(self._handle_step_selected)
         self.step_bar_scroll = QScrollArea()
@@ -139,7 +181,7 @@ class MainWindow(QMainWindow):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._build_sidebar())
-        splitter.addWidget(self.preview_stack)
+        splitter.addWidget(self.preview_panel)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([420, 1020])
@@ -185,7 +227,11 @@ class MainWindow(QMainWindow):
         summary_layout.addWidget(self.drill_count_value)
         summary_layout.addWidget(self.step_status_value)
 
-        self.page_stack = QStackedWidget()
+        self.page_stack = CurrentPageStackedWidget()
+        self.page_stack.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Maximum,
+        )
         self.page_stack.addWidget(self._build_project_page())
         self.page_stack.addWidget(self._build_gerber_page())
         self.page_stack.addWidget(self._build_drill_page())
@@ -228,6 +274,8 @@ class MainWindow(QMainWindow):
             )
         )
         self.page_stack.addWidget(self._build_nc_preview_page())
+        if self.page_stack.layout() is not None:
+            self.page_stack.layout().setAlignment(Qt.AlignmentFlag.AlignTop)
 
         self.page_scroll = QScrollArea()
         self.page_scroll.setObjectName("pageScroll")
@@ -241,7 +289,8 @@ class MainWindow(QMainWindow):
         page_scroll_layout = QVBoxLayout(page_scroll_content)
         page_scroll_layout.setContentsMargins(0, 0, 12, 0)
         page_scroll_layout.setSpacing(0)
-        page_scroll_layout.addWidget(self.page_stack)
+        page_scroll_layout.addWidget(self.page_stack, 0, Qt.AlignmentFlag.AlignTop)
+        page_scroll_layout.addStretch(1)
         self.page_scroll.setWidget(page_scroll_content)
 
         layout.addWidget(title)
@@ -369,6 +418,8 @@ class MainWindow(QMainWindow):
         self.drill_list = QListWidget()
         self.drill_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.drill_list.itemChanged.connect(self._drill_item_changed)
+        self.drill_list.setMinimumHeight(150)
+        self.drill_list.setMaximumHeight(210)
 
         self.drill_hint = QLabel(
             "You can continue without drill files. Later drill-operation "
@@ -380,8 +431,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(heading)
         layout.addWidget(body)
         layout.addLayout(button_row)
-        layout.addWidget(self.drill_list, 1)
+        layout.addWidget(self.drill_list)
         layout.addWidget(self.drill_hint)
+        layout.addStretch(1)
         return page
 
     def _build_tool_selection_page(self) -> QWidget:
@@ -523,20 +575,12 @@ class MainWindow(QMainWindow):
             self.mirror_buttons[edge] = button
             button_row.addWidget(button)
 
-        self.mirror_preview_mode_combo = QComboBox()
-        self.mirror_preview_mode_combo.addItem("Overlay", "overlay")
-        self.mirror_preview_mode_combo.addItem("Side by side", "side_by_side")
-        self.mirror_preview_mode_combo.currentIndexChanged.connect(
-            self._mirror_preview_mode_changed
-        )
-
         self.mirror_preview = MirrorPreviewWidget(self.theme)
 
         layout.addWidget(heading)
         layout.addWidget(body)
         layout.addWidget(self.mirror_requirement_label)
         layout.addLayout(button_row)
-        layout.addWidget(self.mirror_preview_mode_combo)
         layout.addWidget(self.mirror_preview)
         layout.addStretch(1)
         return card
@@ -854,6 +898,15 @@ class MainWindow(QMainWindow):
                 color: {self.theme.main_window_text};
                 border: none;
             }}
+            #previewPanel,
+            #previewToolbar {{
+                background-color: {self.theme.main_window_background};
+                color: {self.theme.main_window_text};
+            }}
+            #previewModeLabel {{
+                color: {self.theme.main_window_text};
+                font-weight: 600;
+            }}
             #sidebarPanel {{
                 background-color: {self.theme.main_window_sidebar_background};
                 color: {self.theme.main_window_text};
@@ -887,6 +940,14 @@ class MainWindow(QMainWindow):
                 color: {self.theme.main_window_disabled_text};
             }}
             #sidebarPanel QComboBox QAbstractItemView {{
+                background-color: {self.theme.main_window_panel_background};
+                border: 1px solid {self.theme.main_window_panel_border};
+                color: {self.theme.main_window_input_text};
+                selection-background-color: {self.theme.wizard_step_pending_fill};
+                selection-color: {self.theme.main_window_input_text};
+            }}
+            #previewToolbar QComboBox,
+            #previewToolbar QComboBox QAbstractItemView {{
                 background-color: {self.theme.main_window_panel_background};
                 border: 1px solid {self.theme.main_window_panel_border};
                 color: {self.theme.main_window_input_text};
@@ -1522,6 +1583,7 @@ class MainWindow(QMainWindow):
         current = min(self.project.current_step_index, self.IMPLEMENTED_STEP_COUNT - 1)
         self.project.current_step_index = current
         self.step_bar.adjustSize()
+        page_changed = self._last_sidebar_page_index != current
         self.page_stack.setCurrentIndex(current)
         self.step_bar.set_state(
             current_step_index=current,
@@ -1567,8 +1629,16 @@ class MainWindow(QMainWindow):
             mirror_edge=self.project.mirror_flip_edge,
             preview_mode=self.project.mirror_preview_mode,
         )
-        self.preview_stack.setCurrentIndex(1 if current >= PcbProject.STEP_FRONT_ISOLATION else 0)
+        showing_toolpath = current >= PcbProject.STEP_FRONT_ISOLATION
+        self.preview_stack.setCurrentIndex(1 if showing_toolpath else 0)
+        self.preview_toolbar.setVisible(not showing_toolpath)
         self._update_window_title()
+        if page_changed:
+            QTimer.singleShot(
+                0,
+                lambda: self.page_scroll.verticalScrollBar().setValue(0),
+            )
+        self._last_sidebar_page_index = current
         self._scroll_current_step_into_view()
 
     def resizeEvent(self, event) -> None:
