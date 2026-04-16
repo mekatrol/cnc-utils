@@ -4,11 +4,12 @@ from pathlib import Path
 
 import yaml
 
+from .edge_cut_profile import EdgeCutProfile
 from .alignment_hole import AlignmentHole
 
 
 class PcbProject:
-    VERSION = 1
+    VERSION = 3
     STEP_PROJECT = 0
     STEP_GERBER_IMPORT = 1
     STEP_DRILL_IMPORT = 2
@@ -66,6 +67,7 @@ class PcbProject:
         self.mirror_flip_edge: str = ""
         self.mirror_preview_mode: str = "side_by_side"
         self.alignment_holes: list[AlignmentHole] = []
+        self.edge_cut_profiles: list[EdgeCutProfile] = []
         self.generated_outputs: dict[str, Path] = {}
         self.current_step_index = 0
         self.highest_commenced_step = 0
@@ -201,6 +203,13 @@ class PcbProject:
     def mark_origin_changed(self) -> None:
         self._invalidate_from(self.STEP_ORIGIN)
 
+    def replace_edge_cut_profiles(self, profiles: list[EdgeCutProfile]) -> bool:
+        changed = profiles != self.edge_cut_profiles
+        self.edge_cut_profiles = profiles
+        if changed:
+            self._invalidate_from(self.STEP_EDGE_CUTS)
+        return changed
+
     def requires_mirror_setup(self) -> bool:
         return (
             self.layer_assignments.get("front_copper") is not None
@@ -295,6 +304,15 @@ class PcbProject:
                 }
                 for hole in self.alignment_holes
             ],
+            "edge_cuts": {
+                "profiles": [
+                    {
+                        "polygon_keys": list(profile.polygon_keys),
+                        "mode": profile.mode,
+                    }
+                    for profile in self.edge_cut_profiles
+                ],
+            },
             "generated_outputs": {
                 key: self._to_relative_path(value, self.project_path.parent)
                 for key, value in self.generated_outputs.items()
@@ -392,6 +410,43 @@ class PcbProject:
                     )
                 except (TypeError, ValueError):
                     continue
+        edge_cut_data = loaded.get("edge_cuts", {})
+        if isinstance(edge_cut_data, dict):
+            raw_profiles = edge_cut_data.get("profiles")
+            if isinstance(raw_profiles, list):
+                for raw_profile in raw_profiles:
+                    if not isinstance(raw_profile, dict):
+                        continue
+                    raw_polygon_keys = raw_profile.get("polygon_keys", [])
+                    if not isinstance(raw_polygon_keys, list):
+                        continue
+                    polygon_keys = [
+                        str(key).strip()
+                        for key in raw_polygon_keys
+                        if isinstance(key, str) and str(key).strip()
+                    ]
+                    mode = str(raw_profile.get("mode", "")).strip()
+                    if polygon_keys and mode:
+                        project.edge_cut_profiles.append(
+                            EdgeCutProfile(
+                                polygon_keys=polygon_keys,
+                                mode=mode,
+                            )
+                        )
+            else:
+                polygon_modes = edge_cut_data.get("polygon_modes", {})
+                if isinstance(polygon_modes, dict):
+                    for key, value in polygon_modes.items():
+                        if isinstance(key, str) and isinstance(value, str):
+                            normalized_key = key.strip()
+                            normalized_value = value.strip()
+                            if normalized_key and normalized_value:
+                                project.edge_cut_profiles.append(
+                                    EdgeCutProfile(
+                                        polygon_keys=[normalized_key],
+                                        mode=normalized_value,
+                                    )
+                                )
         generated_output_data = loaded.get("generated_outputs", {})
         if isinstance(generated_output_data, dict):
             for key, raw_path in generated_output_data.items():

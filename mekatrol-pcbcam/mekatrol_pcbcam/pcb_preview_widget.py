@@ -14,6 +14,7 @@ from PySide6.QtGui import (
     QWheelEvent,
 )
 from PySide6.QtWidgets import QWidget
+from shapely.geometry import LineString, Polygon
 
 from .board_bounds import BoardBounds
 from .imported_drill_file import ImportedDrillFile
@@ -24,6 +25,7 @@ from .theme import AppTheme
 
 class PcbPreviewWidget(QWidget):
     origin_selected = Signal(float, float)
+    edge_polygon_selected = Signal(int, bool)
 
     def __init__(self, theme: AppTheme, parent=None) -> None:
         super().__init__(parent)
@@ -55,6 +57,9 @@ class PcbPreviewWidget(QWidget):
         self._validated_edge_path: Path | None = None
         self._validated_edge_polygons: list[list[tuple[float, float]]] = []
         self._edge_error_segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
+        self._edge_selection_enabled = False
+        self._selected_edge_polygon_indices: set[int] = set()
+        self._edge_polygon_modes: dict[int, str] = {}
 
     def load_project_geometry(
         self,
@@ -114,10 +119,16 @@ class PcbPreviewWidget(QWidget):
         *,
         polygons: list[list[tuple[float, float]]] | None = None,
         error_segments: list[tuple[tuple[float, float], tuple[float, float]]] | None = None,
+        selection_enabled: bool = False,
+        selected_polygon_indices: set[int] | None = None,
+        polygon_modes: dict[int, str] | None = None,
     ) -> None:
         self._validated_edge_path = None if edge_path is None else edge_path.resolve()
         self._validated_edge_polygons = list(polygons or [])
         self._edge_error_segments = list(error_segments or [])
+        self._edge_selection_enabled = selection_enabled
+        self._selected_edge_polygon_indices = set(selected_polygon_indices or set())
+        self._edge_polygon_modes = dict(polygon_modes or {})
         self.update()
 
     def _rebuild_bounds(
@@ -169,6 +180,25 @@ class PcbPreviewWidget(QWidget):
                 self._hovered_origin_key = selected_key
                 self._origin_hotspots_visible = True
                 self.origin_selected.emit(selected_point[0], selected_point[1])
+                self.update()
+                return
+            selected_polygon_index = self._edge_polygon_index_at_position(event.position())
+            if selected_polygon_index is not None:
+                modifiers = event.modifiers()
+                ctrl_pressed = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+                if ctrl_pressed:
+                    if selected_polygon_index in self._selected_edge_polygon_indices:
+                        self._selected_edge_polygon_indices.discard(selected_polygon_index)
+                    else:
+                        self._selected_edge_polygon_indices.add(selected_polygon_index)
+                else:
+                    self._selected_edge_polygon_indices = {selected_polygon_index}
+                self.edge_polygon_selected.emit(selected_polygon_index, ctrl_pressed)
+                self.update()
+                return
+            if self._edge_selection_enabled and self._selected_edge_polygon_indices:
+                self._selected_edge_polygon_indices.clear()
+                self.edge_polygon_selected.emit(-1, False)
                 self.update()
                 return
             self._dragging = True
@@ -294,6 +324,7 @@ class PcbPreviewWidget(QWidget):
 
         self._draw_origin_hotspots(painter)
         self._draw_origin_marker(painter)
+        self._draw_edge_polygon_annotations(painter)
 
     def _draw_gerber(
         self,
@@ -447,6 +478,55 @@ class PcbPreviewWidget(QWidget):
             )
         painter.restore()
 
+    def _draw_edge_polygon_annotations(self, painter: QPainter) -> None:
+        if not self._edge_selection_enabled or not self._validated_edge_polygons:
+            return
+        painter.save()
+        for index, polygon in enumerate(self._validated_edge_polygons):
+            if index in self._selected_edge_polygon_indices:
+                selection_color = QColor(self._theme.named_color("wizard_step_current_fill"))
+                selection_color.setAlpha(255)
+                painter.setPen(QPen(selection_color, 4.0))
+                self._draw_outline(painter, polygon)
+            mode = self._edge_polygon_modes.get(index, "none").strip()
+            if mode == "none":
+                continue
+            indicator_polygon = self._offset_polygon_for_mode(polygon, mode)
+            if not indicator_polygon:
+                continue
+            indicator_color = QColor(self._theme.named_color("pcb_preview_alignment"))
+            indicator_color.setAlpha(220)
+            pen = QPen(indicator_color, 2.0)
+            pen.setStyle(Qt.PenStyle.DotLine)
+            painter.setPen(pen)
+            self._draw_outline(painter, indicator_polygon)
+        painter.restore()
+
+    def _offset_polygon_for_mode(
+        self,
+        polygon: list[tuple[float, float]],
+        mode: str,
+    ) -> list[tuple[float, float]]:
+        if len(polygon) < 2:
+            return []
+        if mode == "on_contour":
+            return list(polygon)
+        offset_world = 8.0 / max(self._zoom, 0.001)
+        shape = Polygon(polygon)
+        if shape.is_empty or not shape.is_valid or shape.area <= 0.0:
+            return []
+        offset_shape = shape.buffer(
+            offset_world if mode == "outside_profile" else -offset_world
+        )
+        if offset_shape.is_empty:
+            return []
+        if hasattr(offset_shape, "geoms"):
+            offset_shape = max(offset_shape.geoms, key=lambda item: item.area)
+        boundary = offset_shape.boundary
+        if not isinstance(boundary, LineString):
+            return []
+        return [(float(x_pos), float(y_pos)) for x_pos, y_pos in boundary.coords]
+
     def _draw_origin_marker(self, painter: QPainter) -> None:
         if self._origin_marker_point is None:
             return
@@ -528,6 +608,24 @@ class PcbPreviewWidget(QWidget):
                 return location
         return None
 
+    def _edge_polygon_index_at_position(self, position: QPointF) -> int | None:
+        if not self._edge_selection_enabled or not self._validated_edge_polygons:
+            return None
+        world_position = self._screen_to_world(position)
+        if world_position is None:
+            return None
+        max_distance = 10.0 / max(self._zoom, 0.001)
+        closest_index = None
+        closest_distance = None
+        for index, polygon in enumerate(self._validated_edge_polygons):
+            distance = self._distance_to_polygon_boundary(world_position, polygon)
+            if distance > max_distance:
+                continue
+            if closest_distance is None or distance < closest_distance:
+                closest_index = index
+                closest_distance = distance
+        return closest_index
+
     def _screen_position_within_board(self, position: QPointF) -> bool:
         if self._origin_marker_bounds is None:
             return False
@@ -546,6 +644,65 @@ class PcbPreviewWidget(QWidget):
         delta_x = first.x() - second.x()
         delta_y = first.y() - second.y()
         return math.hypot(delta_x, delta_y)
+
+    def _distance_to_polygon_boundary(
+        self,
+        point: tuple[float, float],
+        polygon: list[tuple[float, float]],
+    ) -> float:
+        if len(polygon) < 2:
+            return float("inf")
+        return min(
+            self._distance_to_segment(point, start, end)
+            for start, end in zip(polygon, polygon[1:])
+        )
+
+    def _distance_to_segment(
+        self,
+        point: tuple[float, float],
+        start: tuple[float, float],
+        end: tuple[float, float],
+    ) -> float:
+        start_x, start_y = start
+        end_x, end_y = end
+        delta_x = end_x - start_x
+        delta_y = end_y - start_y
+        if abs(delta_x) < 1e-9 and abs(delta_y) < 1e-9:
+            return math.hypot(point[0] - start_x, point[1] - start_y)
+        fraction = (
+            ((point[0] - start_x) * delta_x) + ((point[1] - start_y) * delta_y)
+        ) / ((delta_x * delta_x) + (delta_y * delta_y))
+        fraction = max(0.0, min(1.0, fraction))
+        nearest_x = start_x + (fraction * delta_x)
+        nearest_y = start_y + (fraction * delta_y)
+        return math.hypot(point[0] - nearest_x, point[1] - nearest_y)
+
+    def _point_in_polygon(
+        self,
+        point: tuple[float, float],
+        polygon: list[tuple[float, float]],
+    ) -> bool:
+        if len(polygon) < 4:
+            return False
+        inside = False
+        point_x, point_y = point
+        for start, end in zip(polygon, polygon[1:]):
+            x1, y1 = start
+            x2, y2 = end
+            intersects = ((y1 > point_y) != (y2 > point_y)) and (
+                point_x < (((x2 - x1) * (point_y - y1)) / ((y2 - y1) or 1e-12)) + x1
+            )
+            if intersects:
+                inside = not inside
+        return inside
+
+    def _polygon_area(self, polygon: list[tuple[float, float]]) -> float:
+        if len(polygon) < 4:
+            return 0.0
+        area = 0.0
+        for start, end in zip(polygon, polygon[1:]):
+            area += (start[0] * end[1]) - (end[0] * start[1])
+        return area * 0.5
 
     def _world_to_screen(self, x: float, y: float) -> QPointF:
         center_x = self._bounds.center_x

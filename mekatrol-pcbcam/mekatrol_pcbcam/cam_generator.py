@@ -145,14 +145,22 @@ class CamGenerator:
         self,
         outlines: list[list[tuple[float, float]]],
         *,
+        cut_modes: list[str],
         output_name: str,
         mill_diameter: float,
         origin_point: tuple[float, float],
     ) -> Path:
         output_path = self.output_directory / output_name
         final_depth = -(self.board_thickness + self.breakthrough_depth)
+        if len(outlines) != len(cut_modes):
+            raise ValueError("Each edge-cut polygon must have a matching cut mode.")
+        tool_radius = max(mill_diameter * 0.5, 0.0)
         translated_outlines = [
-            self._translate_points_to_origin(outline, origin_point) for outline in outlines
+            self._translate_points_to_origin(
+                self._edge_cut_toolpath(outline, cut_mode=cut_mode, tool_radius=tool_radius),
+                origin_point,
+            )
+            for outline, cut_mode in zip(outlines, cut_modes)
         ]
         with output_path.open("w", encoding="utf-8") as gcode_file:
             self._write_header(gcode_file)
@@ -172,6 +180,34 @@ class CamGenerator:
             gcode_file.write("M5\n")
             self._write_footer(gcode_file)
         return output_path
+
+    def _edge_cut_toolpath(
+        self,
+        outline: list[tuple[float, float]],
+        *,
+        cut_mode: str,
+        tool_radius: float,
+    ) -> list[tuple[float, float]]:
+        if len(outline) < 4:
+            raise ValueError("Edge-cut polygons must contain at least three segments.")
+        normalized_mode = cut_mode.strip() or "outside_profile"
+        if normalized_mode == "on_contour" or tool_radius <= 0.0:
+            return list(outline)
+        polygon = Polygon(outline)
+        if polygon.is_empty or not polygon.is_valid or polygon.area <= 0.0:
+            raise ValueError("Invalid edge-cut polygon.")
+        offset = tool_radius if normalized_mode == "outside_profile" else -tool_radius
+        offset_polygon = polygon.buffer(offset)
+        if offset_polygon.is_empty:
+            raise ValueError(
+                "The selected milling tool is too large for an inside-profile edge cut."
+            )
+        if hasattr(offset_polygon, "geoms"):
+            offset_polygon = max(offset_polygon.geoms, key=lambda item: item.area)
+        boundary = offset_polygon.boundary
+        if not isinstance(boundary, LineString):
+            raise ValueError("Unsupported edge-cut boundary generated for the selected contour.")
+        return [(float(x_pos), float(y_pos)) for x_pos, y_pos in boundary.coords]
 
     def _combined_copper_geometry(self, gerber):
         traces = [
