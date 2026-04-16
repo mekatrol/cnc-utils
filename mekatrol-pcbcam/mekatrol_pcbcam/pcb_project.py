@@ -14,18 +14,20 @@ class PcbProject:
     STEP_DRILL_IMPORT = 2
     STEP_TOOL_SELECTION = 3
     STEP_ALIGNMENT_HOLES = 4
-    STEP_FRONT_ISOLATION = 5
-    STEP_BACK_ISOLATION = 6
-    STEP_DRILLING = 7
-    STEP_EDGE_CUTS = 8
-    STEP_NC_PREVIEW = 9
-    TOTAL_STEPS = 10
+    STEP_ORIGIN = 5
+    STEP_FRONT_ISOLATION = 6
+    STEP_BACK_ISOLATION = 7
+    STEP_DRILLING = 8
+    STEP_EDGE_CUTS = 9
+    STEP_NC_PREVIEW = 10
+    TOTAL_STEPS = 11
     STEP_KEYS = [
         "project",
         "gerber_import",
         "drill_import",
         "tool_selection",
         "alignment_holes",
+        "origin",
         "front_isolation",
         "back_isolation",
         "drilling",
@@ -36,6 +38,7 @@ class PcbProject:
         "layer_assignment": STEP_GERBER_IMPORT,
         "mirror_setup": STEP_GERBER_IMPORT,
         "alignment_holes": STEP_ALIGNMENT_HOLES,
+        "origin": STEP_ORIGIN,
         "front_isolation": STEP_FRONT_ISOLATION,
         "back_isolation": STEP_BACK_ISOLATION,
         "drilling": STEP_DRILLING,
@@ -196,6 +199,9 @@ class PcbProject:
         if changed:
             self._invalidate_from(self.STEP_ALIGNMENT_HOLES)
         return changed
+
+    def mark_origin_changed(self) -> None:
+        self._invalidate_from(self.STEP_ORIGIN)
 
     def requires_mirror_setup(self) -> bool:
         return (

@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QMouseEvent,
@@ -18,15 +18,19 @@ from PySide6.QtWidgets import QWidget
 from .board_bounds import BoardBounds
 from .imported_drill_file import ImportedDrillFile
 from .imported_gerber_file import ImportedGerberFile
+from .nc_origin import format_origin_point
 from .theme import AppTheme
 
 
 class PcbPreviewWidget(QWidget):
+    origin_selected = Signal(float, float)
+
     def __init__(self, theme: AppTheme, parent=None) -> None:
         super().__init__(parent)
         self._theme = theme
         self.setMinimumSize(720, 480)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setMouseTracking(True)
         self._gerber_files: list[ImportedGerberFile] = []
         self._drill_files: list[ImportedDrillFile] = []
         self._alignment_holes: list[tuple[float, float, float]] = []
@@ -41,6 +45,13 @@ class PcbPreviewWidget(QWidget):
         self._edges_path = None
         self._mirror_edge = ""
         self._mirror_preview_mode = "side_by_side"
+        self._origin_marker_bounds: tuple[float, float, float, float] | None = None
+        self._origin_marker_point: tuple[float, float] | None = None
+        self._origin_hotspot_points_override: dict[str, tuple[float, float]] = {}
+        self._origin_selection_enabled = False
+        self._origin_hotspots_visible = False
+        self._hovered_origin_key: str | None = None
+        self._cursor_world_position: tuple[float, float] | None = None
 
     def load_project_geometry(
         self,
@@ -76,6 +87,23 @@ class PcbPreviewWidget(QWidget):
         self._mirror_preview_mode = preview_mode.strip() or "side_by_side"
         self._rebuild_bounds()
         self.fit_to_view()
+
+    def set_origin_marker(
+        self,
+        board_bounds: tuple[float, float, float, float] | None,
+        point: tuple[float, float] | None,
+        *,
+        hotspot_points: dict[str, tuple[float, float]] | None = None,
+        selection_enabled: bool = False,
+    ) -> None:
+        self._origin_marker_bounds = board_bounds
+        self._origin_marker_point = point
+        self._origin_hotspot_points_override = dict(hotspot_points or {})
+        self._origin_selection_enabled = selection_enabled
+        if not selection_enabled:
+            self._origin_hotspots_visible = False
+            self._hovered_origin_key = None
+        self.update()
 
     def _rebuild_bounds(
         self,
@@ -117,10 +145,36 @@ class PcbPreviewWidget(QWidget):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            selected_key = self._origin_at_position(event.position())
+            if selected_key is not None:
+                selected_point = self._origin_hotspot_points().get(selected_key)
+                if selected_point is None:
+                    return
+                self._origin_marker_point = selected_point
+                self._hovered_origin_key = selected_key
+                self._origin_hotspots_visible = True
+                self.origin_selected.emit(selected_point[0], selected_point[1])
+                self.update()
+                return
             self._dragging = True
             self._last_pos = event.position()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        cursor_world_position = self._screen_to_world(event.position())
+        if cursor_world_position != self._cursor_world_position:
+            self._cursor_world_position = cursor_world_position
+            self.update()
+        if self._origin_selection_enabled and self._origin_marker_bounds is not None:
+            hovered_origin = self._origin_at_position(event.position())
+            cursor_within_board = self._screen_position_within_board(event.position())
+            hotspots_visible = cursor_within_board or hovered_origin is not None
+            if (
+                hovered_origin != self._hovered_origin_key
+                or hotspots_visible != self._origin_hotspots_visible
+            ):
+                self._hovered_origin_key = hovered_origin
+                self._origin_hotspots_visible = hotspots_visible
+                self.update()
         if not self._dragging:
             return
         delta = event.position() - self._last_pos
@@ -132,6 +186,14 @@ class PcbPreviewWidget(QWidget):
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._dragging = False
+
+    def leaveEvent(self, event) -> None:
+        super().leaveEvent(event)
+        self._cursor_world_position = None
+        if self._origin_hotspots_visible or self._hovered_origin_key is not None:
+            self._origin_hotspots_visible = False
+            self._hovered_origin_key = None
+            self.update()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         delta = event.angleDelta().y()
@@ -206,6 +268,9 @@ class PcbPreviewWidget(QWidget):
         painter.setPen(QPen(self._theme.named_color("pcb_preview_alignment"), 1.8))
         for hole in self._alignment_holes:
             self._draw_alignment_hole(painter, hole)
+
+        self._draw_origin_hotspots(painter)
+        self._draw_origin_marker(painter)
 
     def _draw_gerber(
         self,
@@ -328,6 +393,57 @@ class PcbPreviewWidget(QWidget):
         )
         painter.restore()
 
+    def _draw_origin_marker(self, painter: QPainter) -> None:
+        if self._origin_marker_point is None:
+            return
+        x_pos, y_pos = self._origin_marker_point
+        screen_center = self._world_to_screen(x_pos, y_pos)
+        radius = 10.0
+        painter.save()
+        pen = QPen(self._theme.named_color("pcb_preview_alignment"), 2.0)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(screen_center, radius, radius)
+        painter.drawLine(
+            QPointF(screen_center.x() - (radius + 6.0), screen_center.y()),
+            QPointF(screen_center.x() + (radius + 6.0), screen_center.y()),
+        )
+        painter.drawLine(
+            QPointF(screen_center.x(), screen_center.y() - (radius + 6.0)),
+            QPointF(screen_center.x(), screen_center.y() + (radius + 6.0)),
+        )
+        painter.drawText(
+            QPointF(screen_center.x() + radius + 10.0, screen_center.y() - radius - 4.0),
+            "(0, 0)",
+        )
+        painter.restore()
+
+    def _draw_origin_hotspots(self, painter: QPainter) -> None:
+        if (
+            not self._origin_selection_enabled
+            or not self._origin_hotspots_visible
+            or self._origin_marker_bounds is None
+        ):
+            return
+        for location, screen_center in self._origin_hotspot_screen_points().items():
+            point = self._origin_hotspot_points().get(location)
+            is_selected = point == self._origin_marker_point
+            is_hovered = location == self._hovered_origin_key
+            radius = 8.0 if is_hovered else 6.0
+            painter.save()
+            pen = QPen(self._theme.named_color("pcb_preview_alignment"), 2.0)
+            painter.setPen(pen)
+            fill = QColor(self._theme.named_color("pcb_preview_alignment"))
+            fill.setAlpha(220 if (is_selected or is_hovered) else 90)
+            painter.setBrush(fill)
+            painter.drawEllipse(screen_center, radius, radius)
+            if is_hovered:
+                painter.drawText(
+                    QPointF(screen_center.x() + 10.0, screen_center.y() - 10.0),
+                    format_origin_point(point),
+                )
+            painter.restore()
+
     def _draw_world_line(
         self,
         painter: QPainter,
@@ -339,12 +455,59 @@ class PcbPreviewWidget(QWidget):
             self._world_to_screen(end[0], end[1]),
         )
 
+    def _origin_hotspot_points(self) -> dict[str, tuple[float, float]]:
+        if self._origin_marker_bounds is None:
+            return {}
+        return dict(self._origin_hotspot_points_override)
+
+    def _origin_hotspot_screen_points(self) -> dict[str, QPointF]:
+        return {
+            location: self._world_to_screen(point[0], point[1])
+            for location, point in self._origin_hotspot_points().items()
+        }
+
+    def _origin_at_position(self, position: QPointF) -> str | None:
+        if not self._origin_selection_enabled or self._origin_marker_bounds is None:
+            return None
+        for location, screen_center in self._origin_hotspot_screen_points().items():
+            if self._distance(position, screen_center) <= 14.0:
+                return location
+        return None
+
+    def _screen_position_within_board(self, position: QPointF) -> bool:
+        if self._origin_marker_bounds is None:
+            return False
+        x_min, x_max, y_min, y_max = self._origin_marker_bounds
+        left = self._world_to_screen(x_min, y_min).x()
+        right = self._world_to_screen(x_max, y_min).x()
+        top = self._world_to_screen(x_min, y_max).y()
+        bottom = self._world_to_screen(x_min, y_min).y()
+        min_x = min(left, right)
+        max_x = max(left, right)
+        min_y = min(top, bottom)
+        max_y = max(top, bottom)
+        return min_x <= position.x() <= max_x and min_y <= position.y() <= max_y
+
+    def _distance(self, first: QPointF, second: QPointF) -> float:
+        delta_x = first.x() - second.x()
+        delta_y = first.y() - second.y()
+        return math.hypot(delta_x, delta_y)
+
     def _world_to_screen(self, x: float, y: float) -> QPointF:
         center_x = self._bounds.center_x
         center_y = self._bounds.center_y
         screen_x = (x - center_x) * self._zoom + (self.width() * 0.5) + self._pan_x
         screen_y = (center_y - y) * self._zoom + (self.height() * 0.5) + self._pan_y
         return QPointF(screen_x, screen_y)
+
+    def _screen_to_world(self, position: QPointF) -> tuple[float, float] | None:
+        if self._bounds.is_empty or self._zoom == 0:
+            return None
+        center_x = self._bounds.center_x
+        center_y = self._bounds.center_y
+        world_x = ((position.x() - (self.width() * 0.5) - self._pan_x) / self._zoom) + center_x
+        world_y = center_y - ((position.y() - (self.height() * 0.5) - self._pan_y) / self._zoom)
+        return world_x, world_y
 
     def _draw_overlay(self, painter: QPainter) -> None:
         painter.setPen(self._theme.named_color("pcb_preview_text"))
@@ -363,9 +526,16 @@ class PcbPreviewWidget(QWidget):
         painter.drawText(
             16,
             72,
-            f"Bounds: X {self._bounds.x_min:.2f}..{self._bounds.x_max:.2f}   "
-            f"Y {self._bounds.y_min:.2f}..{self._bounds.y_max:.2f}",
+            f"Bounds: X {self._bounds.x_min:.2f}..{self._bounds.x_max:.2f} mm   "
+            f"Y {self._bounds.y_min:.2f}..{self._bounds.y_max:.2f} mm",
         )
+        if self._cursor_world_position is not None:
+            painter.drawText(
+                16,
+                94,
+                f"Cursor: X {self._cursor_world_position[0]:.3f} mm   "
+                f"Y {self._cursor_world_position[1]:.3f} mm",
+            )
 
     def _include_gerber_bounds(self, gerber: ImportedGerberFile) -> None:
         if self._should_duplicate_edges_gerber(gerber):

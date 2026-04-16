@@ -41,6 +41,7 @@ from .gerber_file_parser import GerberFileParser
 from .imported_drill_file import ImportedDrillFile
 from .imported_gerber_file import ImportedGerberFile
 from .mirror_preview_widget import MirrorPreviewWidget
+from .nc_origin import format_origin_point, legacy_origin_point_for_bounds
 from .pcb_preview_widget import PcbPreviewWidget
 from .pcb_project import PcbProject
 from .theme import AppTheme, load_theme
@@ -79,13 +80,14 @@ class MainWindow(QMainWindow):
         "Drill Import",
         "Tool Selection",
         "Alignment Holes",
+        "Origin",
         "Front Isolation",
         "Back Isolation",
         "Drilling",
         "Edge Cuts",
         "NC Preview",
     ]
-    IMPLEMENTED_STEP_COUNT = 10
+    IMPLEMENTED_STEP_COUNT = 11
 
     def __init__(
         self,
@@ -113,6 +115,7 @@ class MainWindow(QMainWindow):
         self._last_sidebar_page_index: int | None = None
 
         self.preview = PcbPreviewWidget(self.theme)
+        self.preview.origin_selected.connect(self._set_origin_location)
         self.toolpath_viewer = ToolpathViewer(self.theme)
         self.preview_stack = QStackedWidget()
         self.preview_stack.addWidget(self.preview)
@@ -237,9 +240,10 @@ class MainWindow(QMainWindow):
         self.page_stack.addWidget(self._build_drill_page())
         self.page_stack.addWidget(self._build_tool_selection_page())
         self.page_stack.addWidget(self._build_alignment_holes_page())
+        self.page_stack.addWidget(self._build_origin_page())
         self.page_stack.addWidget(
             self._build_operation_page(
-                "Step 6: Front Isolation",
+                "Step 7: Front Isolation",
                 "Generate front copper isolation G-code from the assigned front copper layer.",
                 "Generate Front Isolation",
                 "_generate_front_isolation",
@@ -248,7 +252,7 @@ class MainWindow(QMainWindow):
         )
         self.page_stack.addWidget(
             self._build_operation_page(
-                "Step 7: Back Isolation",
+                "Step 8: Back Isolation",
                 "Generate back copper isolation G-code from the assigned back copper layer.",
                 "Generate Back Isolation",
                 "_generate_back_isolation",
@@ -257,7 +261,7 @@ class MainWindow(QMainWindow):
         )
         self.page_stack.addWidget(
             self._build_operation_page(
-                "Step 8: Drilling",
+                "Step 9: Drilling",
                 "Generate drilling G-code for imported drill holes and optional alignment holes.",
                 "Generate Drill Operations",
                 "_generate_drilling_operations",
@@ -266,7 +270,7 @@ class MainWindow(QMainWindow):
         )
         self.page_stack.addWidget(
             self._build_operation_page(
-                "Step 9: Edge Cuts",
+                "Step 10: Edge Cuts",
                 "Generate edge cut G-code from the assigned board outline.",
                 "Generate Edge Cuts",
                 "_generate_edge_cuts",
@@ -654,6 +658,46 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.alignment_holes_hint)
         return page
 
+    def _build_origin_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        heading = QLabel("Step 6: Origin")
+        heading.setObjectName("pageHeading")
+        body = QLabel(
+            "Hover over the board preview to reveal selectable origin points from "
+            "edge vertices and unmatched line endpoints. Click any point to set "
+            "the NC work origin for generated toolpaths."
+        )
+        body.setWordWrap(True)
+
+        card = QFrame()
+        card.setFrameShape(QFrame.Shape.StyledPanel)
+        card.setObjectName("sidebarPanelCard")
+        self._sidebar_panels.append(card)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(14, 14, 14, 14)
+        card_layout.setSpacing(10)
+
+        self.origin_selection_value = QLabel()
+        self.origin_selection_value.setWordWrap(True)
+        card_layout.addWidget(self.origin_selection_value)
+
+        self.origin_hint = QLabel(
+            "The preview shows an overlay view only on this step. Hover over the board to reveal clickable origin points."
+        )
+        self.origin_hint.setWordWrap(True)
+        self._apply_muted_text_style(self.origin_hint)
+
+        layout.addWidget(heading)
+        layout.addWidget(body)
+        layout.addWidget(card)
+        layout.addWidget(self.origin_hint)
+        layout.addStretch(1)
+        return page
+
     def _build_operation_page(
         self,
         heading_text: str,
@@ -700,7 +744,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 10: NC Preview")
+        heading = QLabel("Step 11: NC Preview")
         heading.setObjectName("pageHeading")
         body = QLabel(
             "Select any generated NC file to inspect it in the 3D toolpath viewer."
@@ -1417,6 +1461,7 @@ class MainWindow(QMainWindow):
                 gerber,
                 output_name="front-isolation.nc",
                 tool_tip_diameter=tool.numeric_parameter("tip_diameter", tool.numeric_parameter("diameter", 0.2)),
+                origin_point=self._current_origin_point_required(),
             )
         except Exception as exc:
             QMessageBox.critical(self, "Front isolation failed", str(exc))
@@ -1443,6 +1488,7 @@ class MainWindow(QMainWindow):
                 tool_tip_diameter=tool.numeric_parameter("tip_diameter", tool.numeric_parameter("diameter", 0.2)),
                 mirror_edge=self.project.mirror_flip_edge,
                 board_bounds=bounds,
+                origin_point=self._current_origin_point_required(),
             )
         except Exception as exc:
             QMessageBox.critical(self, "Back isolation failed", str(exc))
@@ -1476,6 +1522,7 @@ class MainWindow(QMainWindow):
                 output_name="drilling.nc",
                 drill_diameter=tool.numeric_parameter("diameter", 0.1),
                 mill_diameter=mill_tool.numeric_parameter("diameter", 0.1),
+                origin_point=self._current_origin_point_required(),
             )
         except Exception as exc:
             QMessageBox.critical(self, "Drilling failed", str(exc))
@@ -1496,6 +1543,7 @@ class MainWindow(QMainWindow):
                 gerber.outline,
                 output_name="edge-cuts.nc",
                 mill_diameter=mill_tool.numeric_parameter("diameter", 0.1),
+                origin_point=self._current_origin_point_required(),
             )
         except Exception as exc:
             QMessageBox.critical(self, "Edge cut generation failed", str(exc))
@@ -1540,14 +1588,16 @@ class MainWindow(QMainWindow):
         if index == 4:
             return True
         if index == 5:
-            return self._operation_optional_or_generated("front_isolation", "front_copper")
+            return self._current_origin_point() is not None
         if index == 6:
-            return self._operation_optional_or_generated("back_isolation", "back_copper")
+            return self._operation_optional_or_generated("front_isolation", "front_copper")
         if index == 7:
-            return self._drilling_optional_or_generated()
+            return self._operation_optional_or_generated("back_isolation", "back_copper")
         if index == 8:
-            return self._operation_optional_or_generated("edge_cuts", "edges")
+            return self._drilling_optional_or_generated()
         if index == 9:
+            return self._operation_optional_or_generated("edge_cuts", "edges")
+        if index == 10:
             return bool(self.project.generated_outputs)
         return False
 
@@ -1570,12 +1620,14 @@ class MainWindow(QMainWindow):
         if index == 3:
             return "Load tools.yaml and select a drilling tool, a milling tool, and a V-bit."
         if index == 5:
-            return "Generate the front isolation NC file before moving to the next step."
+            return "Import usable board geometry, then choose the NC origin before moving to the generation steps."
         if index == 6:
-            return "Generate the back isolation NC file before moving to the next step."
+            return "Generate the front isolation NC file before moving to the next step."
         if index == 7:
-            return "Generate the drilling NC file before moving to the next step."
+            return "Generate the back isolation NC file before moving to the next step."
         if index == 8:
+            return "Generate the drilling NC file before moving to the next step."
+        if index == 9:
             return "Generate the edge cut NC file before moving to the next step."
         return "Complete the current wizard step before continuing."
 
@@ -1614,6 +1666,7 @@ class MainWindow(QMainWindow):
         self._sync_layer_assignment_page()
         self._sync_mirror_setup_page()
         self._sync_alignment_holes_page()
+        self._sync_origin_page()
         self._sync_generated_outputs()
         self.preview.load_project_geometry(
             self._active_gerbers(),
@@ -1623,15 +1676,41 @@ class MainWindow(QMainWindow):
             reference_drill_files=self.imported_drills,
         )
         self.preview.set_mirror_setup(
-            back_copper_path=self.project.layer_assignments["back_copper"],
-            edges_path=self.project.layer_assignments["edges"],
+            back_copper_path=(
+                None
+                if current == PcbProject.STEP_ORIGIN
+                else self.project.layer_assignments["back_copper"]
+            ),
+            edges_path=(
+                None
+                if current == PcbProject.STEP_ORIGIN
+                else self.project.layer_assignments["edges"]
+            ),
             board_bounds=self._reference_board_bounds(),
-            mirror_edge=self.project.mirror_flip_edge,
-            preview_mode=self.project.mirror_preview_mode,
+            mirror_edge=(
+                ""
+                if current == PcbProject.STEP_ORIGIN
+                else self.project.mirror_flip_edge
+            ),
+            preview_mode=(
+                "overlay"
+                if current == PcbProject.STEP_ORIGIN
+                else self.project.mirror_preview_mode
+            ),
+        )
+        self.preview.set_origin_marker(
+            self._reference_board_bounds() if current == PcbProject.STEP_ORIGIN else None,
+            self._current_origin_point() if current == PcbProject.STEP_ORIGIN else None,
+            hotspot_points=(
+                self._origin_hotspot_points() if current == PcbProject.STEP_ORIGIN else None
+            ),
+            selection_enabled=current == PcbProject.STEP_ORIGIN,
         )
         showing_toolpath = current >= PcbProject.STEP_FRONT_ISOLATION
         self.preview_stack.setCurrentIndex(1 if showing_toolpath else 0)
-        self.preview_toolbar.setVisible(not showing_toolpath)
+        self.preview_toolbar.setVisible(
+            (not showing_toolpath) and current != PcbProject.STEP_ORIGIN
+        )
         self._update_window_title()
         if page_changed:
             QTimer.singleShot(
@@ -1706,14 +1785,16 @@ class MainWindow(QMainWindow):
         if self.project.current_step_index == 4:
             return "Add optional alignment holes and confirm they appear outside the board in preview."
         if self.project.current_step_index == 5:
-            return "Generate front copper isolation if a front copper layer is assigned."
+            return "Choose the NC work origin. The preview is forced to overlay so the origin can be placed on the board bounds."
         if self.project.current_step_index == 6:
-            return "Generate back copper isolation if a back copper layer is assigned."
+            return "Generate front copper isolation if a front copper layer is assigned."
         if self.project.current_step_index == 7:
-            return "Generate drilling for imported drill files and alignment holes."
+            return "Generate back copper isolation if a back copper layer is assigned."
         if self.project.current_step_index == 8:
-            return "Generate edge cut operations if an outline is assigned."
+            return "Generate drilling for imported drill files and alignment holes."
         if self.project.current_step_index == 9:
+            return "Generate edge cut operations if an outline is assigned."
+        if self.project.current_step_index == 10:
             return "Select a generated NC file to inspect it in the 3D preview."
         return "Stage 4 of the wizard is active."
 
@@ -1963,9 +2044,23 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(
                 f"{hole.edge} | along {hole.offset_along_edge:.3f} mm | "
                 f"out {hole.offset_from_edge:.3f} mm | dia {hole.diameter:.3f} mm | "
-                f"at ({position[0]:.3f}, {position[1]:.3f})"
+                f"at ({position[0]:.3f} mm, {position[1]:.3f} mm)"
             )
             self.alignment_hole_list.addItem(item)
+
+    def _sync_origin_page(self) -> None:
+        has_bounds = self._reference_board_bounds() is not None
+        selected_origin = self._current_origin_point()
+        self.origin_selection_value.setText(
+            f"Current origin: {format_origin_point(selected_origin)}"
+            if has_bounds and selected_origin is not None
+            else "Current origin: unavailable until board bounds are available"
+        )
+        self.origin_hint.setText(
+            "The preview shows an overlay view only on this step. Hover over the board to reveal clickable origin points, then click one to set XY work zero."
+            if has_bounds
+            else "Import board geometry first so the origin marker can be placed on the board bounds."
+        )
 
     def _alignment_hole_positions(self) -> list[tuple[float, float, float]]:
         reference_bounds = self._reference_board_bounds()
@@ -2019,6 +2114,121 @@ class MainWindow(QMainWindow):
             return None
         return bounds[0], bounds[1], bounds[2], bounds[3]
 
+    def _reference_board_bounds_required(self) -> tuple[float, float, float, float]:
+        bounds = self._reference_board_bounds()
+        if bounds is None:
+            raise ValueError("Board bounds are not available.")
+        return bounds
+
+    def _current_origin_point(self) -> tuple[float, float] | None:
+        if (
+            self.config.default_nc_origin_x is not None
+            and self.config.default_nc_origin_y is not None
+        ):
+            return (
+                self.config.default_nc_origin_x,
+                self.config.default_nc_origin_y,
+            )
+        bounds = self._reference_board_bounds()
+        if bounds is None:
+            return None
+        return legacy_origin_point_for_bounds(bounds, self.config.default_nc_origin)
+
+    def _current_origin_point_required(self) -> tuple[float, float]:
+        point = self._current_origin_point()
+        if point is None:
+            raise ValueError("NC origin point is not available.")
+        return point
+
+    def _origin_hotspot_points(self) -> dict[str, tuple[float, float]]:
+        points = {
+            "center": (
+                (bounds[0] + bounds[1]) * 0.5,
+                (bounds[2] + bounds[3]) * 0.5,
+            )
+            for bounds in [self._reference_board_bounds()]
+            if bounds is not None
+        }
+        outline_points = self._origin_reference_points()
+        points.update({
+            f"vertex_{index}": point
+            for index, point in enumerate(outline_points)
+        })
+        return points
+
+    def _origin_reference_points(self) -> list[tuple[float, float]]:
+        edge_file = self._assigned_gerber("edges")
+        candidate_files = []
+        if edge_file is not None:
+            candidate_files.append(edge_file)
+        candidate_files.extend(
+            gerber for gerber in self._active_gerbers() if gerber is not edge_file
+        )
+        for gerber in candidate_files:
+            reference_points = self._gerber_origin_points(gerber)
+            if reference_points:
+                return reference_points
+        return []
+
+    def _gerber_origin_points(
+        self,
+        gerber: ImportedGerberFile,
+    ) -> list[tuple[float, float]]:
+        segment_points = self._origin_points_from_segments(gerber.segments)
+        if segment_points:
+            return segment_points
+
+        outline = gerber.outline
+        if len(outline) < 2:
+            return []
+        raw_points = outline[:-1] if outline[0] == outline[-1] else outline
+        unique_points: list[tuple[float, float]] = []
+        for point in raw_points:
+            if point not in unique_points:
+                unique_points.append(point)
+        return unique_points
+
+    def _origin_points_from_segments(
+        self,
+        segments: list[tuple[tuple[float, float], tuple[float, float]]],
+    ) -> list[tuple[float, float]]:
+        adjacency: dict[tuple[float, float], list[tuple[float, float]]] = {}
+        ordered_points: list[tuple[float, float]] = []
+        for start, end in segments:
+            if start == end:
+                continue
+            if start not in adjacency:
+                adjacency[start] = []
+                ordered_points.append(start)
+            if end not in adjacency:
+                adjacency[end] = []
+                ordered_points.append(end)
+            adjacency[start].append(end)
+            adjacency[end].append(start)
+
+        reference_points: list[tuple[float, float]] = []
+        for point in ordered_points:
+            neighbors = adjacency.get(point, [])
+            if not neighbors:
+                continue
+            if len(neighbors) != 2:
+                reference_points.append(point)
+                continue
+            if self._orientation(neighbors[0], point, neighbors[1]) != 0:
+                reference_points.append(point)
+        return reference_points
+
+    def _orientation(
+        self,
+        p: tuple[float, float],
+        q: tuple[float, float],
+        r: tuple[float, float],
+    ) -> int:
+        value = ((q[1] - p[1]) * (r[0] - q[0])) - ((q[0] - p[0]) * (r[1] - q[1]))
+        if abs(value) < 1e-9:
+            return 0
+        return 1 if value > 0 else 2
+
     def _assigned_gerber(self, role: str) -> ImportedGerberFile | None:
         assigned_path = self.project.layer_assignments.get(role)
         if assigned_path is None:
@@ -2070,6 +2280,23 @@ class MainWindow(QMainWindow):
             if tool.identifier == selected_id:
                 return tool
         return None
+
+    def _set_origin_location(self, x_pos: float, y_pos: float) -> None:
+        current = self._current_origin_point()
+        next_point = (x_pos, y_pos)
+        if current == next_point:
+            return
+        self.config.default_nc_origin_x = x_pos
+        self.config.default_nc_origin_y = y_pos
+        self._save_config(self.config)
+        self.project.mark_origin_changed()
+        self.toolpath_viewer.load_document(None)
+        self._mark_project_dirty()
+        self.statusBar().showMessage(
+            f"Default NC origin set to {format_origin_point(next_point)}",
+            3000,
+        )
+        self._sync_ui()
 
     def _cam_generator(self):
         if self.project.project_path is None:
@@ -2131,6 +2358,9 @@ class MainWindow(QMainWindow):
             if current_key == key:
                 self.generated_output_list.setCurrentItem(item)
         self.generated_output_list.blockSignals(False)
+        if self.generated_output_list.count() == 0:
+            self.toolpath_viewer.load_document(None)
+            return
         if self.generated_output_list.count() > 0 and self.generated_output_list.currentRow() < 0:
             self.generated_output_list.setCurrentRow(0)
 

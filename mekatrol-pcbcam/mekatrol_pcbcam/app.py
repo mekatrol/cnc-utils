@@ -33,6 +33,7 @@ from .diagnostics import InMemoryLogHandler, get_log_tracker
 from .file_locations import FileLocations
 from .logging_config import LoggingConfig
 from .main_window import MainWindow
+from .nc_origin import DEFAULT_NC_ORIGIN, normalize_nc_origin
 from .splash_screen import SplashScreen
 from .theme import (
     DEFAULT_THEME_FILE_NAME,
@@ -192,6 +193,33 @@ def _parse_optional_int(
                 warnings,
                 field_name,
                 f"could not parse integer from {_describe_value(value)}",
+                None,
+            )
+        return None
+
+
+def _parse_optional_float(
+    value: object, *, field_name: str | None = None, warnings: list[str] | None = None
+) -> float | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        if field_name is not None and warnings is not None:
+            _append_config_warning(
+                warnings,
+                field_name,
+                f"expected a float or null but got boolean {_describe_value(value)}",
+                None,
+            )
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        if field_name is not None and warnings is not None:
+            _append_config_warning(
+                warnings,
+                field_name,
+                f"could not parse float from {_describe_value(value)}",
                 None,
             )
         return None
@@ -445,6 +473,24 @@ def _load_config() -> tuple[AppConfig, list[str]]:
             field_name="app.theme_file",
             warnings=warnings,
         ),
+        default_nc_origin=normalize_nc_origin(
+            _parse_string(
+                app_data.get("default_nc_origin"),
+                DEFAULT_NC_ORIGIN,
+                field_name="app.default_nc_origin",
+                warnings=warnings,
+            )
+        ),
+        default_nc_origin_x=_parse_optional_float(
+            app_data.get("default_nc_origin_x"),
+            field_name="app.default_nc_origin_x",
+            warnings=warnings,
+        ),
+        default_nc_origin_y=_parse_optional_float(
+            app_data.get("default_nc_origin_y"),
+            field_name="app.default_nc_origin_y",
+            warnings=warnings,
+        ),
         logging=LoggingConfig(
             level=logging_level,
             path=_parse_log_path(logging_data.get("path"), warnings=warnings),
@@ -553,6 +599,12 @@ def _save_config(config: AppConfig) -> None:
             f"  splash_minimum_visible_ms: {config.splash_minimum_visible_ms}",
             "  # Theme file to load from the themes subfolder in the config directory.",
             f"  theme_file: {_yaml_scalar(config.theme_file)}",
+            "  # Default NC work origin used by the Origin wizard step.",
+            f"  default_nc_origin: {_yaml_scalar(config.default_nc_origin)}",
+            "  # Saved X coordinate for the preferred NC origin. Null means use the legacy preset until a point is selected.",
+            f"  default_nc_origin_x: {_yaml_scalar(config.default_nc_origin_x)}",
+            "  # Saved Y coordinate for the preferred NC origin. Null means use the legacy preset until a point is selected.",
+            f"  default_nc_origin_y: {_yaml_scalar(config.default_nc_origin_y)}",
             "",
             "logging:",
             "  # Default log level for the mekatrol_pcbcam application loggers.",

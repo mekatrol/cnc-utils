@@ -7,6 +7,8 @@ from shapely import affinity
 from shapely.geometry import LineString, MultiLineString, Point, Polygon, box
 from shapely.ops import unary_union
 
+from .nc_origin import format_origin_point
+
 
 class CamGenerator:
     def __init__(self, output_directory: Path) -> None:
@@ -28,16 +30,24 @@ class CamGenerator:
         *,
         output_name: str,
         tool_tip_diameter: float,
+        origin_point: tuple[float, float],
     ) -> Path:
         geometry = self._combined_copper_geometry(gerber)
         paths = self._isolation_paths(geometry, tool_tip_diameter)
+        translated_paths = self._translate_paths_to_origin(
+            paths,
+            origin_point,
+        )
         output_path = self.output_directory / output_name
         self._write_line_operation(
             output_path,
-            paths,
+            translated_paths,
             cut_depth=self.isolation_depth,
             spindle_speed=12000,
-            tool_comment=f"V-bit tip {tool_tip_diameter:.3f} mm",
+            tool_comment=(
+                f"V-bit tip {tool_tip_diameter:.3f} mm, "
+                f"origin {format_origin_point(origin_point)}"
+            ),
         )
         return output_path
 
@@ -49,17 +59,25 @@ class CamGenerator:
         tool_tip_diameter: float,
         mirror_edge: str,
         board_bounds: tuple[float, float, float, float],
+        origin_point: tuple[float, float],
     ) -> Path:
         geometry = self._combined_copper_geometry(gerber)
         mirrored = self._mirror_geometry(geometry, mirror_edge, board_bounds)
         paths = self._isolation_paths(mirrored, tool_tip_diameter)
+        translated_paths = self._translate_paths_to_origin(
+            paths,
+            origin_point,
+        )
         output_path = self.output_directory / output_name
-        tool_comment = f"V-bit tip {tool_tip_diameter:.3f} mm"
+        tool_comment = (
+            f"V-bit tip {tool_tip_diameter:.3f} mm, "
+            f"origin {format_origin_point(origin_point)}"
+        )
         if mirror_edge:
             tool_comment += f" mirrored on {mirror_edge}"
         self._write_line_operation(
             output_path,
-            paths,
+            translated_paths,
             cut_depth=self.isolation_depth,
             spindle_speed=12000,
             tool_comment=tool_comment,
@@ -73,15 +91,21 @@ class CamGenerator:
         output_name: str,
         drill_diameter: float,
         mill_diameter: float,
+        origin_point: tuple[float, float],
     ) -> Path:
         output_path = self.output_directory / output_name
         final_hole_depth = -(self.board_thickness + self.breakthrough_depth)
+        origin_x, origin_y = origin_point
+        translated_holes = [
+            (x - origin_x, y - origin_y, diameter) for x, y, diameter in holes
+        ]
         with output_path.open("w", encoding="utf-8") as gcode_file:
             self._write_header(gcode_file)
             gcode_file.write(
-                f"(load drill {drill_diameter:.3f} mm)\nT1 M06\nS12000 M3\n"
+                f"(load drill {drill_diameter:.3f} mm, "
+                f"origin {format_origin_point(origin_point)})\nT1 M06\nS12000 M3\n"
             )
-            for x, y, target_diameter in holes:
+            for x, y, target_diameter in translated_holes:
                 if target_diameter + 1e-9 < drill_diameter:
                     raise ValueError(
                         f"Hole diameter {target_diameter:.3f} mm is smaller than selected drill {drill_diameter:.3f} mm."
@@ -96,7 +120,7 @@ class CamGenerator:
 
             holes_to_enlarge = [
                 (x, y, target_diameter)
-                for x, y, target_diameter in holes
+                for x, y, target_diameter in translated_holes
                 if target_diameter > drill_diameter + 1e-9
             ]
             if holes_to_enlarge:
@@ -123,20 +147,26 @@ class CamGenerator:
         *,
         output_name: str,
         mill_diameter: float,
+        origin_point: tuple[float, float],
     ) -> Path:
         output_path = self.output_directory / output_name
         final_depth = -(self.board_thickness + self.breakthrough_depth)
+        translated_outline = self._translate_points_to_origin(
+            outline,
+            origin_point,
+        )
         with output_path.open("w", encoding="utf-8") as gcode_file:
             self._write_header(gcode_file)
             gcode_file.write(
-                f"(load square end mill {mill_diameter:.3f} mm)\nT1 M06\nS12000 M3\n"
+                f"(load square end mill {mill_diameter:.3f} mm, "
+                f"origin {format_origin_point(origin_point)})\nT1 M06\nS12000 M3\n"
             )
             current_depth = 0.0
             while current_depth > final_depth:
                 current_depth = max(current_depth - self.edge_depth_step, final_depth)
                 self._write_polyline(
                     gcode_file,
-                    outline,
+                    translated_outline,
                     cut_depth=current_depth,
                 )
             gcode_file.write("M5\n")
@@ -200,6 +230,26 @@ class CamGenerator:
         if mirror_edge == "bottom":
             return affinity.scale(geometry, xfact=1, yfact=-1, origin=(0, y_min))
         return geometry
+
+    def _translate_paths_to_origin(
+        self,
+        paths: list[LineString],
+        origin_point: tuple[float, float],
+    ) -> list[LineString]:
+        origin_x, origin_y = origin_point
+        translated = [
+            affinity.translate(path, xoff=-origin_x, yoff=-origin_y) for path in paths
+        ]
+        return translated
+
+    def _translate_points_to_origin(
+        self,
+        points: list[tuple[float, float]],
+        origin_point: tuple[float, float],
+    ) -> list[tuple[float, float]]:
+        origin_x, origin_y = origin_point
+        translated = [(x - origin_x, y - origin_y) for x, y in points]
+        return translated
 
     def _write_header(self, gcode_file) -> None:
         gcode_file.write("%\nG21\nG90\n")

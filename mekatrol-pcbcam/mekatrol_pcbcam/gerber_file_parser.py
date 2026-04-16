@@ -42,6 +42,7 @@ class GerberFileParser:
             path=file_path,
             display_name=file_path.name,
             traces=self._traces,
+            segments=list(self._segments),
             pads=self._pads,
             regions=self._regions,
             outline=outline,
