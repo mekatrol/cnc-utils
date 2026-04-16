@@ -214,8 +214,16 @@ class PcbPreviewWidget(QWidget):
         delta = event.angleDelta().y()
         if delta == 0:
             return
+        cursor_position = event.position()
+        anchor_world_position = self._screen_to_world(cursor_position)
         factor = 1.12 if delta > 0 else 1.0 / 1.12
         self._zoom = max(0.1, min(1000.0, self._zoom * factor))
+        if anchor_world_position is not None:
+            anchor_screen_position = self._world_to_screen(
+                anchor_world_position[0], anchor_world_position[1]
+            )
+            self._pan_x += cursor_position.x() - anchor_screen_position.x()
+            self._pan_y += cursor_position.y() - anchor_screen_position.y()
         self.update()
 
     def resizeEvent(self, event) -> None:

@@ -143,8 +143,15 @@ class ToolpathViewer(QOpenGLWidget):
         delta = event.angleDelta().y()
         if delta == 0:
             return
+        cursor_position = event.position()
+        center_x = self.width() * 0.5
+        center_y = self.height() * 0.5
+        offset_x = cursor_position.x() - center_x - self.camera.pan_x
+        offset_y = cursor_position.y() - center_y - self.camera.pan_y
         factor = 1.12 if delta > 0 else 1.0 / 1.12
         self.camera.zoom = max(0.0005, min(1e6, self.camera.zoom * factor))
+        self.camera.pan_x = cursor_position.x() - center_x - (offset_x * factor)
+        self.camera.pan_y = cursor_position.y() - center_y - (offset_y * factor)
         self.update()
 
     def resizeEvent(self, event) -> None:
