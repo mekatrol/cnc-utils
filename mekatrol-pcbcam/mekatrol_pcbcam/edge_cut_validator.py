@@ -25,10 +25,9 @@ class EdgeCutValidationResult:
 
 
 def validate_edge_segments(segments: list[LineSegment]) -> EdgeCutValidationResult:
-    from shapely.geometry import LineString
-    from shapely.ops import polygonize_full, unary_union
-
     filtered_segments = [segment for segment in segments if segment[0] != segment[1]]
+    filtered_segments = _unique_segments(filtered_segments)
+    filtered_segments = _collapse_colinear_segments(filtered_segments)
     if not filtered_segments:
         return EdgeCutValidationResult(
             issues=["The selected edge cut layer does not contain any usable edge segments."]
@@ -42,32 +41,12 @@ def validate_edge_segments(segments: list[LineSegment]) -> EdgeCutValidationResu
         error_segments.extend(intersecting_segments)
         issues.append("Edge segments intersect. Polygons must not cross or overlap.")
 
-    linework = unary_union([LineString([start, end]) for start, end in filtered_segments])
-    polygons_geom, cuts_geom, dangles_geom, invalid_geom = polygonize_full(linework)
-
-    polygons = _extract_polygon_boundaries(polygons_geom)
+    polygons, continuity_error_segments = _build_closed_loops(filtered_segments)
+    if continuity_error_segments:
+        error_segments.extend(continuity_error_segments)
+        issues.append("Each polygon must have a continuous boundary with no dangling edges.")
     if not polygons:
         issues.append("Edge segments do not form any closed polygons.")
-
-    dangle_segments = _extract_segments(dangles_geom)
-    if dangle_segments:
-        error_segments.extend(dangle_segments)
-        issues.append("Each polygon must have a continuous boundary with no dangling edges.")
-
-    cut_segments = _extract_segments(cuts_geom)
-    if cut_segments:
-        error_segments.extend(cut_segments)
-        issues.append("All edge segments must belong to the polygon boundaries.")
-
-    invalid_segments = _extract_segments(invalid_geom)
-    if invalid_segments:
-        error_segments.extend(invalid_segments)
-        issues.append("Some closed edge rings are invalid and cannot be used as board outlines.")
-
-    polygon_overlap_segments = _find_polygon_overlap_segments(polygons_geom)
-    if polygon_overlap_segments:
-        error_segments.extend(polygon_overlap_segments)
-        issues.append("Polygon boundaries must not intersect or touch each other.")
 
     return EdgeCutValidationResult(
         polygons=polygons,
@@ -127,45 +106,104 @@ def _point_on_segment(point: Point, segment: LineSegment) -> bool:
     )
 
 
-def _extract_polygon_boundaries(geometry) -> list[Polygon]:
+def _build_closed_loops(segments: list[LineSegment]) -> tuple[list[Polygon], list[LineSegment]]:
+    adjacency: dict[Point, list[tuple[Point, int]]] = {}
+    for index, (start, end) in enumerate(segments):
+        adjacency.setdefault(start, []).append((end, index))
+        adjacency.setdefault(end, []).append((start, index))
+
+    error_segment_indices: set[int] = set()
+    for point, neighbors in adjacency.items():
+        if len(neighbors) != 2:
+            for _, segment_index in neighbors:
+                error_segment_indices.add(segment_index)
+
+    if error_segment_indices:
+        return [], [segments[index] for index in sorted(error_segment_indices)]
+
     polygons: list[Polygon] = []
-    for polygon in getattr(geometry, "geoms", []):
-        polygons.append([(float(x), float(y)) for x, y in polygon.exterior.coords])
-        polygons.extend(
-            [[(float(x), float(y)) for x, y in interior.coords] for interior in polygon.interiors]
-        )
-    return polygons
+    visited_segment_indices: set[int] = set()
+
+    for start_index, (start, end) in enumerate(segments):
+        if start_index in visited_segment_indices:
+            continue
+        loop = [start]
+        visited_segment_indices.add(start_index)
+        previous = start
+        current = end
+        loop.append(current)
+
+        while current != start:
+            next_options = adjacency[current]
+            next_point = None
+            next_segment_index = None
+            for candidate_point, candidate_segment_index in next_options:
+                if candidate_point == previous:
+                    continue
+                next_point = candidate_point
+                next_segment_index = candidate_segment_index
+                break
+            if next_point is None or next_segment_index is None:
+                error_segment_indices.add(start_index)
+                break
+            if next_segment_index in visited_segment_indices and next_point != start:
+                error_segment_indices.add(next_segment_index)
+                break
+            visited_segment_indices.add(next_segment_index)
+            previous, current = current, next_point
+            loop.append(current)
+            if len(loop) > len(segments) + 1:
+                error_segment_indices.add(start_index)
+                break
+
+        if loop[0] == loop[-1] and len(loop) >= 4:
+            polygons.append(loop)
+
+    if len(visited_segment_indices) != len(segments):
+        for index in range(len(segments)):
+            if index not in visited_segment_indices:
+                error_segment_indices.add(index)
+
+    if error_segment_indices:
+        return [], [segments[index] for index in sorted(error_segment_indices)]
+    return polygons, []
 
 
-def _extract_segments(geometry) -> list[LineSegment]:
-    segments: list[LineSegment] = []
-    if geometry.is_empty:
-        return segments
-    geom_type = geometry.geom_type
-    if geom_type == "LineString":
-        coords = [(float(x), float(y)) for x, y in geometry.coords]
-        segments.extend((start, end) for start, end in zip(coords, coords[1:]))
-        return segments
-    if geom_type in {"MultiLineString", "GeometryCollection"}:
-        for item in geometry.geoms:
-            segments.extend(_extract_segments(item))
-        return segments
-    if geom_type == "LinearRing":
-        coords = [(float(x), float(y)) for x, y in geometry.coords]
-        segments.extend((start, end) for start, end in zip(coords, coords[1:]))
-    return segments
-
-
-def _find_polygon_overlap_segments(geometry) -> list[LineSegment]:
-    polygons = list(getattr(geometry, "geoms", []))
-    segments: list[LineSegment] = []
-    for index, first in enumerate(polygons):
-        for second in polygons[index + 1 :]:
-            if first.boundary.disjoint(second.boundary):
+def _collapse_colinear_segments(segments: list[LineSegment]) -> list[LineSegment]:
+    collapsed = list(segments)
+    changed = True
+    while changed:
+        changed = False
+        adjacency = _build_adjacency(collapsed)
+        for point, neighbors in adjacency.items():
+            if len(neighbors) != 2:
                 continue
-            segments.extend(_extract_segments(first.boundary))
-            segments.extend(_extract_segments(second.boundary))
-    return segments
+            first_neighbor, first_index = neighbors[0]
+            second_neighbor, second_index = neighbors[1]
+            if first_index == second_index:
+                continue
+            if _orientation(first_neighbor, point, second_neighbor) != 0:
+                continue
+            merged_segment = (first_neighbor, second_neighbor)
+            next_segments = [
+                segment
+                for index, segment in enumerate(collapsed)
+                if index not in {first_index, second_index}
+            ]
+            if merged_segment[0] != merged_segment[1]:
+                next_segments.append(merged_segment)
+            collapsed = _unique_segments(next_segments)
+            changed = True
+            break
+    return collapsed
+
+
+def _build_adjacency(segments: list[LineSegment]) -> dict[Point, list[tuple[Point, int]]]:
+    adjacency: dict[Point, list[tuple[Point, int]]] = {}
+    for index, (start, end) in enumerate(segments):
+        adjacency.setdefault(start, []).append((end, index))
+        adjacency.setdefault(end, []).append((start, index))
+    return adjacency
 
 
 def _unique_segments(segments: list[LineSegment]) -> list[LineSegment]:

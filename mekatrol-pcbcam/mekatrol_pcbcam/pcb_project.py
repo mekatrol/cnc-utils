@@ -189,8 +189,6 @@ class PcbProject:
             normalized = "side_by_side"
         changed = self.mirror_preview_mode != normalized
         self.mirror_preview_mode = normalized
-        if changed:
-            self._invalidate_from(self.STEP_GERBER_IMPORT)
         return changed
 
     def replace_alignment_holes(self, holes: list[AlignmentHole]) -> bool:

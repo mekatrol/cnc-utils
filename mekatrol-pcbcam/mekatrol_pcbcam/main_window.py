@@ -2049,6 +2049,13 @@ class MainWindow(QMainWindow):
             self._edge_cut_validation_result = EdgeCutValidationResult()
             return
         try:
+            refreshed_gerber = self.gerber_parser.parse_file(gerber.path)
+        except Exception:
+            refreshed_gerber = gerber
+        else:
+            self._replace_imported_gerber(refreshed_gerber)
+            gerber = refreshed_gerber
+        try:
             self._edge_cut_validation_result = validate_edge_segments(gerber.segments)
         except ModuleNotFoundError as exc:
             if exc.name != "shapely":
@@ -2058,6 +2065,12 @@ class MainWindow(QMainWindow):
                     "Edge validation requires the 'Shapely' package. Install dependencies from requirements.txt and restart the application."
                 ]
             )
+
+    def _replace_imported_gerber(self, updated: ImportedGerberFile) -> None:
+        for index, gerber in enumerate(self.imported_gerbers):
+            if gerber.path == updated.path:
+                self.imported_gerbers[index] = updated
+                return
 
     def _edge_cut_validation_is_valid(self) -> bool:
         if self.project.layer_assignments.get("edges") is None:
