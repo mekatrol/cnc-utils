@@ -267,11 +267,9 @@ class ToolpathViewer(QOpenGLWidget):
         painter.drawLine(p1, p2)
 
     def _project(self, point: Point3D) -> QPointF:
-        x1, y2, z2 = self._camera_space(point)
-        depth = 1.0 / max(0.35, 2.4 - (z2 / max(self._extent, 1.0)))
-        scale = self.camera.zoom * depth
-        sx = x1 * scale + (self.width() * 0.5) + self.camera.pan_x
-        sy_screen = -y2 * scale + (self.height() * 0.5) + self.camera.pan_y
+        x1, y2, _ = self._camera_space(point)
+        sx = x1 * self.camera.zoom + (self.width() * 0.5) + self.camera.pan_x
+        sy_screen = -y2 * self.camera.zoom + (self.height() * 0.5) + self.camera.pan_y
         return QPointF(sx, sy_screen)
 
     def _camera_space(self, point: Point3D) -> tuple[float, float, float]:
@@ -304,10 +302,9 @@ class ToolpathViewer(QOpenGLWidget):
         max_x = -math.inf
         max_y = -math.inf
         for corner in corners:
-            x1, y2, z2 = self._camera_space(corner)
-            depth = 1.0 / max(0.35, 2.4 - (z2 / max(self._extent, 1.0)))
-            px = x1 * depth
-            py = -y2 * depth
+            x1, y2, _ = self._camera_space(corner)
+            px = x1
+            py = -y2
             min_x = min(min_x, px)
             min_y = min(min_y, py)
             max_x = max(max_x, px)
