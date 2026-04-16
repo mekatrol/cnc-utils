@@ -52,6 +52,9 @@ class PcbPreviewWidget(QWidget):
         self._origin_hotspots_visible = False
         self._hovered_origin_key: str | None = None
         self._cursor_world_position: tuple[float, float] | None = None
+        self._validated_edge_path: Path | None = None
+        self._validated_edge_polygons: list[list[tuple[float, float]]] = []
+        self._edge_error_segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
 
     def load_project_geometry(
         self,
@@ -103,6 +106,18 @@ class PcbPreviewWidget(QWidget):
         if not selection_enabled:
             self._origin_hotspots_visible = False
             self._hovered_origin_key = None
+        self.update()
+
+    def set_edge_validation(
+        self,
+        edge_path: Path | None,
+        *,
+        polygons: list[list[tuple[float, float]]] | None = None,
+        error_segments: list[tuple[tuple[float, float], tuple[float, float]]] | None = None,
+    ) -> None:
+        self._validated_edge_path = None if edge_path is None else edge_path.resolve()
+        self._validated_edge_polygons = list(polygons or [])
+        self._edge_error_segments = list(error_segments or [])
         self.update()
 
     def _rebuild_bounds(
@@ -281,10 +296,20 @@ class PcbPreviewWidget(QWidget):
         mirrored: bool,
     ) -> None:
         painter.setPen(QPen(self._theme.named_color("pcb_preview_outline"), 2.2))
-        self._draw_outline(
-            painter,
-            self._transform_polygon(gerber, gerber.outline, mirrored=mirrored),
-        )
+        outline_polygons = self._outline_polygons_for(gerber)
+        if outline_polygons:
+            for polygon in outline_polygons:
+                self._draw_outline(
+                    painter,
+                    self._transform_polygon(gerber, polygon, mirrored=mirrored),
+                )
+        elif gerber.segments:
+            for start, end in gerber.segments:
+                self._draw_world_line(
+                    painter,
+                    self._transform_point(gerber, start, mirrored=mirrored),
+                    self._transform_point(gerber, end, mirrored=mirrored),
+                )
 
         fill_color = QColor(color)
         fill_color.setAlpha(55)
@@ -315,6 +340,7 @@ class PcbPreviewWidget(QWidget):
                 fill_color,
                 stroke_color,
             )
+        self._draw_edge_errors(painter, gerber, mirrored=mirrored)
 
     def _draw_outline(self, painter: QPainter, outline: list[tuple[float, float]]) -> None:
         if len(outline) < 2:
@@ -391,6 +417,26 @@ class PcbPreviewWidget(QWidget):
             QPointF(screen_center.x(), screen_center.y() - radius - 5.0),
             QPointF(screen_center.x(), screen_center.y() + radius + 5.0),
         )
+        painter.restore()
+
+    def _draw_edge_errors(
+        self,
+        painter: QPainter,
+        gerber: ImportedGerberFile,
+        *,
+        mirrored: bool,
+    ) -> None:
+        if gerber.path != self._validated_edge_path or not self._edge_error_segments:
+            return
+        error_color = self._theme.named_color("pcb_preview_error")
+        painter.save()
+        painter.setPen(QPen(error_color, 3.0))
+        for start, end in self._edge_error_segments:
+            self._draw_world_line(
+                painter,
+                self._transform_point(gerber, start, mirrored=mirrored),
+                self._transform_point(gerber, end, mirrored=mirrored),
+            )
         painter.restore()
 
     def _draw_origin_marker(self, painter: QPainter) -> None:
@@ -571,8 +617,17 @@ class PcbPreviewWidget(QWidget):
         for region in gerber.regions:
             for point in self._transform_polygon(gerber, region, mirrored=True):
                 self._bounds.include_point(point[0], point[1])
-        for point in self._transform_polygon(gerber, gerber.outline, mirrored=True):
-            self._bounds.include_point(point[0], point[1])
+        outline_polygons = self._outline_polygons_for(gerber)
+        if outline_polygons:
+            for polygon in outline_polygons:
+                for point in self._transform_polygon(gerber, polygon, mirrored=True):
+                    self._bounds.include_point(point[0], point[1])
+        else:
+            for start, end in gerber.segments:
+                transformed_start = self._transform_point(gerber, start, mirrored=True)
+                transformed_end = self._transform_point(gerber, end, mirrored=True)
+                self._bounds.include_point(transformed_start[0], transformed_start[1])
+                self._bounds.include_point(transformed_end[0], transformed_end[1])
 
     def _include_mirrored_panel_bounds(self, source_bounds: BoardBounds) -> None:
         if (
@@ -651,6 +706,14 @@ class PcbPreviewWidget(QWidget):
             and gerber.path == self._edges_path
             and self._should_mirror_gerber(gerber)
         )
+
+    def _outline_polygons_for(self, gerber: ImportedGerberFile) -> list[list[tuple[float, float]]]:
+        if gerber.path == self._validated_edge_path and self._validated_edge_polygons:
+            return self._validated_edge_polygons
+        if gerber.outline:
+            return [gerber.outline]
+        return []
+
 
     def _mirror_point(self, point: tuple[float, float]) -> tuple[float, float]:
         x, y = point

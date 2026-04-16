@@ -10,6 +10,7 @@ LineSegment = tuple[tuple[float, float], tuple[float, float]]
 PadDefinition = dict[str, float | str]
 PadFlash = tuple[tuple[float, float], PadDefinition]
 Polygon = list[tuple[float, float]]
+ArcCenter = tuple[float, float]
 
 
 @dataclass
@@ -18,6 +19,7 @@ class ImportedGerberFile:
     display_name: str
     traces: list[TraceSegment]
     segments: list[LineSegment]
+    arc_centers: list[ArcCenter]
     pads: list[PadFlash]
     regions: list[Polygon]
     outline: Polygon
@@ -25,4 +27,11 @@ class ImportedGerberFile:
 
     @property
     def has_visible_geometry(self) -> bool:
-        return bool(self.traces or self.segments or self.pads or self.regions or self.outline)
+        return bool(
+            self.traces
+            or self.segments
+            or self.arc_centers
+            or self.pads
+            or self.regions
+            or self.outline
+        )

@@ -143,7 +143,7 @@ class CamGenerator:
 
     def generate_edge_cuts(
         self,
-        outline: list[tuple[float, float]],
+        outlines: list[list[tuple[float, float]]],
         *,
         output_name: str,
         mill_diameter: float,
@@ -151,10 +151,9 @@ class CamGenerator:
     ) -> Path:
         output_path = self.output_directory / output_name
         final_depth = -(self.board_thickness + self.breakthrough_depth)
-        translated_outline = self._translate_points_to_origin(
-            outline,
-            origin_point,
-        )
+        translated_outlines = [
+            self._translate_points_to_origin(outline, origin_point) for outline in outlines
+        ]
         with output_path.open("w", encoding="utf-8") as gcode_file:
             self._write_header(gcode_file)
             gcode_file.write(
@@ -164,11 +163,12 @@ class CamGenerator:
             current_depth = 0.0
             while current_depth > final_depth:
                 current_depth = max(current_depth - self.edge_depth_step, final_depth)
-                self._write_polyline(
-                    gcode_file,
-                    translated_outline,
-                    cut_depth=current_depth,
-                )
+                for outline in translated_outlines:
+                    self._write_polyline(
+                        gcode_file,
+                        outline,
+                        cut_depth=current_depth,
+                    )
             gcode_file.write("M5\n")
             self._write_footer(gcode_file)
         return output_path

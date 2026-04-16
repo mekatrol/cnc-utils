@@ -26,6 +26,7 @@ class AppTheme:
     main_window_button_text: str = "#f3f5f7"
     main_window_disabled_text: str = "#8d97a3"
     main_window_muted_text: str = "#5b6571"
+    main_window_error_text: str = "#ff6b6b"
     radio_indicator_fill: str = "#2f3138"
     radio_indicator_border: str = "#aeb8c4"
     radio_indicator_checked_fill: str = "#ffae66"
@@ -51,6 +52,7 @@ class AppTheme:
     pcb_preview_outline: str = "#ffe066"
     pcb_preview_drill: str = "#dfe7ef"
     pcb_preview_alignment: str = "#6ee7b7"
+    pcb_preview_error: str = "#ff5d73"
     pcb_preview_text: str = "#dfe7ef"
     pcb_preview_gerber_palette: list[str] = field(
         default_factory=lambda: [
@@ -117,6 +119,7 @@ def high_contrast_theme() -> AppTheme:
         main_window_button_text="#ffffff",
         main_window_disabled_text="#ffffff",
         main_window_muted_text="#ffffff",
+        main_window_error_text="#ff4d4d",
         radio_indicator_fill="#000000",
         radio_indicator_border="#ffffff",
         radio_indicator_checked_fill="#ffff00",
@@ -142,6 +145,7 @@ def high_contrast_theme() -> AppTheme:
         pcb_preview_outline="#ffff00",
         pcb_preview_drill="#ffffff",
         pcb_preview_alignment="#00ffff",
+        pcb_preview_error="#ff0000",
         pcb_preview_text="#ffffff",
         pcb_preview_gerber_palette=[
             "#ff0000",
@@ -188,6 +192,7 @@ def light_theme() -> AppTheme:
         main_window_button_text="#233548",
         main_window_disabled_text="#6e7f92",
         main_window_muted_text="#49586a",
+        main_window_error_text="#b42318",
         radio_indicator_fill="#ffffff",
         radio_indicator_border="#5f7285",
         radio_indicator_checked_fill="#d97d32",
@@ -213,6 +218,7 @@ def light_theme() -> AppTheme:
         pcb_preview_outline="#3f6fb3",
         pcb_preview_drill="#4f5f70",
         pcb_preview_alignment="#249c8b",
+        pcb_preview_error="#c81e1e",
         pcb_preview_text="#3d4b5b",
         pcb_preview_gerber_palette=[
             "#3f6fb3",

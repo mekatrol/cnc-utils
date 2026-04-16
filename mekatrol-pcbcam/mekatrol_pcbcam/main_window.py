@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 
 from .app_config import AppConfig
 from .alignment_hole import AlignmentHole
+from .edge_cut_validator import EdgeCutValidationResult, validate_edge_segments
 from .excellon_file_parser import ExcellonFileParser
 from .gcode_parser import GCodeParser
 from .gerber_file_parser import GerberFileParser
@@ -113,6 +114,7 @@ class MainWindow(QMainWindow):
         self._muted_labels: list[QLabel] = []
         self._sidebar_panels: list[QWidget] = []
         self._last_sidebar_page_index: int | None = None
+        self._edge_cut_validation_result = EdgeCutValidationResult()
 
         self.preview = PcbPreviewWidget(self.theme)
         self.preview.origin_selected.connect(self._set_origin_location)
@@ -817,6 +819,9 @@ class MainWindow(QMainWindow):
             self._muted_labels.append(label)
         label.setStyleSheet(self._muted_text_style())
 
+    def _apply_error_text_style(self, label: QLabel) -> None:
+        label.setStyleSheet(f"color: {self.theme.main_window_error_text};")
+
     def _theme_stylesheet(self) -> str:
         return f"""
             QMainWindow#mainWindow {{
@@ -1398,6 +1403,8 @@ class MainWindow(QMainWindow):
         path = None if not raw_path else Path(str(raw_path))
         if self.project.set_layer_assignment(role, path):
             self._mark_project_dirty()
+        if role == "edges":
+            self._refresh_edge_cut_validation()
         self._sync_ui()
 
     def _mirror_edge_changed(self, edge: str, checked: bool) -> None:
@@ -1531,8 +1538,12 @@ class MainWindow(QMainWindow):
 
     def _generate_edge_cuts(self) -> None:
         gerber = self._assigned_gerber("edges")
-        if gerber is None or not gerber.outline:
-            QMessageBox.information(self, "Edge cuts", "Assign an edge-cuts Gerber with an outline first.")
+        if gerber is None:
+            QMessageBox.information(self, "Edge cuts", "Assign an edge-cuts Gerber first.")
+            return
+        self._refresh_edge_cut_validation()
+        if not self._edge_cut_validation_result.is_valid:
+            QMessageBox.warning(self, "Edge cuts", self._edge_validation_message())
             return
         mill_tool = self._selected_tool("milling")
         if mill_tool is None:
@@ -1540,7 +1551,7 @@ class MainWindow(QMainWindow):
             return
         try:
             output_path = self._cam_generator().generate_edge_cuts(
-                gerber.outline,
+                self._edge_cut_validation_result.polygons,
                 output_name="edge-cuts.nc",
                 mill_diameter=mill_tool.numeric_parameter("diameter", 0.1),
                 origin_point=self._current_origin_point_required(),
@@ -1575,8 +1586,10 @@ class MainWindow(QMainWindow):
         if index == 0:
             return True
         if index == 1:
-            return bool(self._active_gerbers()) and any(
-                self.project.layer_assignments.values()
+            return (
+                bool(self._active_gerbers())
+                and any(self.project.layer_assignments.values())
+                and self._edge_cut_validation_is_valid()
             )
         if index == 2:
             return not self.imported_drills or bool(self._active_drills())
@@ -1596,7 +1609,9 @@ class MainWindow(QMainWindow):
         if index == 8:
             return self._drilling_optional_or_generated()
         if index == 9:
-            return self._operation_optional_or_generated("edge_cuts", "edges")
+            return self._edge_cut_validation_is_valid() and self._operation_optional_or_generated(
+                "edge_cuts", "edges"
+            )
         if index == 10:
             return bool(self.project.generated_outputs)
         return False
@@ -1609,6 +1624,8 @@ class MainWindow(QMainWindow):
                 return "Import at least one Gerber file before moving to the next step."
             if not self._active_gerbers():
                 return "Select at least one Gerber file before moving to the next step."
+            if not self._edge_cut_validation_is_valid():
+                return self._edge_validation_message()
             return "Assign at least one active Gerber file to front copper, back copper, or edges."
         if index == 2:
             if not self.imported_drills:
@@ -1628,12 +1645,15 @@ class MainWindow(QMainWindow):
         if index == 8:
             return "Generate the drilling NC file before moving to the next step."
         if index == 9:
+            if not self._edge_cut_validation_is_valid():
+                return self._edge_validation_message()
             return "Generate the edge cut NC file before moving to the next step."
         return "Complete the current wizard step before continuing."
 
     def _sync_ui(self) -> None:
         current = min(self.project.current_step_index, self.IMPLEMENTED_STEP_COUNT - 1)
         self.project.current_step_index = current
+        self._refresh_edge_cut_validation()
         self.step_bar.adjustSize()
         page_changed = self._last_sidebar_page_index != current
         self.page_stack.setCurrentIndex(current)
@@ -1668,6 +1688,7 @@ class MainWindow(QMainWindow):
         self._sync_alignment_holes_page()
         self._sync_origin_page()
         self._sync_generated_outputs()
+        assigned_edges = self.project.layer_assignments["edges"]
         self.preview.load_project_geometry(
             self._active_gerbers(),
             self._active_drills(),
@@ -1697,6 +1718,11 @@ class MainWindow(QMainWindow):
                 if current == PcbProject.STEP_ORIGIN
                 else self.project.mirror_preview_mode
             ),
+        )
+        self.preview.set_edge_validation(
+            assigned_edges,
+            polygons=self._edge_cut_validation_result.polygons,
+            error_segments=self._edge_cut_validation_result.error_segments,
         )
         self.preview.set_origin_marker(
             self._reference_board_bounds() if current == PcbProject.STEP_ORIGIN else None,
@@ -1731,6 +1757,8 @@ class MainWindow(QMainWindow):
             geometry_summary = []
             if gerber.traces or gerber.regions or gerber.pads:
                 geometry_summary.append("copper geometry")
+            if gerber.segments:
+                geometry_summary.append("edge segments")
             if gerber.outline:
                 geometry_summary.append("outline")
             if not geometry_summary:
@@ -1771,6 +1799,8 @@ class MainWindow(QMainWindow):
         if self.project.current_step_index == 0:
             return "Project setup is active. Create, open, or save a project file before continuing."
         if self.project.current_step_index == 1:
+            if not self._edge_cut_validation_is_valid():
+                return self._edge_validation_message()
             return (
                 "Import Gerber files, assign unique manufacturing roles, and choose any "
                 "mirror settings needed for the rest of the wizard."
@@ -1974,6 +2004,13 @@ class MainWindow(QMainWindow):
             "edges",
             self.project.layer_assignments["edges"],
         )
+        default_hint = "At least one of front copper, back copper, or edges is required."
+        if self._edge_cut_validation_is_valid():
+            self.layer_assignment_hint.setText(default_hint)
+            self._apply_muted_text_style(self.layer_assignment_hint)
+            return
+        self.layer_assignment_hint.setText(self._edge_validation_message())
+        self._apply_error_text_style(self.layer_assignment_hint)
 
     def _populate_layer_combo(
         self,
@@ -2005,6 +2042,38 @@ class MainWindow(QMainWindow):
         combo.setCurrentIndex(0 if index < 0 else index)
         combo.setEnabled(bool(self.imported_gerbers))
         combo.blockSignals(False)
+
+    def _refresh_edge_cut_validation(self) -> None:
+        gerber = self._assigned_gerber("edges")
+        if gerber is None:
+            self._edge_cut_validation_result = EdgeCutValidationResult()
+            return
+        try:
+            self._edge_cut_validation_result = validate_edge_segments(gerber.segments)
+        except ModuleNotFoundError as exc:
+            if exc.name != "shapely":
+                raise
+            self._edge_cut_validation_result = EdgeCutValidationResult(
+                issues=[
+                    "Edge validation requires the 'Shapely' package. Install dependencies from requirements.txt and restart the application."
+                ]
+            )
+
+    def _edge_cut_validation_is_valid(self) -> bool:
+        if self.project.layer_assignments.get("edges") is None:
+            return True
+        return self._edge_cut_validation_result.is_valid
+
+    def _edge_validation_message(self) -> str:
+        assigned_path = self.project.layer_assignments.get("edges")
+        if assigned_path is None:
+            return ""
+        if self._edge_cut_validation_result.message:
+            return (
+                f"Edge cut layer '{assigned_path.name}' is invalid. "
+                f"{self._edge_cut_validation_result.message}"
+            )
+        return f"Edge cut layer '{assigned_path.name}' is invalid."
 
     def _sync_mirror_setup_page(self) -> None:
         requires_mirror = self.project.requires_mirror_setup()
@@ -2175,18 +2244,15 @@ class MainWindow(QMainWindow):
         gerber: ImportedGerberFile,
     ) -> list[tuple[float, float]]:
         segment_points = self._origin_points_from_segments(gerber.segments)
-        if segment_points:
-            return segment_points
+        arc_centers = self._unique_points(gerber.arc_centers)
+        if segment_points or arc_centers:
+            return self._unique_points(segment_points + arc_centers)
 
         outline = gerber.outline
         if len(outline) < 2:
             return []
         raw_points = outline[:-1] if outline[0] == outline[-1] else outline
-        unique_points: list[tuple[float, float]] = []
-        for point in raw_points:
-            if point not in unique_points:
-                unique_points.append(point)
-        return unique_points
+        return self._unique_points(raw_points)
 
     def _origin_points_from_segments(
         self,
@@ -2217,6 +2283,16 @@ class MainWindow(QMainWindow):
             if self._orientation(neighbors[0], point, neighbors[1]) != 0:
                 reference_points.append(point)
         return reference_points
+
+    def _unique_points(
+        self,
+        points: list[tuple[float, float]],
+    ) -> list[tuple[float, float]]:
+        unique_points: list[tuple[float, float]] = []
+        for point in points:
+            if point not in unique_points:
+                unique_points.append(point)
+        return unique_points
 
     def _orientation(
         self,

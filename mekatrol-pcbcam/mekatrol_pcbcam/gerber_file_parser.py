@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 import re
 
@@ -16,6 +17,7 @@ class GerberFileParser:
         self._apertures: dict[int, dict[str, float | str]] = {}
         self._current_aperture = -1
         self._current_operation = 2
+        self._interpolation_mode = "linear"
         self._current_x: float | None = None
         self._current_y: float | None = None
         self._unit_mult = 1.0
@@ -25,6 +27,7 @@ class GerberFileParser:
         self._pads: list = []
         self._regions: list = []
         self._segments: list[Segment] = []
+        self._arc_centers: list[Point] = []
         self._bounds = BoardBounds()
 
         with file_path.open("r", encoding="utf-8") as gerber_file:
@@ -43,6 +46,7 @@ class GerberFileParser:
             display_name=file_path.name,
             traces=self._traces,
             segments=list(self._segments),
+            arc_centers=list(self._arc_centers),
             pads=self._pads,
             regions=self._regions,
             outline=outline,
@@ -87,6 +91,7 @@ class GerberFileParser:
 
     def _process_command(self, line: str) -> None:
         line = line.rstrip("*")
+        line = self._process_interpolation_mode(line)
         if line == "G36":
             self._in_region = True
             self._current_region_points = []
@@ -105,7 +110,11 @@ class GerberFileParser:
             return
 
         coord_match = re.match(
-            r"^(?:X(-?[0-9.]+))?(?:Y(-?[0-9.]+))?(?:D0([123]))?$",
+            r"^(?:X(-?[0-9.]+))?"
+            r"(?:Y(-?[0-9.]+))?"
+            r"(?:I(-?[0-9.]+))?"
+            r"(?:J(-?[0-9.]+))?"
+            r"(?:D0([123]))?$",
             line,
         )
         if not coord_match:
@@ -123,11 +132,21 @@ class GerberFileParser:
             if coord_match.group(2) is not None
             else self._current_y
         )
+        i_offset = (
+            float(coord_match.group(3)) * 0.000001 * self._unit_mult
+            if coord_match.group(3) is not None
+            else None
+        )
+        j_offset = (
+            float(coord_match.group(4)) * 0.000001 * self._unit_mult
+            if coord_match.group(4) is not None
+            else None
+        )
         if x is None or y is None:
             return
 
-        if coord_match.group(3) is not None:
-            self._current_operation = int(coord_match.group(3))
+        if coord_match.group(5) is not None:
+            self._current_operation = int(coord_match.group(5))
         operation = self._current_operation
 
         aperture = self._apertures.get(self._current_aperture)
@@ -143,7 +162,15 @@ class GerberFileParser:
 
         point = (x, y)
         if self._in_region:
-            self._process_region_point(point, operation)
+            if (
+                operation == 1
+                and self._interpolation_mode in {"clockwise", "counterclockwise"}
+                and self._current_x is not None
+                and self._current_y is not None
+            ):
+                self._process_region_arc(point, i_offset, j_offset)
+            else:
+                self._process_region_point(point, operation)
             self._current_x = x
             self._current_y = y
             return
@@ -151,16 +178,37 @@ class GerberFileParser:
         if operation == 1:
             if self._current_x is not None and self._current_y is not None:
                 start = (self._current_x, self._current_y)
-                if start != point:
-                    self._segments.append((start, point))
-                if aperture:
-                    width = float(aperture.get("diameter", aperture.get("width", 0.1)))
-                    self._traces.append((start, point, width))
+                if self._interpolation_mode == "linear":
+                    if start != point:
+                        self._segments.append((start, point))
+                    if aperture:
+                        width = float(aperture.get("diameter", aperture.get("width", 0.1)))
+                        self._traces.append((start, point, width))
+                else:
+                    self._append_arc_segments(
+                        start,
+                        point,
+                        i_offset,
+                        j_offset,
+                        aperture=aperture,
+                    )
         elif operation == 3 and aperture:
             self._pads.append((point, aperture))
 
         self._current_x = x
         self._current_y = y
+
+    def _process_interpolation_mode(self, line: str) -> str:
+        if line.startswith("G01"):
+            self._interpolation_mode = "linear"
+            return line[3:]
+        if line.startswith("G02"):
+            self._interpolation_mode = "clockwise"
+            return line[3:]
+        if line.startswith("G03"):
+            self._interpolation_mode = "counterclockwise"
+            return line[3:]
+        return line
 
     def _process_region_point(self, point: Point, operation: int) -> None:
         if operation == 2 or not self._current_region_points:
@@ -168,6 +216,117 @@ class GerberFileParser:
             return
         if operation == 1 and self._current_region_points[-1] != point:
             self._current_region_points.append(point)
+
+    def _process_region_arc(
+        self,
+        point: Point,
+        i_offset: float | None,
+        j_offset: float | None,
+    ) -> None:
+        if self._current_x is None or self._current_y is None:
+            self._process_region_point(point, 1)
+            return
+        start = (self._current_x, self._current_y)
+        arc_points = self._approximate_arc_points(start, point, i_offset, j_offset)
+        if not arc_points:
+            self._process_region_point(point, 1)
+            return
+        if not self._current_region_points:
+            self._current_region_points = [start]
+        for arc_point in arc_points[1:]:
+            if self._current_region_points[-1] != arc_point:
+                self._current_region_points.append(arc_point)
+
+    def _append_arc_segments(
+        self,
+        start: Point,
+        end: Point,
+        i_offset: float | None,
+        j_offset: float | None,
+        *,
+        aperture: dict[str, float | str] | None,
+    ) -> None:
+        arc_points = self._approximate_arc_points(start, end, i_offset, j_offset)
+        if not arc_points:
+            if start != end:
+                self._segments.append((start, end))
+                if aperture:
+                    width = float(aperture.get("diameter", aperture.get("width", 0.1)))
+                    self._traces.append((start, end, width))
+            return
+        width = (
+            float(aperture.get("diameter", aperture.get("width", 0.1)))
+            if aperture
+            else None
+        )
+        center = (
+            None
+            if i_offset is None or j_offset is None
+            else (start[0] + i_offset, start[1] + j_offset)
+        )
+        for segment_start, segment_end in zip(arc_points, arc_points[1:]):
+            if segment_start == segment_end:
+                continue
+            self._segments.append((segment_start, segment_end))
+            if width is not None:
+                self._traces.append((segment_start, segment_end, width))
+            self._bounds.include_point(segment_start[0], segment_start[1], 0.2)
+            self._bounds.include_point(segment_end[0], segment_end[1], 0.2)
+
+    def _approximate_arc_points(
+        self,
+        start: Point,
+        end: Point,
+        i_offset: float | None,
+        j_offset: float | None,
+    ) -> list[Point]:
+        if i_offset is None or j_offset is None:
+            return []
+        center_x = start[0] + i_offset
+        center_y = start[1] + j_offset
+        radius = math.hypot(start[0] - center_x, start[1] - center_y)
+        if radius < 1e-9:
+            return []
+        center = (center_x, center_y)
+        if center not in self._arc_centers:
+            self._arc_centers.append(center)
+
+        start_angle = math.atan2(start[1] - center_y, start[0] - center_x)
+        end_angle = math.atan2(end[1] - center_y, end[0] - center_x)
+        sweep = self._arc_sweep(start_angle, end_angle)
+        if abs(sweep) < 1e-9 and start != end:
+            sweep = (-2.0 * math.pi) if self._interpolation_mode == "clockwise" else (2.0 * math.pi)
+        elif abs(sweep) < 1e-9 and start == end:
+            sweep = (-2.0 * math.pi) if self._interpolation_mode == "clockwise" else (2.0 * math.pi)
+
+        max_angle_step = math.radians(10.0)
+        max_chord = 0.5
+        chord_step = max_chord / radius if radius > 1e-9 else max_angle_step
+        angle_step = min(max_angle_step, max(chord_step, math.radians(2.0)))
+        segment_count = max(8, int(math.ceil(abs(sweep) / angle_step)))
+
+        points = [start]
+        for step in range(1, segment_count):
+            angle = start_angle + (sweep * (step / segment_count))
+            points.append(
+                (
+                    center_x + (math.cos(angle) * radius),
+                    center_y + (math.sin(angle) * radius),
+                )
+            )
+        points.append(end)
+        return points
+
+    def _arc_sweep(self, start_angle: float, end_angle: float) -> float:
+        if self._interpolation_mode == "clockwise":
+            sweep = end_angle - start_angle
+            if sweep >= 0.0:
+                sweep -= 2.0 * math.pi
+            return sweep
+        sweep = end_angle - start_angle
+        if sweep <= 0.0:
+            sweep += 2.0 * math.pi
+        return sweep
 
     def _finish_region(self) -> None:
         self._in_region = False
