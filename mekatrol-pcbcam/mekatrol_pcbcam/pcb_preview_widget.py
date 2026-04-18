@@ -57,6 +57,7 @@ class PcbPreviewWidget(QWidget):
         self._validated_edge_path: Path | None = None
         self._validated_edge_polygons: list[list[tuple[float, float]]] = []
         self._edge_error_segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
+        self._generated_edge_cut_paths: list[list[tuple[float, float]]] = []
         self._edge_selection_enabled = False
         self._selected_edge_polygon_indices: set[int] = set()
         self._edge_polygon_modes: dict[int, str] = {}
@@ -129,6 +130,13 @@ class PcbPreviewWidget(QWidget):
         self._edge_selection_enabled = selection_enabled
         self._selected_edge_polygon_indices = set(selected_polygon_indices or set())
         self._edge_polygon_modes = dict(polygon_modes or {})
+        self.update()
+
+    def set_edge_cut_preview_paths(
+        self,
+        paths: list[list[tuple[float, float]]] | None,
+    ) -> None:
+        self._generated_edge_cut_paths = list(paths or [])
         self.update()
 
     def _rebuild_bounds(
@@ -322,6 +330,7 @@ class PcbPreviewWidget(QWidget):
         for hole in self._alignment_holes:
             self._draw_alignment_hole(painter, hole)
 
+        self._draw_generated_edge_cut_paths(painter)
         self._draw_origin_hotspots(painter)
         self._draw_origin_marker(painter)
         self._draw_edge_polygon_annotations(painter)
@@ -476,6 +485,16 @@ class PcbPreviewWidget(QWidget):
                 self._transform_point(gerber, start, mirrored=mirrored),
                 self._transform_point(gerber, end, mirrored=mirrored),
             )
+        painter.restore()
+
+    def _draw_generated_edge_cut_paths(self, painter: QPainter) -> None:
+        if not self._generated_edge_cut_paths:
+            return
+        path_color = QColor(self._theme.named_color("pcb_preview_error"))
+        painter.save()
+        painter.setPen(QPen(path_color, 2.6))
+        for path in self._generated_edge_cut_paths:
+            self._draw_outline(painter, path)
         painter.restore()
 
     def _draw_edge_polygon_annotations(self, painter: QPainter) -> None:

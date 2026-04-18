@@ -118,6 +118,7 @@ class MainWindow(QMainWindow):
         self._edge_cut_validation_result = EdgeCutValidationResult()
         self._selected_edge_cut_polygon_indices: set[int] = set()
         self._selected_edge_cut_profile_index: int | None = None
+        self._generated_edge_cut_preview_paths: list[list[tuple[float, float]]] = []
 
         self.preview = PcbPreviewWidget(self.theme)
         self.preview.origin_selected.connect(self._set_origin_location)
@@ -1614,6 +1615,11 @@ class MainWindow(QMainWindow):
             )
             return
         try:
+            preview_paths = self._cam_generator().edge_cut_paths(
+                [polygon for _, polygon, _ in profiles],
+                cut_modes=[mode for _, _, mode in profiles],
+                mill_diameter=mill_tool.numeric_parameter("diameter", 0.1),
+            )
             output_path = self._cam_generator().generate_edge_cuts(
                 [polygon for _, polygon, _ in profiles],
                 cut_modes=[mode for _, _, mode in profiles],
@@ -1624,6 +1630,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Edge cut generation failed", str(exc))
             return
+        self._generated_edge_cut_preview_paths = preview_paths
         self._register_generated_output("edge_cuts", output_path)
 
     def _generated_output_selected(self, row: int) -> None:
@@ -1792,6 +1799,14 @@ class MainWindow(QMainWindow):
             selection_enabled=current == PcbProject.STEP_EDGE_CUTS,
             selected_polygon_indices=self._selected_edge_cut_polygon_indices,
             polygon_modes=self._edge_cut_polygon_labels(),
+        )
+        self.preview.set_edge_cut_preview_paths(
+            self._generated_edge_cut_preview_paths
+            if (
+                current == PcbProject.STEP_EDGE_CUTS
+                and self.project.generated_outputs.get("edge_cuts") is not None
+            )
+            else []
         )
         self.preview.set_origin_marker(
             self._reference_board_bounds() if current == PcbProject.STEP_ORIGIN else None,

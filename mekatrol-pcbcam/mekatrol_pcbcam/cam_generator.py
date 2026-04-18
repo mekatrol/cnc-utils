@@ -152,15 +152,13 @@ class CamGenerator:
     ) -> Path:
         output_path = self.output_directory / output_name
         final_depth = -(self.board_thickness + self.breakthrough_depth)
-        if len(outlines) != len(cut_modes):
-            raise ValueError("Each edge-cut polygon must have a matching cut mode.")
-        tool_radius = max(mill_diameter * 0.5, 0.0)
         translated_outlines = [
-            self._translate_points_to_origin(
-                self._edge_cut_toolpath(outline, cut_mode=cut_mode, tool_radius=tool_radius),
-                origin_point,
+            self._translate_points_to_origin(toolpath, origin_point)
+            for toolpath in self.edge_cut_paths(
+                outlines,
+                cut_modes=cut_modes,
+                mill_diameter=mill_diameter,
             )
-            for outline, cut_mode in zip(outlines, cut_modes)
         ]
         with output_path.open("w", encoding="utf-8") as gcode_file:
             self._write_header(gcode_file)
@@ -180,6 +178,21 @@ class CamGenerator:
             gcode_file.write("M5\n")
             self._write_footer(gcode_file)
         return output_path
+
+    def edge_cut_paths(
+        self,
+        outlines: list[list[tuple[float, float]]],
+        *,
+        cut_modes: list[str],
+        mill_diameter: float,
+    ) -> list[list[tuple[float, float]]]:
+        if len(outlines) != len(cut_modes):
+            raise ValueError("Each edge-cut polygon must have a matching cut mode.")
+        tool_radius = max(mill_diameter * 0.5, 0.0)
+        return [
+            self._edge_cut_toolpath(outline, cut_mode=cut_mode, tool_radius=tool_radius)
+            for outline, cut_mode in zip(outlines, cut_modes)
+        ]
 
     def _edge_cut_toolpath(
         self,
