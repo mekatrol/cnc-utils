@@ -123,7 +123,7 @@ class PcbPreviewWidget(QWidget):
             self._origin_hotspots_visible = False
             self._hovered_origin_key = None
         self._rebuild_bounds()
-        if selection_enabled:
+        if board_bounds is not None:
             self.fit_to_view()
         else:
             self.update()
@@ -391,7 +391,7 @@ class PcbPreviewWidget(QWidget):
         self._draw_origin_marker(painter)
 
     def _draw_origin_selection_bounds(self, painter: QPainter) -> None:
-        if not self._origin_selection_enabled or self._origin_marker_bounds is None:
+        if self._origin_marker_bounds is None:
             return
         x_min, x_max, y_min, y_max = self._origin_marker_bounds
         painter.save()

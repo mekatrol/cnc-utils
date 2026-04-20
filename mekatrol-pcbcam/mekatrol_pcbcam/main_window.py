@@ -584,9 +584,9 @@ class MainWindow(QMainWindow):
         heading = QLabel("Step 5: Alignment Holes")
         heading.setObjectName("pageHeading")
         body = QLabel(
-            "Define optional alignment holes outside the board edge. Each hole uses "
+            "Define optional alignment holes outside the stock edge. Each hole uses "
             "an edge reference plus offsets measured along that edge and outward "
-            "from the board boundary."
+            "from the stock boundary."
         )
         body.setWordWrap(True)
 
@@ -1619,10 +1619,10 @@ class MainWindow(QMainWindow):
         if tool is None:
             QMessageBox.information(self, "Back isolation", "Select a V-bit first.")
             return
-        bounds = self._reference_board_bounds()
+        bounds = self._stock_bounds()
         if bounds is None:
             QMessageBox.information(
-                self, "Back isolation", "Board bounds are not available."
+                self, "Back isolation", "Stock bounds are not available."
             )
             return
         try:
@@ -1878,6 +1878,10 @@ class MainWindow(QMainWindow):
         self._sync_edge_cut_page()
         self._sync_generated_outputs()
         assigned_edges = self.project.layer_assignments["edges"]
+        stock_bounds = self._stock_bounds()
+        show_stock = (
+            current >= PcbProject.STEP_STOCK_DEFINITION and stock_bounds is not None
+        )
         self.preview.load_project_geometry(
             self._active_gerbers(),
             self._active_drills(),
@@ -1898,7 +1902,7 @@ class MainWindow(QMainWindow):
                 in {PcbProject.STEP_STOCK_DEFINITION, PcbProject.STEP_EDGE_CUTS}
                 else self.project.layer_assignments["edges"]
             ),
-            board_bounds=self._reference_board_bounds(),
+            board_bounds=stock_bounds or self._reference_board_bounds(),
             mirror_edge=(
                 ""
                 if current
@@ -1927,18 +1931,18 @@ class MainWindow(QMainWindow):
             else []
         )
         self.preview.set_origin_marker(
-            self._stock_bounds()
-            if current == PcbProject.STEP_STOCK_DEFINITION
-            else None,
-            self._current_origin_point()
-            if current == PcbProject.STEP_STOCK_DEFINITION
-            else None,
+            stock_bounds if show_stock else None,
+            self._current_origin_point() if show_stock else None,
             hotspot_points=(
                 self._origin_hotspot_points()
                 if current == PcbProject.STEP_STOCK_DEFINITION
                 else None
             ),
             selection_enabled=current == PcbProject.STEP_STOCK_DEFINITION,
+        )
+        self.toolpath_viewer.set_stock_overlay(
+            stock_bounds if show_stock else None,
+            self._current_origin_point() if show_stock else None,
         )
         showing_toolpath = (
             current >= PcbProject.STEP_FRONT_ISOLATION
@@ -2910,7 +2914,7 @@ class MainWindow(QMainWindow):
         )
 
     def _alignment_hole_positions(self) -> list[tuple[float, float, float]]:
-        reference_bounds = self._reference_board_bounds()
+        reference_bounds = self._stock_bounds()
         if reference_bounds is None:
             return []
         positions: list[tuple[float, float, float]] = []

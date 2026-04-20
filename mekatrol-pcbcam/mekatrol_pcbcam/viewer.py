@@ -4,7 +4,7 @@ import logging
 import math
 
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QMouseEvent, QPainter, QPaintEvent, QPen, QWheelEvent
+from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPen, QPolygonF, QWheelEvent
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 from .camera_state import CameraState
@@ -31,9 +31,13 @@ class ToolpathViewer(QOpenGLWidget):
         self._extent = 100.0
         self._bounds_min = Point3D(-50.0, -50.0, 0.0)
         self._bounds_max = Point3D(50.0, 50.0, 0.0)
+        self._document_bounds_min = Point3D(-50.0, -50.0, 0.0)
+        self._document_bounds_max = Point3D(50.0, 50.0, 0.0)
         self._span_x = 100.0
         self._span_y = 100.0
         self._span_z = 0.0
+        self._stock_bounds: tuple[float, float, float, float] | None = None
+        self._origin_point: tuple[float, float] | None = None
         logger.debug("Toolpath viewer initialized")
 
     def load_document(self, document: ToolpathDocument | None) -> None:
@@ -41,19 +45,20 @@ class ToolpathViewer(QOpenGLWidget):
         if document is None or not document.segments:
             self._pivot = Point3D(0.0, 0.0, 0.0)
             self._extent = 100.0
-            self._bounds_min = Point3D(-50.0, -50.0, 0.0)
-            self._bounds_max = Point3D(50.0, 50.0, 0.0)
+            self._document_bounds_min = Point3D(-50.0, -50.0, 0.0)
+            self._document_bounds_max = Point3D(50.0, 50.0, 0.0)
             self._span_x = 100.0
             self._span_y = 100.0
             self._span_z = 0.0
+            self._apply_stock_bounds()
             self.camera = CameraState()
             self.update()
             logger.debug("Viewer reset to empty document state")
             return
 
         stats = document.stats
-        self._bounds_min = stats.min_point
-        self._bounds_max = stats.max_point
+        self._document_bounds_min = stats.min_point
+        self._document_bounds_max = stats.max_point
         self._pivot = Point3D(
             (stats.min_point.x + stats.max_point.x) * 0.5,
             (stats.min_point.y + stats.max_point.y) * 0.5,
@@ -62,6 +67,7 @@ class ToolpathViewer(QOpenGLWidget):
         self._span_x = stats.max_point.x - stats.min_point.x
         self._span_y = stats.max_point.y - stats.min_point.y
         self._span_z = stats.max_point.z - stats.min_point.z
+        self._apply_stock_bounds()
         self._extent = max(self._span_x, self._span_y, self._span_z, 10.0)
         logger.debug(
             "Viewer loaded document: %s extent=%.3f pivot=(%.3f, %.3f, %.3f)",
@@ -72,6 +78,47 @@ class ToolpathViewer(QOpenGLWidget):
             self._pivot.z,
         )
         self.fit_to_view()
+
+    def set_stock_overlay(
+        self,
+        stock_bounds: tuple[float, float, float, float] | None,
+        origin_point: tuple[float, float] | None,
+    ) -> None:
+        self._stock_bounds = stock_bounds
+        self._origin_point = origin_point
+        self._apply_stock_bounds()
+        self.update()
+
+    def _apply_stock_bounds(self) -> None:
+        self._bounds_min = Point3D(
+            self._document_bounds_min.x,
+            self._document_bounds_min.y,
+            self._document_bounds_min.z,
+        )
+        self._bounds_max = Point3D(
+            self._document_bounds_max.x,
+            self._document_bounds_max.y,
+            self._document_bounds_max.z,
+        )
+        if self._stock_bounds is None:
+            self._span_x = self._bounds_max.x - self._bounds_min.x
+            self._span_y = self._bounds_max.y - self._bounds_min.y
+            self._span_z = self._bounds_max.z - self._bounds_min.z
+            return
+        x_min, x_max, y_min, y_max = self._stock_bounds
+        self._bounds_min = Point3D(
+            min(self._bounds_min.x, x_min),
+            min(self._bounds_min.y, y_min),
+            self._bounds_min.z,
+        )
+        self._bounds_max = Point3D(
+            max(self._bounds_max.x, x_max),
+            max(self._bounds_max.y, y_max),
+            self._bounds_max.z,
+        )
+        self._span_x = self._bounds_max.x - self._bounds_min.x
+        self._span_y = self._bounds_max.y - self._bounds_min.y
+        self._span_z = self._bounds_max.z - self._bounds_min.z
 
     def fit_to_view(self) -> None:
         width = max(self.width(), 1)
@@ -104,6 +151,7 @@ class ToolpathViewer(QOpenGLWidget):
         painter.fillRect(self.rect(), self._theme.named_color("toolpath_background"))
         self._draw_grid(painter)
         self._draw_axes(painter)
+        self._draw_stock(painter)
         self._draw_toolpath(painter)
         self._draw_overlay(painter)
         painter.end()
@@ -239,6 +287,46 @@ class ToolpathViewer(QOpenGLWidget):
                 )
             )
             self._draw_line(painter, segment.start, segment.end)
+
+    def _draw_stock(self, painter: QPainter) -> None:
+        if self._stock_bounds is None:
+            return
+        x_min, x_max, y_min, y_max = self._stock_bounds
+        painter.save()
+        outline_color = QColor(self._theme.named_color("pcb_preview_outline"))
+        outline_color.setAlpha(220)
+        fill_color = QColor(self._theme.named_color("pcb_preview_selection"))
+        fill_color.setAlpha(32)
+        pen = QPen(outline_color, 1.8)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        corners_3d = [
+            Point3D(x_min, y_min, 0.0),
+            Point3D(x_max, y_min, 0.0),
+            Point3D(x_max, y_max, 0.0),
+            Point3D(x_min, y_max, 0.0),
+        ]
+        painter.setBrush(fill_color)
+        painter.drawPolygon(QPolygonF([self._project(point) for point in corners_3d]))
+        corners = corners_3d + [corners_3d[0]]
+        for start, end in zip(corners, corners[1:]):
+            self._draw_line(painter, start, end)
+        if self._origin_point is not None:
+            origin_x, origin_y = self._origin_point
+            marker_radius = max(self._extent * 0.015, 1.5)
+            origin = Point3D(origin_x, origin_y, 0.0)
+            painter.setPen(QPen(self._theme.named_color("pcb_preview_selection"), 2.2))
+            self._draw_line(
+                painter,
+                Point3D(origin.x - marker_radius, origin.y, 0.0),
+                Point3D(origin.x + marker_radius, origin.y, 0.0),
+            )
+            self._draw_line(
+                painter,
+                Point3D(origin.x, origin.y - marker_radius, 0.0),
+                Point3D(origin.x, origin.y + marker_radius, 0.0),
+            )
+        painter.restore()
 
     def _draw_overlay(self, painter: QPainter) -> None:
         painter.setPen(self._theme.named_color("toolpath_text"))
