@@ -26,6 +26,8 @@ from .theme import AppTheme
 class PcbPreviewWidget(QWidget):
     origin_selected = Signal(float, float)
     edge_polygon_selected = Signal(int, bool)
+    alignment_hole_selected = Signal(int)
+    alignment_hole_position_selected = Signal(float, float)
 
     def __init__(self, theme: AppTheme, parent=None) -> None:
         super().__init__(parent)
@@ -62,6 +64,9 @@ class PcbPreviewWidget(QWidget):
         self._edge_selection_enabled = False
         self._selected_edge_polygon_indices: set[int] = set()
         self._edge_polygon_modes: dict[int, str] = {}
+        self._alignment_selection_bounds: tuple[float, float, float, float] | None = None
+        self._alignment_selection_enabled = False
+        self._selected_alignment_hole_index: int | None = None
 
     def load_project_geometry(
         self,
@@ -71,6 +76,7 @@ class PcbPreviewWidget(QWidget):
         *,
         reference_gerber_files: list[ImportedGerberFile] | None = None,
         reference_drill_files: list[ImportedDrillFile] | None = None,
+        fit_view: bool = True,
     ) -> None:
         self._gerber_files = gerber_files
         self._drill_files = drill_files
@@ -79,7 +85,10 @@ class PcbPreviewWidget(QWidget):
             reference_gerber_files=reference_gerber_files,
             reference_drill_files=reference_drill_files,
         )
-        self.fit_to_view()
+        if fit_view:
+            self.fit_to_view()
+        else:
+            self.update()
 
     def set_mirror_setup(
         self,
@@ -140,6 +149,20 @@ class PcbPreviewWidget(QWidget):
         paths: list[list[tuple[float, float]]] | None,
     ) -> None:
         self._generated_edge_cut_paths = list(paths or [])
+        self.update()
+
+    def set_alignment_hole_selection(
+        self,
+        board_bounds: tuple[float, float, float, float] | None,
+        *,
+        selection_enabled: bool = False,
+        selected_hole_index: int | None = None,
+    ) -> None:
+        self._alignment_selection_bounds = board_bounds
+        self._alignment_selection_enabled = selection_enabled
+        self._selected_alignment_hole_index = selected_hole_index
+        if not selection_enabled:
+            self._selected_alignment_hole_index = None
         self.update()
 
     def _rebuild_bounds(
@@ -212,6 +235,22 @@ class PcbPreviewWidget(QWidget):
                 self.edge_polygon_selected.emit(-1, False)
                 self.update()
                 return
+            selected_alignment_index = self._alignment_hole_index_at_position(
+                event.position()
+            )
+            if selected_alignment_index is not None:
+                self._selected_alignment_hole_index = selected_alignment_index
+                self.alignment_hole_selected.emit(selected_alignment_index)
+                self.update()
+                return
+            if self._alignment_selection_enabled:
+                world_position = self._screen_to_world(event.position())
+                if world_position is not None:
+                    self.alignment_hole_position_selected.emit(
+                        world_position[0],
+                        world_position[1],
+                    )
+                    return
             self._dragging = True
             self._last_pos = event.position()
 
@@ -330,8 +369,12 @@ class PcbPreviewWidget(QWidget):
                 self._draw_hole(painter, hole)
 
         painter.setPen(QPen(self._theme.named_color("pcb_preview_alignment"), 1.8))
-        for hole in self._alignment_holes:
-            self._draw_alignment_hole(painter, hole)
+        for index, hole in enumerate(self._alignment_holes):
+            self._draw_alignment_hole(
+                painter,
+                hole,
+                selected=index == self._selected_alignment_hole_index,
+            )
 
         self._draw_edge_polygon_annotations(painter)
         self._draw_generated_edge_cut_paths(painter)
@@ -457,10 +500,20 @@ class PcbPreviewWidget(QWidget):
         self,
         painter: QPainter,
         hole: tuple[float, float, float],
+        *,
+        selected: bool,
     ) -> None:
         screen_center = self._world_to_screen(hole[0], hole[1])
         radius = max(2.0, hole[2] * 0.5 * self._zoom)
         painter.save()
+        if selected:
+            highlight = QColor(self._theme.named_color("pcb_preview_selection"))
+            highlight.setAlpha(70)
+            painter.setBrush(highlight)
+            painter.setPen(QPen(self._theme.named_color("pcb_preview_selection"), 2.8))
+            painter.drawEllipse(screen_center, radius + 6.0, radius + 6.0)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(self._theme.named_color("pcb_preview_alignment"), 1.8))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawEllipse(screen_center, radius, radius)
         painter.drawLine(
@@ -666,6 +719,22 @@ class PcbPreviewWidget(QWidget):
         min_y = min(top, bottom)
         max_y = max(top, bottom)
         return min_x <= position.x() <= max_x and min_y <= position.y() <= max_y
+
+    def _alignment_hole_index_at_position(self, position: QPointF) -> int | None:
+        if not self._alignment_selection_enabled or not self._alignment_holes:
+            return None
+        closest_index = None
+        closest_distance = None
+        for index, hole in enumerate(self._alignment_holes):
+            screen_center = self._world_to_screen(hole[0], hole[1])
+            hole_radius = max(8.0, (hole[2] * 0.5 * self._zoom) + 8.0)
+            distance = self._distance(position, screen_center)
+            if distance > hole_radius:
+                continue
+            if closest_distance is None or distance < closest_distance:
+                closest_index = index
+                closest_distance = distance
+        return closest_index
 
     def _distance(self, first: QPointF, second: QPointF) -> float:
         delta_x = first.x() - second.x()

@@ -9,13 +9,13 @@ from .alignment_hole import AlignmentHole
 
 
 class PcbProject:
-    VERSION = 5
+    VERSION = 6
     STEP_PROJECT = 0
     STEP_GERBER_IMPORT = 1
     STEP_DRILL_IMPORT = 2
-    STEP_TOOL_SELECTION = 3
-    STEP_ALIGNMENT_HOLES = 4
-    STEP_ORIGIN = 5
+    STEP_ALIGNMENT_HOLES = 3
+    STEP_ORIGIN = 4
+    STEP_TOOL_SELECTION = 5
     STEP_FRONT_ISOLATION = 6
     STEP_BACK_ISOLATION = 7
     STEP_DRILLING = 8
@@ -26,9 +26,9 @@ class PcbProject:
         "project",
         "gerber_import",
         "drill_import",
-        "tool_selection",
         "alignment_holes",
         "origin",
+        "tool_selection",
         "front_isolation",
         "back_isolation",
         "drilling",
@@ -252,6 +252,23 @@ class PcbProject:
         self.project_path = path.resolve()
         self.completed_steps.add(0)
         self.project_path.parent.mkdir(parents=True, exist_ok=True)
+        alignment_holes_data = []
+        for hole in self.alignment_holes:
+            if hole.position_mode == "board_xy":
+                alignment_holes_data.append({
+                    "position_mode": "board_xy",
+                    "x_offset": hole.x_offset,
+                    "y_offset": hole.y_offset,
+                    "diameter": hole.diameter,
+                })
+                continue
+            alignment_holes_data.append({
+                "position_mode": "legacy_edge",
+                "edge": hole.edge,
+                "offset_along_edge": hole.offset_along_edge,
+                "offset_from_edge": hole.offset_from_edge,
+                "diameter": hole.diameter,
+            })
         payload = {
             "version": self.VERSION,
             "gerber_files": [
@@ -295,15 +312,7 @@ class PcbProject:
                 "flip_edge": self.mirror_flip_edge or None,
                 "preview_mode": self.mirror_preview_mode,
             },
-            "alignment_holes": [
-                {
-                    "edge": hole.edge,
-                    "offset_along_edge": hole.offset_along_edge,
-                    "offset_from_edge": hole.offset_from_edge,
-                    "diameter": hole.diameter,
-                }
-                for hole in self.alignment_holes
-            ],
+            "alignment_holes": alignment_holes_data,
             "edge_cuts": {
                 "profiles": [
                     {
@@ -405,12 +414,26 @@ class PcbProject:
                 if not isinstance(item, dict):
                     continue
                 try:
+                    mode = str(item.get("position_mode", "")).strip()
+                    if mode == "board_xy" or (
+                        "x_offset" in item and "y_offset" in item
+                    ):
+                        project.alignment_holes.append(
+                            AlignmentHole(
+                                position_mode="board_xy",
+                                x_offset=float(item.get("x_offset", 0.0)),
+                                y_offset=float(item.get("y_offset", 0.0)),
+                                diameter=float(item.get("diameter", 0.0)),
+                            )
+                        )
+                        continue
                     project.alignment_holes.append(
                         AlignmentHole(
+                            position_mode="legacy_edge",
+                            diameter=float(item.get("diameter", 0.0)),
                             edge=str(item.get("edge", "")).strip(),
                             offset_along_edge=float(item.get("offset_along_edge", 0.0)),
                             offset_from_edge=float(item.get("offset_from_edge", 0.0)),
-                            diameter=float(item.get("diameter", 0.0)),
                         )
                     )
                 except (TypeError, ValueError):

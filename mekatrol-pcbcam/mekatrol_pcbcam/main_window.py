@@ -81,9 +81,9 @@ class MainWindow(QMainWindow):
         "Project",
         "Gerber Import",
         "Drill Import",
-        "Tool Selection",
         "Alignment Holes",
         "Origin",
+        "Tool Selection",
         "Front Isolation",
         "Back Isolation",
         "Drilling",
@@ -246,9 +246,9 @@ class MainWindow(QMainWindow):
         self.page_stack.addWidget(self._build_project_page())
         self.page_stack.addWidget(self._build_gerber_page())
         self.page_stack.addWidget(self._build_drill_page())
-        self.page_stack.addWidget(self._build_tool_selection_page())
         self.page_stack.addWidget(self._build_alignment_holes_page())
         self.page_stack.addWidget(self._build_origin_page())
+        self.page_stack.addWidget(self._build_tool_selection_page())
         self.page_stack.addWidget(
             self._build_operation_page(
                 "Step 7: Front Isolation",
@@ -448,7 +448,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 4: Tool Selection")
+        heading = QLabel("Step 6: Tool Selection")
         heading.setObjectName("pageHeading")
         body = QLabel(
             "Choose one drilling tool, one milling tool, and one V-bit from the "
@@ -597,7 +597,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 5: Alignment Holes")
+        heading = QLabel("Step 4: Alignment Holes")
         heading.setObjectName("pageHeading")
         body = QLabel(
             "Define optional alignment holes outside the board edge. Each hole uses "
@@ -666,7 +666,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 6: Origin")
+        heading = QLabel("Step 5: Origin")
         heading.setObjectName("pageHeading")
         body = QLabel(
             "Hover over the board preview to reveal selectable origin points from "
@@ -1732,14 +1732,14 @@ class MainWindow(QMainWindow):
         if index == 2:
             return not self.imported_drills or bool(self._active_drills())
         if index == 3:
+            return True
+        if index == 4:
+            return self._current_origin_point() is not None
+        if index == 5:
             return self.tool_library is not None and all(
                 self.project.selected_tools[role]
                 for role in ("drilling", "milling", "v_bits")
             )
-        if index == 4:
-            return True
-        if index == 5:
-            return self._current_origin_point() is not None
         if index == 6:
             return self._operation_optional_or_generated("front_isolation", "front_copper")
         if index == 7:
@@ -1773,9 +1773,9 @@ class MainWindow(QMainWindow):
                 "or clear the drill import if you do not want to use drill data."
             )
         if index == 3:
-            return "Load tools.yaml and select a drilling tool, a milling tool, and a V-bit."
-        if index == 5:
             return "Import usable board geometry, then choose the NC origin before moving to the generation steps."
+        if index == 5:
+            return "Load tools.yaml and select a drilling tool, a milling tool, and a V-bit."
         if index == 6:
             return "Generate the front isolation NC file before moving to the next step."
         if index == 7:
@@ -1961,11 +1961,11 @@ class MainWindow(QMainWindow):
                 "enabled to continue."
             )
         if self.project.current_step_index == 3:
-            return "Load tools.yaml and choose the tools needed for drilling, milling, and V-bit operations."
-        if self.project.current_step_index == 4:
             return "Add optional alignment holes and confirm they appear outside the board in preview."
-        if self.project.current_step_index == 5:
+        if self.project.current_step_index == 4:
             return "Choose the NC work origin. The preview is forced to overlay so the origin can be placed on the board bounds."
+        if self.project.current_step_index == 5:
+            return "Load tools.yaml and choose the tools needed for drilling, milling, and V-bit operations."
         if self.project.current_step_index == 6:
             return "Generate front copper isolation if a front copper layer is assigned."
         if self.project.current_step_index == 7:
