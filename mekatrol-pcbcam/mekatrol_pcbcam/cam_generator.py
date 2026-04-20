@@ -143,39 +143,53 @@ class CamGenerator:
 
     def generate_edge_cuts(
         self,
-        outlines: list[list[tuple[float, float]]],
+        path_specs: list[dict[str, object]],
         *,
-        cut_modes: list[str],
         output_name: str,
-        mill_diameter: float,
         origin_point: tuple[float, float],
     ) -> Path:
         output_path = self.output_directory / output_name
-        final_depth = -(self.board_thickness + self.breakthrough_depth)
-        translated_outlines = [
-            self._translate_points_to_origin(toolpath, origin_point)
-            for toolpath in self.edge_cut_paths(
-                outlines,
-                cut_modes=cut_modes,
-                mill_diameter=mill_diameter,
-            )
+        translated_specs = [
+            {
+                "toolpath": self._translate_points_to_origin(
+                    list(spec["toolpath"]),
+                    origin_point,
+                ),
+                "mill_diameter": float(spec["mill_diameter"]),
+                "cut_depth": float(spec["cut_depth"]),
+                "step_down": float(spec["step_down"]),
+                "tool_label": str(spec.get("tool_label", "milling tool")),
+                "tool_id": str(spec.get("tool_id", "")),
+            }
+            for spec in path_specs
         ]
         with output_path.open("w", encoding="utf-8") as gcode_file:
             self._write_header(gcode_file)
-            gcode_file.write(
-                f"(load square end mill {mill_diameter:.3f} mm, "
-                f"origin {format_origin_point(origin_point)})\nT1 M06\nS12000 M3\n"
-            )
-            current_depth = 0.0
-            while current_depth > final_depth:
-                current_depth = max(current_depth - self.edge_depth_step, final_depth)
-                for outline in translated_outlines:
+            active_tool_key: tuple[str, float] | None = None
+            tool_number = 1
+            for spec in translated_specs:
+                tool_key = (spec["tool_id"], spec["mill_diameter"])
+                if tool_key != active_tool_key:
+                    if active_tool_key is not None:
+                        gcode_file.write("M5\n")
+                    gcode_file.write(
+                        f"(load {spec['tool_label']}, diameter {spec['mill_diameter']:.3f} mm, "
+                        f"origin {format_origin_point(origin_point)})\nT{tool_number:d} M06\nS12000 M3\n"
+                    )
+                    active_tool_key = tool_key
+                    tool_number += 1
+                final_depth = -abs(spec["cut_depth"])
+                step_down = max(0.001, abs(spec["step_down"]))
+                current_depth = 0.0
+                while current_depth > final_depth:
+                    current_depth = max(current_depth - step_down, final_depth)
                     self._write_polyline(
                         gcode_file,
-                        outline,
+                        spec["toolpath"],
                         cut_depth=current_depth,
                     )
-            gcode_file.write("M5\n")
+            if active_tool_key is not None:
+                gcode_file.write("M5\n")
             self._write_footer(gcode_file)
         return output_path
 

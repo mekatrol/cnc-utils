@@ -58,6 +58,7 @@ class PcbPreviewWidget(QWidget):
         self._validated_edge_polygons: list[list[tuple[float, float]]] = []
         self._edge_error_segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
         self._generated_edge_cut_paths: list[list[tuple[float, float]]] = []
+        self._suppress_validated_edge_geometry = False
         self._edge_selection_enabled = False
         self._selected_edge_polygon_indices: set[int] = set()
         self._edge_polygon_modes: dict[int, str] = {}
@@ -123,10 +124,12 @@ class PcbPreviewWidget(QWidget):
         selection_enabled: bool = False,
         selected_polygon_indices: set[int] | None = None,
         polygon_modes: dict[int, str] | None = None,
+        suppress_source_geometry: bool = False,
     ) -> None:
         self._validated_edge_path = None if edge_path is None else edge_path.resolve()
         self._validated_edge_polygons = list(polygons or [])
         self._edge_error_segments = list(error_segments or [])
+        self._suppress_validated_edge_geometry = suppress_source_geometry
         self._edge_selection_enabled = selection_enabled
         self._selected_edge_polygon_indices = set(selected_polygon_indices or set())
         self._edge_polygon_modes = dict(polygon_modes or {})
@@ -330,10 +333,10 @@ class PcbPreviewWidget(QWidget):
         for hole in self._alignment_holes:
             self._draw_alignment_hole(painter, hole)
 
+        self._draw_edge_polygon_annotations(painter)
         self._draw_generated_edge_cut_paths(painter)
         self._draw_origin_hotspots(painter)
         self._draw_origin_marker(painter)
-        self._draw_edge_polygon_annotations(painter)
 
     def _draw_gerber(
         self,
@@ -343,6 +346,9 @@ class PcbPreviewWidget(QWidget):
         *,
         mirrored: bool,
     ) -> None:
+        if gerber.path == self._validated_edge_path and self._suppress_validated_edge_geometry:
+            self._draw_edge_errors(painter, gerber, mirrored=mirrored)
+            return
         painter.setPen(QPen(self._theme.named_color("pcb_preview_outline"), 2.2))
         outline_polygons = self._outline_polygons_for(gerber)
         if outline_polygons:
@@ -492,7 +498,9 @@ class PcbPreviewWidget(QWidget):
             return
         path_color = QColor(self._theme.named_color("pcb_preview_error"))
         painter.save()
-        painter.setPen(QPen(path_color, 2.6))
+        pen = QPen(path_color, 3.4)
+        pen.setStyle(Qt.PenStyle.DotLine)
+        painter.setPen(pen)
         for path in self._generated_edge_cut_paths:
             self._draw_outline(painter, path)
         painter.restore()
@@ -503,7 +511,7 @@ class PcbPreviewWidget(QWidget):
         painter.save()
         for index, polygon in enumerate(self._validated_edge_polygons):
             if index in self._selected_edge_polygon_indices:
-                selection_color = QColor(self._theme.named_color("wizard_step_current_fill"))
+                selection_color = QColor(self._theme.named_color("pcb_preview_selection"))
                 selection_color.setAlpha(255)
                 painter.setPen(QPen(selection_color, 4.0))
                 self._draw_outline(painter, polygon)
@@ -633,7 +641,7 @@ class PcbPreviewWidget(QWidget):
         world_position = self._screen_to_world(position)
         if world_position is None:
             return None
-        max_distance = 10.0 / max(self._zoom, 0.001)
+        max_distance = 18.0 / max(self._zoom, 0.001)
         closest_index = None
         closest_distance = None
         for index, polygon in enumerate(self._validated_edge_polygons):

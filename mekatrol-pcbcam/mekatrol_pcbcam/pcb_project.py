@@ -4,12 +4,12 @@ from pathlib import Path
 
 import yaml
 
-from .edge_cut_profile import EdgeCutProfile
+from .edge_cut_profile import EdgeCutPath
 from .alignment_hole import AlignmentHole
 
 
 class PcbProject:
-    VERSION = 3
+    VERSION = 5
     STEP_PROJECT = 0
     STEP_GERBER_IMPORT = 1
     STEP_DRILL_IMPORT = 2
@@ -67,7 +67,7 @@ class PcbProject:
         self.mirror_flip_edge: str = ""
         self.mirror_preview_mode: str = "side_by_side"
         self.alignment_holes: list[AlignmentHole] = []
-        self.edge_cut_profiles: list[EdgeCutProfile] = []
+        self.edge_cut_profiles: list[EdgeCutPath] = []
         self.generated_outputs: dict[str, Path] = {}
         self.current_step_index = 0
         self.highest_commenced_step = 0
@@ -203,7 +203,7 @@ class PcbProject:
     def mark_origin_changed(self) -> None:
         self._invalidate_from(self.STEP_ORIGIN)
 
-    def replace_edge_cut_profiles(self, profiles: list[EdgeCutProfile]) -> bool:
+    def replace_edge_cut_profiles(self, profiles: list[EdgeCutPath]) -> bool:
         changed = profiles != self.edge_cut_profiles
         self.edge_cut_profiles = profiles
         if changed:
@@ -309,6 +309,11 @@ class PcbProject:
                     {
                         "polygon_keys": list(profile.polygon_keys),
                         "mode": profile.mode,
+                        "tool_id": profile.tool_id,
+                        "cut_depth": profile.cut_depth,
+                        "step_down": profile.step_down,
+                        "generated": profile.generated,
+                        "visible": profile.visible,
                     }
                     for profile in self.edge_cut_profiles
                 ],
@@ -428,9 +433,14 @@ class PcbProject:
                     mode = str(raw_profile.get("mode", "")).strip()
                     if polygon_keys and mode:
                         project.edge_cut_profiles.append(
-                            EdgeCutProfile(
+                            EdgeCutPath(
                                 polygon_keys=polygon_keys,
                                 mode=mode,
+                                tool_id=str(raw_profile.get("tool_id", "")).strip(),
+                                cut_depth=float(raw_profile.get("cut_depth", 1.8)),
+                                step_down=float(raw_profile.get("step_down", 0.4)),
+                                generated=bool(raw_profile.get("generated", False)),
+                                visible=bool(raw_profile.get("visible", True)),
                             )
                         )
             else:
@@ -442,9 +452,14 @@ class PcbProject:
                             normalized_value = value.strip()
                             if normalized_key and normalized_value:
                                 project.edge_cut_profiles.append(
-                                    EdgeCutProfile(
+                                    EdgeCutPath(
                                         polygon_keys=[normalized_key],
                                         mode=normalized_value,
+                                        tool_id="",
+                                        cut_depth=1.8,
+                                        step_down=0.4,
+                                        generated=False,
+                                        visible=True,
                                     )
                                 )
         generated_output_data = loaded.get("generated_outputs", {})

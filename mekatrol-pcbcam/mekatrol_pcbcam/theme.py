@@ -52,6 +52,7 @@ class AppTheme:
     pcb_preview_outline: str = "#ffe066"
     pcb_preview_drill: str = "#dfe7ef"
     pcb_preview_alignment: str = "#6ee7b7"
+    pcb_preview_selection: str = "#5aa9ff"
     pcb_preview_error: str = "#ff5d73"
     pcb_preview_text: str = "#dfe7ef"
     pcb_preview_gerber_palette: list[str] = field(
@@ -145,6 +146,7 @@ def high_contrast_theme() -> AppTheme:
         pcb_preview_outline="#ffff00",
         pcb_preview_drill="#ffffff",
         pcb_preview_alignment="#00ffff",
+        pcb_preview_selection="#ff00ff",
         pcb_preview_error="#ff0000",
         pcb_preview_text="#ffffff",
         pcb_preview_gerber_palette=[
@@ -218,6 +220,7 @@ def light_theme() -> AppTheme:
         pcb_preview_outline="#3f6fb3",
         pcb_preview_drill="#4f5f70",
         pcb_preview_alignment="#249c8b",
+        pcb_preview_selection="#8c3fd1",
         pcb_preview_error="#c81e1e",
         pcb_preview_text="#3d4b5b",
         pcb_preview_gerber_palette=[
@@ -516,6 +519,12 @@ def load_theme(path: Path) -> tuple[AppTheme, list[str]]:
             "colors.pcb_preview_alignment",
             warnings,
         ),
+        pcb_preview_selection=_parse_color(
+            colors_data.get("pcb_preview_selection"),
+            defaults.pcb_preview_selection,
+            "colors.pcb_preview_selection",
+            warnings,
+        ),
         pcb_preview_text=_parse_color(
             colors_data.get("pcb_preview_text"),
             defaults.pcb_preview_text,
@@ -719,6 +728,8 @@ def save_theme(path: Path, theme: AppTheme) -> None:
             f"  pcb_preview_drill: {_yaml_scalar(theme.pcb_preview_drill)}",
             "  # Alignment-hole highlight color in the 2D PCB preview.",
             f"  pcb_preview_alignment: {_yaml_scalar(theme.pcb_preview_alignment)}",
+            "  # Selected edge/path highlight color in the 2D PCB preview.",
+            f"  pcb_preview_selection: {_yaml_scalar(theme.pcb_preview_selection)}",
             "  # Overlay text color in the 2D PCB preview.",
             f"  pcb_preview_text: {_yaml_scalar(theme.pcb_preview_text)}",
             "  # Rotating colors used to distinguish imported Gerber layers in the 2D PCB preview.",

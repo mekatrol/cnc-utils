@@ -7,7 +7,7 @@ from dataclasses import fields
 from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths, QSize, QTimer, Qt
-from PySide6.QtGui import QAction, QCloseEvent
+from PySide6.QtGui import QAction, QCloseEvent, QDoubleValidator
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -35,7 +36,7 @@ from PySide6.QtWidgets import (
 
 from .app_config import AppConfig
 from .alignment_hole import AlignmentHole
-from .edge_cut_profile import EdgeCutProfile
+from .edge_cut_profile import EdgeCutPath
 from .edge_cut_validator import EdgeCutValidationResult, validate_edge_segments
 from .excellon_file_parser import ExcellonFileParser
 from .gcode_parser import GCodeParser
@@ -748,13 +749,19 @@ class MainWindow(QMainWindow):
         heading = QLabel("Step 10: Edge Cuts")
         heading.setObjectName("pageHeading")
         body = QLabel(
-            "Each validated contour is listed below. Select a contour from the preview or list, then choose "
-            "its profile operation. Contours set to None are excluded from the generated edge-cut toolpaths."
+            "Each validated contour becomes a path entry. Select a path from the list, then choose "
+            "the milling tool, cut depth, step-down, and contour side. Generate one path or all paths, "
+            "and show or hide generated paths in the preview."
         )
         body.setWordWrap(True)
 
-        button = QPushButton("Generate Edge Cuts")
-        button.clicked.connect(self._generate_edge_cuts)
+        action_row = QHBoxLayout()
+        generate_selected_button = QPushButton("Generate Selected Path")
+        generate_selected_button.clicked.connect(self._generate_selected_edge_cut_path)
+        generate_all_button = QPushButton("Generate All Paths")
+        generate_all_button.clicked.connect(self._generate_edge_cuts)
+        action_row.addWidget(generate_selected_button)
+        action_row.addWidget(generate_all_button)
 
         card = QFrame()
         card.setFrameShape(QFrame.Shape.StyledPanel)
@@ -764,22 +771,45 @@ class MainWindow(QMainWindow):
         form.setContentsMargins(14, 14, 14, 14)
         form.setSpacing(10)
 
-        self.edge_cut_selection_value = QLabel("No contours selected")
+        self.edge_cut_selection_value = QLabel("No path selected")
         self.edge_cut_selection_value.setWordWrap(True)
+        self.edge_cut_tool_combo = QComboBox()
+        self.edge_cut_tool_combo.currentIndexChanged.connect(self._edge_cut_tool_changed)
+        self.edge_cut_depth_input = QLineEdit()
+        self.edge_cut_depth_input.setValidator(QDoubleValidator(0.0, 1_000_000.0, 3, self))
+        self.edge_cut_depth_input.editingFinished.connect(self._edge_cut_depth_changed)
+        self.edge_cut_step_down_input = QLineEdit()
+        self.edge_cut_step_down_input.setValidator(QDoubleValidator(0.0, 1_000_000.0, 3, self))
+        self.edge_cut_step_down_input.editingFinished.connect(self._edge_cut_step_down_changed)
         self.edge_cut_mode_combo = QComboBox()
         self.edge_cut_mode_combo.addItem("None", "none")
         self.edge_cut_mode_combo.addItem("Outside profile", "outside_profile")
         self.edge_cut_mode_combo.addItem("On contour", "on_contour")
         self.edge_cut_mode_combo.addItem("Inside profile", "inside_profile")
         self.edge_cut_mode_combo.currentIndexChanged.connect(self._edge_cut_mode_changed)
-        form.addRow("Selected contour", self.edge_cut_selection_value)
-        form.addRow("Profile mode", self.edge_cut_mode_combo)
+        form.addRow("Selected path", self.edge_cut_selection_value)
+        form.addRow("Tool bit", self.edge_cut_tool_combo)
+        form.addRow("Cut depth", self.edge_cut_depth_input)
+        form.addRow("Step-down", self.edge_cut_step_down_input)
+        form.addRow("Contour side", self.edge_cut_mode_combo)
+
+        path_list_label = QLabel("Path List")
+        path_list_label.setObjectName("sectionHeading")
+
+        path_action_row = QHBoxLayout()
+        delete_selected_button = QPushButton("Delete Selected Path")
+        delete_selected_button.clicked.connect(self._delete_selected_edge_cut_path)
+        delete_all_button = QPushButton("Delete All Paths")
+        delete_all_button.clicked.connect(self._delete_all_edge_cut_paths)
+        path_action_row.addWidget(delete_selected_button)
+        path_action_row.addWidget(delete_all_button)
 
         self.edge_cut_profile_list = QListWidget()
+        self.edge_cut_profile_list.itemChanged.connect(self._edge_cut_profile_item_changed)
         self.edge_cut_profile_list.currentRowChanged.connect(self._edge_cut_profile_selected)
 
         self.edge_cut_hint = QLabel(
-            "Click near a contour edge in the preview or select it from the list. The preview shows the chosen cut side with a dotted offset guide instead of text."
+            "Select a path from the list to edit it. The preview shows only generated paths as red dotted lines."
         )
         self.edge_cut_hint.setWordWrap(True)
         self._apply_muted_text_style(self.edge_cut_hint)
@@ -789,8 +819,10 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(heading)
         layout.addWidget(body)
-        layout.addWidget(button)
+        layout.addLayout(action_row)
         layout.addWidget(card)
+        layout.addWidget(path_list_label)
+        layout.addLayout(path_action_row)
         layout.addWidget(self.edge_cut_profile_list, 1)
         layout.addWidget(self.edge_cut_hint)
         layout.addWidget(self.edge_cuts_value)
@@ -1594,6 +1626,12 @@ class MainWindow(QMainWindow):
         self._register_generated_output("drilling", output_path)
 
     def _generate_edge_cuts(self) -> None:
+        self._generate_edge_cut_paths(generate_all=True)
+
+    def _generate_selected_edge_cut_path(self) -> None:
+        self._generate_edge_cut_paths(generate_all=False)
+
+    def _generate_edge_cut_paths(self, *, generate_all: bool) -> None:
         gerber = self._assigned_gerber("edges")
         if gerber is None:
             QMessageBox.information(self, "Edge cuts", "Assign an edge-cuts Gerber first.")
@@ -1602,35 +1640,63 @@ class MainWindow(QMainWindow):
         if not self._edge_cut_validation_result.is_valid:
             QMessageBox.warning(self, "Edge cuts", self._edge_validation_message())
             return
-        mill_tool = self._selected_tool("milling")
-        if mill_tool is None:
-            QMessageBox.information(self, "Edge cuts", "Select a milling tool first.")
+        if self.tool_library is None or not self.tool_library.tools_by_category["milling"]:
+            QMessageBox.information(self, "Edge cuts", "Load a tool library with milling tools first.")
             return
-        profiles = self._resolved_edge_cut_profiles()
-        if not profiles:
+        path_indices = None if generate_all else self._selected_edge_cut_path_indices()
+        if not generate_all and not path_indices:
+            QMessageBox.information(self, "Edge cuts", "Select a path first.")
+            return
+        paths = self._resolved_edge_cut_paths(path_indices=path_indices)
+        if not paths:
             QMessageBox.information(
                 self,
                 "Edge cuts",
-                "Create at least one contour profile before generating edge cuts.",
+                "Configure at least one path with a tool and contour side before generating NC.",
             )
             return
         try:
-            preview_paths = self._cam_generator().edge_cut_paths(
-                [polygon for _, polygon, _ in profiles],
-                cut_modes=[mode for _, _, mode in profiles],
-                mill_diameter=mill_tool.numeric_parameter("diameter", 0.1),
-            )
-            output_path = self._cam_generator().generate_edge_cuts(
-                [polygon for _, polygon, _ in profiles],
-                cut_modes=[mode for _, _, mode in profiles],
-                output_name="edge-cuts.nc",
-                mill_diameter=mill_tool.numeric_parameter("diameter", 0.1),
+            self._cam_generator().generate_edge_cuts(
+                paths,
+                output_name=(
+                    "edge-cuts.nc"
+                    if generate_all
+                    else f"edge-cut-path-{paths[0]['path_index'] + 1}.nc"
+                ),
                 origin_point=self._current_origin_point_required(),
             )
         except Exception as exc:
             QMessageBox.critical(self, "Edge cut generation failed", str(exc))
             return
-        self._generated_edge_cut_preview_paths = preview_paths
+        updated_paths = list(self.project.edge_cut_profiles)
+        for path_index in {int(path["path_index"]) for path in paths}:
+            current_path = updated_paths[path_index]
+            updated_paths[path_index] = EdgeCutPath(
+                polygon_keys=list(current_path.polygon_keys),
+                mode=current_path.mode,
+                tool_id=current_path.tool_id,
+                cut_depth=current_path.cut_depth,
+                step_down=current_path.step_down,
+                generated=True,
+                visible=True,
+            )
+        if self.project.replace_edge_cut_profiles(updated_paths):
+            self._mark_project_dirty()
+        self._generated_edge_cut_preview_paths = self._visible_generated_edge_cut_preview_paths()
+        try:
+            generated_path_indices = {
+                index
+                for index, profile in enumerate(self.project.edge_cut_profiles)
+                if profile.generated and profile.mode != "none"
+            }
+            output_path = self._cam_generator().generate_edge_cuts(
+                self._resolved_edge_cut_paths(path_indices=generated_path_indices),
+                output_name="edge-cuts.nc",
+                origin_point=self._current_origin_point_required(),
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Edge cut generation failed", str(exc))
+            return
         self._register_generated_output("edge_cuts", output_path)
 
     def _generated_output_selected(self, row: int) -> None:
@@ -1798,15 +1864,11 @@ class MainWindow(QMainWindow):
             error_segments=self._edge_cut_validation_result.error_segments,
             selection_enabled=current == PcbProject.STEP_EDGE_CUTS,
             selected_polygon_indices=self._selected_edge_cut_polygon_indices,
-            polygon_modes=self._edge_cut_polygon_labels(),
+            polygon_modes={},
+            suppress_source_geometry=False,
         )
         self.preview.set_edge_cut_preview_paths(
-            self._generated_edge_cut_preview_paths
-            if (
-                current == PcbProject.STEP_EDGE_CUTS
-                and self.project.generated_outputs.get("edge_cuts") is not None
-            )
-            else []
+            self._visible_generated_edge_cut_preview_paths() if current == PcbProject.STEP_EDGE_CUTS else []
         )
         self.preview.set_origin_marker(
             self._reference_board_bounds() if current == PcbProject.STEP_ORIGIN else None,
@@ -1911,7 +1973,7 @@ class MainWindow(QMainWindow):
         if self.project.current_step_index == 8:
             return "Generate drilling for imported drill files and alignment holes."
         if self.project.current_step_index == 9:
-            return "Generate edge cut operations if an outline is assigned."
+            return "Configure edge-cut paths and generate NC from the selected contour, tool, depth, step-down, and contour side."
         if self.project.current_step_index == 10:
             return "Select a generated NC file to inspect it in the 3D preview."
         return "Stage 4 of the wizard is active."
@@ -2175,13 +2237,27 @@ class MainWindow(QMainWindow):
         if not polygons:
             self._selected_edge_cut_polygon_indices = set()
             self._selected_edge_cut_profile_index = None
-            self.edge_cut_selection_value.setText("No valid contours available")
+            self.edge_cut_selection_value.setText("No valid paths available")
             self.edge_cut_profile_list.blockSignals(True)
             self.edge_cut_profile_list.clear()
             self.edge_cut_profile_list.blockSignals(False)
+            self._populate_edge_cut_tool_combo("")
             self.edge_cut_mode_combo.blockSignals(True)
             self.edge_cut_mode_combo.setCurrentIndex(0)
             self.edge_cut_mode_combo.blockSignals(False)
+            self.edge_cut_depth_input.blockSignals(True)
+            self.edge_cut_depth_input.setText(
+                self._format_edge_cut_numeric(self._default_edge_cut_depth())
+            )
+            self.edge_cut_depth_input.blockSignals(False)
+            self.edge_cut_step_down_input.blockSignals(True)
+            self.edge_cut_step_down_input.setText(
+                self._format_edge_cut_numeric(self._default_edge_cut_step_down())
+            )
+            self.edge_cut_step_down_input.blockSignals(False)
+            self.edge_cut_tool_combo.setEnabled(False)
+            self.edge_cut_depth_input.setEnabled(False)
+            self.edge_cut_step_down_input.setEnabled(False)
             self.edge_cut_mode_combo.setEnabled(False)
             return
         self._selected_edge_cut_polygon_indices = {
@@ -2196,6 +2272,12 @@ class MainWindow(QMainWindow):
         for profile_index, label in profile_display_rows:
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, profile_index)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                Qt.CheckState.Checked
+                if self.project.edge_cut_profiles[profile_index].visible
+                else Qt.CheckState.Unchecked
+            )
             self.edge_cut_profile_list.addItem(item)
         if current_profile_index is not None:
             profile_found = False
@@ -2210,21 +2292,48 @@ class MainWindow(QMainWindow):
         self.edge_cut_profile_list.blockSignals(False)
         selected_indices = sorted(self._selected_edge_cut_polygon_indices)
         if not selected_indices:
-            self.edge_cut_selection_value.setText("No contours selected")
+            self.edge_cut_selection_value.setText("No path selected")
+            self._populate_edge_cut_tool_combo("")
             self.edge_cut_mode_combo.blockSignals(True)
             self.edge_cut_mode_combo.setCurrentIndex(0)
             self.edge_cut_mode_combo.blockSignals(False)
-            self.edge_cut_mode_combo.setEnabled(True)
+            self.edge_cut_depth_input.blockSignals(True)
+            self.edge_cut_depth_input.setText(
+                self._format_edge_cut_numeric(self._default_edge_cut_depth())
+            )
+            self.edge_cut_depth_input.blockSignals(False)
+            self.edge_cut_step_down_input.blockSignals(True)
+            self.edge_cut_step_down_input.setText(
+                self._format_edge_cut_numeric(self._default_edge_cut_step_down())
+            )
+            self.edge_cut_step_down_input.blockSignals(False)
+            self.edge_cut_tool_combo.setEnabled(bool(self._available_edge_cut_tools()))
+            self.edge_cut_depth_input.setEnabled(False)
+            self.edge_cut_step_down_input.setEnabled(False)
+            self.edge_cut_mode_combo.setEnabled(False)
             return
+        selected_path = self.project.edge_cut_profiles[selected_indices[0]]
         self.edge_cut_selection_value.setText(
-            f"Contour {selected_indices[0] + 1} of {len(polygons)} selected"
+            f"Path {selected_indices[0] + 1} of {len(polygons)} selected"
         )
+        self._populate_edge_cut_tool_combo(selected_path.tool_id)
         self.edge_cut_mode_combo.blockSignals(True)
         selected_profile_mode = self._selected_edge_cut_profile_mode()
         self.edge_cut_mode_combo.setCurrentIndex(
             max(self.edge_cut_mode_combo.findData(selected_profile_mode), 0)
         )
         self.edge_cut_mode_combo.blockSignals(False)
+        self.edge_cut_depth_input.blockSignals(True)
+        self.edge_cut_depth_input.setText(self._format_edge_cut_numeric(selected_path.cut_depth))
+        self.edge_cut_depth_input.blockSignals(False)
+        self.edge_cut_step_down_input.blockSignals(True)
+        self.edge_cut_step_down_input.setText(
+            self._format_edge_cut_numeric(selected_path.step_down)
+        )
+        self.edge_cut_step_down_input.blockSignals(False)
+        self.edge_cut_tool_combo.setEnabled(bool(self._available_edge_cut_tools()))
+        self.edge_cut_depth_input.setEnabled(True)
+        self.edge_cut_step_down_input.setEnabled(True)
         self.edge_cut_mode_combo.setEnabled(True)
 
     def _select_edge_cut_polygon(self, index: int, ctrl_pressed: bool) -> None:
@@ -2247,7 +2356,7 @@ class MainWindow(QMainWindow):
             self.edge_cut_profile_list.blockSignals(True)
             self.edge_cut_profile_list.setCurrentRow(index)
             self.edge_cut_profile_list.blockSignals(False)
-        self.statusBar().showMessage(f"Selected edge contour {index + 1}", 2000)
+        self.statusBar().showMessage(f"Selected edge path {index + 1}", 2000)
         self._sync_ui()
 
     def _edge_cut_mode_changed(self, row: int) -> None:
@@ -2260,9 +2369,93 @@ class MainWindow(QMainWindow):
         selected_profile = updated_profiles[self._selected_edge_cut_profile_index]
         if selected_profile.mode == mode:
             return
-        updated_profiles[self._selected_edge_cut_profile_index] = EdgeCutProfile(
+        updated_profiles[self._selected_edge_cut_profile_index] = EdgeCutPath(
             polygon_keys=list(selected_profile.polygon_keys),
             mode=mode,
+            tool_id=selected_profile.tool_id,
+            cut_depth=selected_profile.cut_depth,
+            step_down=selected_profile.step_down,
+            generated=selected_profile.generated,
+            visible=selected_profile.visible,
+        )
+        if self.project.replace_edge_cut_profiles(updated_profiles):
+            self.toolpath_viewer.load_document(None)
+            self._mark_project_dirty()
+        self._sync_ui()
+
+    def _edge_cut_tool_changed(self, row: int) -> None:
+        if self._selected_edge_cut_profile_index is None:
+            return
+        if not (0 <= self._selected_edge_cut_profile_index < len(self.project.edge_cut_profiles)):
+            return
+        tool_id = str(self.edge_cut_tool_combo.itemData(row) or "")
+        updated_profiles = list(self.project.edge_cut_profiles)
+        selected_path = updated_profiles[self._selected_edge_cut_profile_index]
+        if selected_path.tool_id == tool_id:
+            return
+        updated_profiles[self._selected_edge_cut_profile_index] = EdgeCutPath(
+            polygon_keys=list(selected_path.polygon_keys),
+            mode=selected_path.mode,
+            tool_id=tool_id,
+            cut_depth=selected_path.cut_depth,
+            step_down=selected_path.step_down,
+            generated=selected_path.generated,
+            visible=selected_path.visible,
+        )
+        if self.project.replace_edge_cut_profiles(updated_profiles):
+            self.toolpath_viewer.load_document(None)
+            self._mark_project_dirty()
+        self._sync_ui()
+
+    def _edge_cut_depth_changed(self) -> None:
+        value = self._parse_edge_cut_numeric_input(
+            self.edge_cut_depth_input,
+            fallback=self._default_edge_cut_depth(),
+        )
+        if value is None:
+            self._sync_ui()
+            return
+        self.edge_cut_depth_input.setText(self._format_edge_cut_numeric(value))
+        self._update_selected_edge_cut_path(cut_depth=value)
+
+    def _edge_cut_step_down_changed(self) -> None:
+        value = self._parse_edge_cut_numeric_input(
+            self.edge_cut_step_down_input,
+            fallback=self._default_edge_cut_step_down(),
+        )
+        if value is None:
+            self._sync_ui()
+            return
+        self.edge_cut_step_down_input.setText(self._format_edge_cut_numeric(value))
+        self._update_selected_edge_cut_path(step_down=value)
+
+    def _update_selected_edge_cut_path(
+        self,
+        *,
+        cut_depth: float | None = None,
+        step_down: float | None = None,
+    ) -> None:
+        if self._selected_edge_cut_profile_index is None:
+            return
+        if not (0 <= self._selected_edge_cut_profile_index < len(self.project.edge_cut_profiles)):
+            return
+        updated_profiles = list(self.project.edge_cut_profiles)
+        selected_path = updated_profiles[self._selected_edge_cut_profile_index]
+        next_cut_depth = selected_path.cut_depth if cut_depth is None else float(cut_depth)
+        next_step_down = selected_path.step_down if step_down is None else float(step_down)
+        if (
+            abs(selected_path.cut_depth - next_cut_depth) < 1e-9
+            and abs(selected_path.step_down - next_step_down) < 1e-9
+        ):
+            return
+        updated_profiles[self._selected_edge_cut_profile_index] = EdgeCutPath(
+            polygon_keys=list(selected_path.polygon_keys),
+            mode=selected_path.mode,
+            tool_id=selected_path.tool_id,
+            cut_depth=next_cut_depth,
+            step_down=next_step_down,
+            generated=selected_path.generated,
+            visible=selected_path.visible,
         )
         if self.project.replace_edge_cut_profiles(updated_profiles):
             self.toolpath_viewer.load_document(None)
@@ -2287,14 +2480,35 @@ class MainWindow(QMainWindow):
         self._selected_edge_cut_polygon_indices = {
             index for index in self._selected_edge_cut_polygon_indices if 0 <= index < len(polygons)
         }
-        polygon_mode_map: dict[str, str] = {}
+        polygon_config_map: dict[str, EdgeCutPath] = {}
         for profile in self.project.edge_cut_profiles:
             for polygon_key in profile.polygon_keys:
-                polygon_mode_map[polygon_key] = profile.mode
+                polygon_config_map[polygon_key] = profile
         self.project.edge_cut_profiles = [
-            EdgeCutProfile(
+            EdgeCutPath(
                 polygon_keys=[self._polygon_key(polygon)],
-                mode=polygon_mode_map.get(self._polygon_key(polygon), "none"),
+                mode=polygon_config_map.get(self._polygon_key(polygon), EdgeCutPath()).mode,
+                tool_id=polygon_config_map.get(
+                    self._polygon_key(polygon),
+                    EdgeCutPath(tool_id=self.project.selected_tools.get("milling", "")),
+                ).tool_id
+                or self.project.selected_tools.get("milling", ""),
+                cut_depth=polygon_config_map.get(
+                    self._polygon_key(polygon),
+                    EdgeCutPath(cut_depth=self._default_edge_cut_depth()),
+                ).cut_depth,
+                step_down=polygon_config_map.get(
+                    self._polygon_key(polygon),
+                    EdgeCutPath(step_down=self._default_edge_cut_step_down()),
+                ).step_down,
+                generated=polygon_config_map.get(
+                    self._polygon_key(polygon),
+                    EdgeCutPath(),
+                ).generated,
+                visible=polygon_config_map.get(
+                    self._polygon_key(polygon),
+                    EdgeCutPath(visible=True),
+                ).visible,
             )
             for polygon in polygons
         ]
@@ -2307,6 +2521,7 @@ class MainWindow(QMainWindow):
         if row < 0:
             self._selected_edge_cut_profile_index = None
             self._selected_edge_cut_polygon_indices = set()
+            self._sync_ui()
             return
         item = self.edge_cut_profile_list.item(row)
         if item is None:
@@ -2322,28 +2537,155 @@ class MainWindow(QMainWindow):
         self._selected_edge_cut_profile_index = profile_index
         profile = self.project.edge_cut_profiles[profile_index]
         self._selected_edge_cut_polygon_indices = self._profile_polygon_indices(profile)
-        self.statusBar().showMessage(f"Highlighted contour profile {profile_index + 1}", 2000)
+        self.statusBar().showMessage(f"Highlighted edge path {profile_index + 1}", 2000)
         self._sync_ui()
 
-    def _resolved_edge_cut_profiles(
+    def _delete_selected_edge_cut_path(self) -> None:
+        selected_indices = self._selected_edge_cut_path_indices()
+        if not selected_indices:
+            QMessageBox.information(self, "Edge cuts", "Select a path first.")
+            return
+        updated_paths = list(self.project.edge_cut_profiles)
+        for path_index in selected_indices:
+            current_path = updated_paths[path_index]
+            updated_paths[path_index] = EdgeCutPath(
+                polygon_keys=list(current_path.polygon_keys),
+                mode="none",
+                tool_id="",
+                cut_depth=self._default_edge_cut_depth(),
+                step_down=self._default_edge_cut_step_down(),
+                generated=False,
+                visible=True,
+            )
+        if self.project.replace_edge_cut_profiles(updated_paths):
+            self.toolpath_viewer.load_document(None)
+            self._mark_project_dirty()
+        self._generated_edge_cut_preview_paths = self._visible_generated_edge_cut_preview_paths()
+        self._sync_ui()
+
+    def _delete_all_edge_cut_paths(self) -> None:
+        if not self.project.edge_cut_profiles:
+            return
+        updated_paths = [
+            EdgeCutPath(
+                polygon_keys=list(path.polygon_keys),
+                mode="none",
+                tool_id="",
+                cut_depth=self._default_edge_cut_depth(),
+                step_down=self._default_edge_cut_step_down(),
+                generated=False,
+                visible=True,
+            )
+            for path in self.project.edge_cut_profiles
+        ]
+        if self.project.replace_edge_cut_profiles(updated_paths):
+            self.toolpath_viewer.load_document(None)
+            self._mark_project_dirty()
+        self._generated_edge_cut_preview_paths = []
+        self._sync_ui()
+
+    def _edge_cut_profile_item_changed(self, item: QListWidgetItem) -> None:
+        profile_index = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(profile_index, int):
+            return
+        if not (0 <= profile_index < len(self.project.edge_cut_profiles)):
+            return
+        current_path = self.project.edge_cut_profiles[profile_index]
+        visible = item.checkState() == Qt.CheckState.Checked
+        if current_path.visible == visible:
+            return
+        updated_paths = list(self.project.edge_cut_profiles)
+        updated_paths[profile_index] = EdgeCutPath(
+            polygon_keys=list(current_path.polygon_keys),
+            mode=current_path.mode,
+            tool_id=current_path.tool_id,
+            cut_depth=current_path.cut_depth,
+            step_down=current_path.step_down,
+            generated=current_path.generated,
+            visible=visible,
+        )
+        if self.project.replace_edge_cut_profiles(updated_paths):
+            self._mark_project_dirty()
+        self._generated_edge_cut_preview_paths = self._visible_generated_edge_cut_preview_paths()
+        self._sync_ui()
+
+    def _resolved_edge_cut_paths(
         self,
-    ) -> list[tuple[int, list[tuple[float, float]], str]]:
+        *,
+        path_indices: set[int] | None = None,
+    ) -> list[dict[str, object]]:
         polygon_map = {
             self._polygon_key(polygon): polygon
             for polygon in self._edge_cut_validation_result.polygons
         }
-        resolved: list[tuple[int, list[tuple[float, float]], str]] = []
+        resolved: list[dict[str, object]] = []
         for profile_index, profile in enumerate(self.project.edge_cut_profiles):
+            if path_indices is not None and profile_index not in path_indices:
+                continue
             if profile.mode == "none":
+                continue
+            tool = self._edge_cut_tool_by_id(profile.tool_id)
+            if tool is None:
+                raise ValueError(f"Path {profile_index + 1} does not have a valid milling tool.")
+            for polygon_key in profile.polygon_keys:
+                polygon = polygon_map.get(polygon_key)
+                if polygon is None:
+                    continue
+                toolpath = self._cam_generator().edge_cut_paths(
+                    [polygon],
+                    cut_modes=[profile.mode],
+                    mill_diameter=tool.numeric_parameter("diameter", 0.1),
+                )[0]
+                resolved.append(
+                    {
+                        "path_index": profile_index,
+                        "outline": polygon,
+                        "cut_mode": profile.mode,
+                        "mill_diameter": tool.numeric_parameter("diameter", 0.1),
+                        "cut_depth": max(0.001, profile.cut_depth),
+                        "step_down": max(0.001, profile.step_down),
+                        "tool_label": tool.label,
+                        "tool_id": tool.identifier,
+                        "toolpath": toolpath,
+                    }
+                )
+        return resolved
+
+    def _selected_edge_cut_path_indices(self) -> set[int]:
+        if self._selected_edge_cut_profile_index is None:
+            return set()
+        if not (0 <= self._selected_edge_cut_profile_index < len(self.project.edge_cut_profiles)):
+            return set()
+        return {self._selected_edge_cut_profile_index}
+
+    def _visible_generated_edge_cut_preview_paths(self) -> list[list[tuple[float, float]]]:
+        visible_paths: list[list[tuple[float, float]]] = []
+        polygon_map = {
+            self._polygon_key(polygon): polygon
+            for polygon in self._edge_cut_validation_result.polygons
+        }
+        for profile in self.project.edge_cut_profiles:
+            if not profile.generated or not profile.visible or profile.mode == "none":
+                continue
+            tool = self._edge_cut_tool_by_id(profile.tool_id)
+            if tool is None:
                 continue
             for polygon_key in profile.polygon_keys:
                 polygon = polygon_map.get(polygon_key)
                 if polygon is None:
                     continue
-                resolved.append((profile_index, polygon, profile.mode))
-        return resolved
+                try:
+                    toolpath = self._cam_generator().edge_cut_paths(
+                        [polygon],
+                        cut_modes=[profile.mode],
+                        mill_diameter=tool.numeric_parameter("diameter", 0.1),
+                    )[0]
+                except Exception:
+                    continue
+                visible_paths.append(toolpath)
+        return visible_paths
 
-    def _profile_polygon_indices(self, profile: EdgeCutProfile) -> set[int]:
+    def _profile_polygon_indices(self, profile: EdgeCutPath) -> set[int]:
         polygon_indices: set[int] = set()
         polygon_key_to_index = {
             self._polygon_key(polygon): index
@@ -2358,10 +2700,15 @@ class MainWindow(QMainWindow):
     def _edge_cut_profile_display_rows(self) -> list[tuple[int, str]]:
         rows: list[tuple[int, str]] = []
         for index, profile in enumerate(self.project.edge_cut_profiles):
+            tool = self._edge_cut_tool_by_id(profile.tool_id)
+            tool_label = tool.label if tool is not None else "No tool"
+            status = "generated" if profile.generated else "not generated"
+            if profile.generated and not profile.visible:
+                status = "hidden"
             rows.append(
                 (
                     index,
-                    f"Contour {index + 1}: {self._edge_cut_mode_label(profile.mode)}",
+                    f"Path {index + 1}: {self._edge_cut_mode_label(profile.mode)} | {tool_label} | depth {profile.cut_depth:.3f} mm | step {profile.step_down:.3f} mm | {status}",
                 )
             )
         return rows
@@ -2378,6 +2725,57 @@ class MainWindow(QMainWindow):
             index: profile.mode
             for index, profile in enumerate(self.project.edge_cut_profiles)
         }
+
+    def _available_edge_cut_tools(self):
+        if self.tool_library is None:
+            return []
+        return list(self.tool_library.tools_by_category["milling"])
+
+    def _populate_edge_cut_tool_combo(self, selected_tool_id: str) -> None:
+        self.edge_cut_tool_combo.blockSignals(True)
+        self.edge_cut_tool_combo.clear()
+        tools = self._available_edge_cut_tools()
+        if not tools:
+            self.edge_cut_tool_combo.addItem("No milling tools available", "")
+            self.edge_cut_tool_combo.setEnabled(False)
+        else:
+            self.edge_cut_tool_combo.addItem("Select a tool...", "")
+            for tool in tools:
+                self.edge_cut_tool_combo.addItem(tool.label, tool.identifier)
+            index = self.edge_cut_tool_combo.findData(selected_tool_id)
+            self.edge_cut_tool_combo.setCurrentIndex(0 if index < 0 else index)
+            self.edge_cut_tool_combo.setEnabled(True)
+        self.edge_cut_tool_combo.blockSignals(False)
+
+    def _edge_cut_tool_by_id(self, tool_id: str):
+        for tool in self._available_edge_cut_tools():
+            if tool.identifier == tool_id:
+                return tool
+        return None
+
+    def _default_edge_cut_depth(self) -> float:
+        return 1.65
+
+    def _default_edge_cut_step_down(self) -> float:
+        return 0.2
+
+    def _format_edge_cut_numeric(self, value: float) -> str:
+        return f"{float(value):.3f}"
+
+    def _parse_edge_cut_numeric_input(
+        self,
+        field: QLineEdit,
+        *,
+        fallback: float,
+    ) -> float | None:
+        text = field.text().strip()
+        if not text:
+            return fallback
+        try:
+            value = float(text)
+        except ValueError:
+            return None
+        return max(0.0, min(1_000_000.0, value))
 
     def _polygon_key(self, polygon: list[tuple[float, float]]) -> str:
         return "|".join(f"{x_pos:.6f},{y_pos:.6f}" for x_pos, y_pos in polygon)
