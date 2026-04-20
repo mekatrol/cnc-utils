@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QMouseEvent,
@@ -122,7 +122,11 @@ class PcbPreviewWidget(QWidget):
         if not selection_enabled:
             self._origin_hotspots_visible = False
             self._hovered_origin_key = None
-        self.update()
+        self._rebuild_bounds()
+        if selection_enabled:
+            self.fit_to_view()
+        else:
+            self.update()
 
     def set_edge_validation(
         self,
@@ -188,6 +192,10 @@ class PcbPreviewWidget(QWidget):
             self._bounds.include_bounds(drill.bounds)
         for x, y, diameter in self._alignment_holes:
             self._bounds.include_point(x, y, diameter * 0.5)
+        if self._origin_marker_bounds is not None:
+            x_min, x_max, y_min, y_max = self._origin_marker_bounds
+            self._bounds.include_point(x_min, y_min)
+            self._bounds.include_point(x_max, y_max)
 
     def fit_to_view(self) -> None:
         self._pan_x = 0.0
@@ -356,6 +364,7 @@ class PcbPreviewWidget(QWidget):
             y += spacing
 
     def _draw_geometry(self, painter: QPainter) -> None:
+        self._draw_origin_selection_bounds(painter)
         for index, gerber in enumerate(self._gerber_files):
             palette = self._theme.gerber_palette()
             color = palette[index % len(palette)]
@@ -380,6 +389,31 @@ class PcbPreviewWidget(QWidget):
         self._draw_generated_edge_cut_paths(painter)
         self._draw_origin_hotspots(painter)
         self._draw_origin_marker(painter)
+
+    def _draw_origin_selection_bounds(self, painter: QPainter) -> None:
+        if not self._origin_selection_enabled or self._origin_marker_bounds is None:
+            return
+        x_min, x_max, y_min, y_max = self._origin_marker_bounds
+        painter.save()
+        outline_color = QColor(self._theme.named_color("pcb_preview_outline"))
+        outline_color.setAlpha(220)
+        fill_color = QColor(self._theme.named_color("pcb_preview_selection"))
+        fill_color.setAlpha(32)
+        pen = QPen(outline_color, 2.2)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.setBrush(fill_color)
+        top_left = self._world_to_screen(x_min, y_max)
+        bottom_right = self._world_to_screen(x_max, y_min)
+        painter.drawRect(
+            QRectF(
+                min(top_left.x(), bottom_right.x()),
+                min(top_left.y(), bottom_right.y()),
+                abs(bottom_right.x() - top_left.x()),
+                abs(bottom_right.y() - top_left.y()),
+            )
+        )
+        painter.restore()
 
     def _draw_gerber(
         self,

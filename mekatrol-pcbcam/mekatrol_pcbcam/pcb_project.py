@@ -6,15 +6,16 @@ import yaml
 
 from .edge_cut_profile import EdgeCutPath
 from .alignment_hole import AlignmentHole
+from .nc_origin import DEFAULT_NC_ORIGIN, normalize_nc_origin
 
 
 class PcbProject:
-    VERSION = 6
+    VERSION = 7
     STEP_PROJECT = 0
-    STEP_GERBER_IMPORT = 1
-    STEP_DRILL_IMPORT = 2
-    STEP_ALIGNMENT_HOLES = 3
-    STEP_ORIGIN = 4
+    STEP_STOCK_DEFINITION = 1
+    STEP_GERBER_IMPORT = 2
+    STEP_DRILL_IMPORT = 3
+    STEP_ALIGNMENT_HOLES = 4
     STEP_TOOL_SELECTION = 5
     STEP_FRONT_ISOLATION = 6
     STEP_BACK_ISOLATION = 7
@@ -24,10 +25,10 @@ class PcbProject:
     TOTAL_STEPS = 11
     STEP_KEYS = [
         "project",
+        "stock_definition",
         "gerber_import",
         "drill_import",
         "alignment_holes",
-        "origin",
         "tool_selection",
         "front_isolation",
         "back_isolation",
@@ -36,10 +37,11 @@ class PcbProject:
         "nc_preview",
     ]
     LEGACY_STEP_KEY_MAP = {
+        "stock": STEP_STOCK_DEFINITION,
         "layer_assignment": STEP_GERBER_IMPORT,
         "mirror_setup": STEP_GERBER_IMPORT,
         "alignment_holes": STEP_ALIGNMENT_HOLES,
-        "origin": STEP_ORIGIN,
+        "origin": STEP_STOCK_DEFINITION,
         "front_isolation": STEP_FRONT_ISOLATION,
         "back_isolation": STEP_BACK_ISOLATION,
         "drilling": STEP_DRILLING,
@@ -54,6 +56,10 @@ class PcbProject:
         self.selected_gerber_paths: set[Path] = set()
         self.selected_drill_paths: set[Path] = set()
         self.tool_library_path: Path | None = None
+        self.stock_width: float = 100.0
+        self.stock_height: float = 60.0
+        self.stock_thickness: float = 1.6
+        self.stock_origin: str = DEFAULT_NC_ORIGIN
         self.selected_tools: dict[str, str] = {
             "drilling": "",
             "milling": "",
@@ -153,6 +159,35 @@ class PcbProject:
             self._invalidate_from(self.STEP_TOOL_SELECTION)
         return changed
 
+    def set_stock_dimensions(
+        self,
+        *,
+        width: float | None = None,
+        height: float | None = None,
+        thickness: float | None = None,
+    ) -> bool:
+        changed = False
+        if width is not None and self.stock_width != width:
+            self.stock_width = width
+            changed = True
+        if height is not None and self.stock_height != height:
+            self.stock_height = height
+            changed = True
+        if thickness is not None and self.stock_thickness != thickness:
+            self.stock_thickness = thickness
+            changed = True
+        if changed:
+            self._invalidate_from(self.STEP_STOCK_DEFINITION)
+        return changed
+
+    def set_stock_origin(self, origin: str) -> bool:
+        normalized = normalize_nc_origin(origin)
+        changed = self.stock_origin != normalized
+        self.stock_origin = normalized
+        if changed:
+            self._invalidate_from(self.STEP_STOCK_DEFINITION)
+        return changed
+
     def set_selected_tool(self, role: str, tool_id: str) -> bool:
         normalized = tool_id.strip()
         changed = self.selected_tools.get(role, "") != normalized
@@ -199,9 +234,6 @@ class PcbProject:
         if changed:
             self._invalidate_from(self.STEP_ALIGNMENT_HOLES)
         return changed
-
-    def mark_origin_changed(self) -> None:
-        self._invalidate_from(self.STEP_ORIGIN)
 
     def replace_edge_cut_profiles(self, profiles: list[EdgeCutPath]) -> bool:
         changed = profiles != self.edge_cut_profiles
@@ -289,6 +321,12 @@ class PcbProject:
                 for item in self.drill_paths
                 if item in self.selected_drill_paths
             ],
+            "stock": {
+                "width": self.stock_width,
+                "height": self.stock_height,
+                "thickness": self.stock_thickness,
+                "origin": self.stock_origin,
+            },
             "tool_library": {
                 "path": (
                     None
@@ -376,6 +414,23 @@ class PcbProject:
                 for item in raw_selected_drills
                 if isinstance(item, str) and item.strip()
             }
+        stock_data = loaded.get("stock", {})
+        if isinstance(stock_data, dict):
+            try:
+                project.stock_width = float(stock_data.get("width", 0.0))
+            except (TypeError, ValueError):
+                project.stock_width = 0.0
+            try:
+                project.stock_height = float(stock_data.get("height", 0.0))
+            except (TypeError, ValueError):
+                project.stock_height = 0.0
+            try:
+                project.stock_thickness = float(stock_data.get("thickness", 0.0))
+            except (TypeError, ValueError):
+                project.stock_thickness = 0.0
+            raw_origin = stock_data.get("origin", project.stock_origin)
+            if isinstance(raw_origin, str) and raw_origin.strip():
+                project.stock_origin = normalize_nc_origin(raw_origin)
         tool_library_data = loaded.get("tool_library", {})
         if not isinstance(tool_library_data, dict):
             tool_library_data = {}

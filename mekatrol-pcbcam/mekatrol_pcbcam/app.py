@@ -198,33 +198,6 @@ def _parse_optional_int(
         return None
 
 
-def _parse_optional_float(
-    value: object, *, field_name: str | None = None, warnings: list[str] | None = None
-) -> float | None:
-    if value is None or value == "":
-        return None
-    if isinstance(value, bool):
-        if field_name is not None and warnings is not None:
-            _append_config_warning(
-                warnings,
-                field_name,
-                f"expected a float or null but got boolean {_describe_value(value)}",
-                None,
-            )
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        if field_name is not None and warnings is not None:
-            _append_config_warning(
-                warnings,
-                field_name,
-                f"could not parse float from {_describe_value(value)}",
-                None,
-            )
-        return None
-
-
 def _parse_string(
     value: object,
     default: str = "",
@@ -481,16 +454,6 @@ def _load_config() -> tuple[AppConfig, list[str]]:
                 warnings=warnings,
             )
         ),
-        default_nc_origin_x=_parse_optional_float(
-            app_data.get("default_nc_origin_x"),
-            field_name="app.default_nc_origin_x",
-            warnings=warnings,
-        ),
-        default_nc_origin_y=_parse_optional_float(
-            app_data.get("default_nc_origin_y"),
-            field_name="app.default_nc_origin_y",
-            warnings=warnings,
-        ),
         logging=LoggingConfig(
             level=logging_level,
             path=_parse_log_path(logging_data.get("path"), warnings=warnings),
@@ -599,12 +562,8 @@ def _save_config(config: AppConfig) -> None:
             f"  splash_minimum_visible_ms: {config.splash_minimum_visible_ms}",
             "  # Theme file to load from the themes subfolder in the config directory.",
             f"  theme_file: {_yaml_scalar(config.theme_file)}",
-            "  # Default NC work origin used by the Origin wizard step.",
+            "  # Default NC work origin used by the stock definition step.",
             f"  default_nc_origin: {_yaml_scalar(config.default_nc_origin)}",
-            "  # Saved X coordinate for the preferred NC origin. Null means use the legacy preset until a point is selected.",
-            f"  default_nc_origin_x: {_yaml_scalar(config.default_nc_origin_x)}",
-            "  # Saved Y coordinate for the preferred NC origin. Null means use the legacy preset until a point is selected.",
-            f"  default_nc_origin_y: {_yaml_scalar(config.default_nc_origin_y)}",
             "",
             "logging:",
             "  # Default log level for the mekatrol_pcbcam application loggers.",

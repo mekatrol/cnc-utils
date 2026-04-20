@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import fields
 from pathlib import Path
 
-from PySide6.QtCore import QStandardPaths, QSize, QTimer, Qt
+from PySide6.QtCore import QSize, QStandardPaths, Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QDoubleValidator
 from PySide6.QtWidgets import (
     QApplication,
@@ -34,8 +34,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .app_config import AppConfig
 from .alignment_hole import AlignmentHole
+from .app_config import AppConfig
+from .app_constants import APPLICATION_NAME, ORGANIZATION_NAME
 from .edge_cut_profile import EdgeCutPath
 from .edge_cut_validator import EdgeCutValidationResult, validate_edge_segments
 from .excellon_file_parser import ExcellonFileParser
@@ -44,7 +45,12 @@ from .gerber_file_parser import GerberFileParser
 from .imported_drill_file import ImportedDrillFile
 from .imported_gerber_file import ImportedGerberFile
 from .mirror_preview_widget import MirrorPreviewWidget
-from .nc_origin import format_origin_point, legacy_origin_point_for_bounds
+from .nc_origin import (
+    NC_ORIGIN_LABELS,
+    format_origin_point,
+    legacy_origin_point_for_bounds,
+    normalize_nc_origin,
+)
 from .pcb_preview_widget import PcbPreviewWidget
 from .pcb_project import PcbProject
 from .theme import AppTheme, load_theme
@@ -52,8 +58,6 @@ from .theme_settings_dialog import ThemeSettingsDialog, discover_theme_options
 from .tool_library import ToolLibrary
 from .viewer import ToolpathViewer
 from .wizard_step_bar import WizardStepBar
-from .app_constants import APPLICATION_NAME, ORGANIZATION_NAME
-
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +83,10 @@ class CurrentPageStackedWidget(QStackedWidget):
 class MainWindow(QMainWindow):
     STEP_TITLES = [
         "Project",
+        "Stock Definition",
         "Gerber Import",
         "Drill Import",
         "Alignment Holes",
-        "Origin",
         "Tool Selection",
         "Front Isolation",
         "Back Isolation",
@@ -105,6 +109,7 @@ class MainWindow(QMainWindow):
         self._themes_directory = themes_directory
         self._save_config = save_config
         self.project = PcbProject()
+        self._apply_default_project_settings()
         self.gerber_parser = GerberFileParser()
         self.drill_parser = ExcellonFileParser()
         self.gcode_parser = GCodeParser()
@@ -166,8 +171,7 @@ class MainWindow(QMainWindow):
         )
         self.step_bar_scroll.setViewportMargins(0, 0, 0, 6)
         self.step_bar_scroll.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
 
         self.setWindowTitle("mekatrol-pcbcam")
@@ -180,6 +184,9 @@ class MainWindow(QMainWindow):
 
     def _muted_text_style(self) -> str:
         return f"color: {self.theme.main_window_muted_text};"
+
+    def _apply_default_project_settings(self) -> None:
+        self.project.stock_origin = normalize_nc_origin(self.config.default_nc_origin)
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -212,42 +219,15 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 18, 0)
         layout.setSpacing(12)
 
-        title = QLabel("PCB CAM Wizard")
-        title.setObjectName("sidebarTitle")
-        subtitle = QLabel(
-            "Work through the full CAM wizard from Gerber import through NC generation. "
-            "Each step saves into the project so you can reopen and continue."
-        )
-        subtitle.setWordWrap(True)
-        self._apply_muted_text_style(subtitle)
-
-        summary_card = QFrame()
-        summary_card.setFrameShape(QFrame.Shape.StyledPanel)
-        summary_card.setObjectName("sidebarPanelCard")
-        self._sidebar_panels.append(summary_card)
-        summary_layout = QVBoxLayout(summary_card)
-        summary_layout.setContentsMargins(14, 14, 14, 14)
-        summary_layout.setSpacing(8)
-        self.project_value = QLabel("Unsaved project")
-        self.gerber_count_value = QLabel("Gerber files: 0")
-        self.drill_count_value = QLabel("Drill files: 0")
-        self.step_status_value = QLabel("Wizard ready.")
-        self.step_status_value.setWordWrap(True)
-        summary_layout.addWidget(self.project_value)
-        summary_layout.addWidget(self.gerber_count_value)
-        summary_layout.addWidget(self.drill_count_value)
-        summary_layout.addWidget(self.step_status_value)
-
         self.page_stack = CurrentPageStackedWidget()
         self.page_stack.setSizePolicy(
-            QSizePolicy.Policy.Preferred,
-            QSizePolicy.Policy.Maximum,
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
         )
         self.page_stack.addWidget(self._build_project_page())
+        self.page_stack.addWidget(self._build_stock_definition_page())
         self.page_stack.addWidget(self._build_gerber_page())
         self.page_stack.addWidget(self._build_drill_page())
         self.page_stack.addWidget(self._build_alignment_holes_page())
-        self.page_stack.addWidget(self._build_origin_page())
         self.page_stack.addWidget(self._build_tool_selection_page())
         self.page_stack.addWidget(
             self._build_operation_page(
@@ -276,9 +256,7 @@ class MainWindow(QMainWindow):
                 "drilling",
             )
         )
-        self.page_stack.addWidget(
-            self._build_edge_cuts_page()
-        )
+        self.page_stack.addWidget(self._build_edge_cuts_page())
         self.page_stack.addWidget(self._build_nc_preview_page())
         if self.page_stack.layout() is not None:
             self.page_stack.layout().setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -287,8 +265,12 @@ class MainWindow(QMainWindow):
         self.page_scroll.setObjectName("pageScroll")
         self.page_scroll.setWidgetResizable(True)
         self.page_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.page_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.page_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.page_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.page_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
 
         page_scroll_content = QWidget()
         page_scroll_content.setObjectName("pageScrollContent")
@@ -298,10 +280,6 @@ class MainWindow(QMainWindow):
         page_scroll_layout.addWidget(self.page_stack, 0, Qt.AlignmentFlag.AlignTop)
         page_scroll_layout.addStretch(1)
         self.page_scroll.setWidget(page_scroll_content)
-
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
-        layout.addWidget(summary_card)
         layout.addWidget(self.page_scroll, 1)
 
         nav_row = QHBoxLayout()
@@ -339,7 +317,7 @@ class MainWindow(QMainWindow):
         project_row.addWidget(open_project_button)
 
         hint = QLabel(
-            "Use this step to create or reopen a project file. Gerber import happens in the next step."
+            "Use this step to create or reopen a project file. Stock definition happens in the next step."
         )
         hint.setWordWrap(True)
         self._apply_muted_text_style(hint)
@@ -357,7 +335,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 2: Import Gerber")
+        heading = QLabel("Step 3: Import Gerber")
         heading.setObjectName("pageHeading")
         body = QLabel(
             "Import Gerber files, assign front/back/edge roles, and set mirroring "
@@ -401,7 +379,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 3: Import Excellon Drill Files")
+        heading = QLabel("Step 4: Import Excellon Drill Files")
         heading.setObjectName("pageHeading")
         body = QLabel(
             "Import Excellon drill files for PTH and NPTH holes. Drill import is "
@@ -491,7 +469,9 @@ class MainWindow(QMainWindow):
         form.addRow("Milling", self.milling_tool_combo)
         form.addRow("V-bit", self.vbit_tool_combo)
 
-        self.tool_selection_hint = QLabel("Load a tool library and select all three tool types.")
+        self.tool_selection_hint = QLabel(
+            "Load a tool library and select all three tool types."
+        )
         self.tool_selection_hint.setWordWrap(True)
         self._apply_muted_text_style(self.tool_selection_hint)
 
@@ -513,20 +493,22 @@ class MainWindow(QMainWindow):
         layout.setSpacing(10)
         heading = QLabel("Layer Assignment")
         heading.setObjectName("sectionHeading")
-        body = QLabel(
-            "Each role must use a different Gerber file."
-        )
+        body = QLabel("Each role must use a different Gerber file.")
         body.setWordWrap(True)
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
         form.setSpacing(8)
         self.front_copper_combo = QComboBox()
         self.front_copper_combo.currentIndexChanged.connect(
-            lambda _: self._layer_assignment_changed("front_copper", self.front_copper_combo)
+            lambda _: self._layer_assignment_changed(
+                "front_copper", self.front_copper_combo
+            )
         )
         self.back_copper_combo = QComboBox()
         self.back_copper_combo.currentIndexChanged.connect(
-            lambda _: self._layer_assignment_changed("back_copper", self.back_copper_combo)
+            lambda _: self._layer_assignment_changed(
+                "back_copper", self.back_copper_combo
+            )
         )
         self.edges_combo = QComboBox()
         self.edges_combo.currentIndexChanged.connect(
@@ -536,7 +518,9 @@ class MainWindow(QMainWindow):
         form.addRow("Back copper", self.back_copper_combo)
         form.addRow("Edges", self.edges_combo)
 
-        self.layer_assignment_hint = QLabel("At least one of front copper, back copper, or edges is required.")
+        self.layer_assignment_hint = QLabel(
+            "At least one of front copper, back copper, or edges is required."
+        )
         self.layer_assignment_hint.setWordWrap(True)
         self._apply_muted_text_style(self.layer_assignment_hint)
 
@@ -556,9 +540,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(10)
         heading = QLabel("Mirror Setup")
         heading.setObjectName("sectionHeading")
-        body = QLabel(
-            "Choose the board-flip edge when both copper sides are assigned."
-        )
+        body = QLabel("Choose the board-flip edge when both copper sides are assigned.")
         body.setWordWrap(True)
         self.mirror_requirement_label = QLabel()
         self.mirror_requirement_label.setWordWrap(True)
@@ -575,7 +557,9 @@ class MainWindow(QMainWindow):
         ):
             button = QRadioButton(label)
             button.toggled.connect(
-                lambda checked, selected=edge: self._mirror_edge_changed(selected, checked)
+                lambda checked, selected=edge: self._mirror_edge_changed(
+                    selected, checked
+                )
             )
             self.mirror_button_group.addButton(button)
             self.mirror_buttons[edge] = button
@@ -597,7 +581,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 4: Alignment Holes")
+        heading = QLabel("Step 5: Alignment Holes")
         heading.setObjectName("pageHeading")
         body = QLabel(
             "Define optional alignment holes outside the board edge. Each hole uses "
@@ -660,18 +644,17 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.alignment_holes_hint)
         return page
 
-    def _build_origin_page(self) -> QWidget:
+    def _build_stock_definition_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 5: Origin")
+        heading = QLabel("Step 2: Stock Definition")
         heading.setObjectName("pageHeading")
         body = QLabel(
-            "Hover over the board preview to reveal selectable origin points from "
-            "edge vertices and unmatched line endpoints. Click any point to set "
-            "the NC work origin for generated toolpaths."
+            "Define the PCB stock width, height, and thickness, then click a stock "
+            "reference point in the preview to set the NC work origin."
         )
         body.setWordWrap(True)
 
@@ -683,20 +666,46 @@ class MainWindow(QMainWindow):
         card_layout.setContentsMargins(14, 14, 14, 14)
         card_layout.setSpacing(10)
 
-        self.origin_selection_value = QLabel()
-        self.origin_selection_value.setWordWrap(True)
-        card_layout.addWidget(self.origin_selection_value)
-
-        self.origin_hint = QLabel(
-            "The preview shows an overlay view only on this step. Hover over the board to reveal clickable origin points."
+        stock_form = QFormLayout()
+        stock_form.setContentsMargins(0, 0, 0, 0)
+        stock_form.setSpacing(10)
+        self.stock_width_input = QLineEdit()
+        self.stock_width_input.setPlaceholderText("mm")
+        self.stock_width_input.setValidator(QDoubleValidator(0.0, 10000.0, 3, self))
+        self.stock_width_input.editingFinished.connect(
+            lambda: self._stock_dimension_changed("width", self.stock_width_input)
         )
-        self.origin_hint.setWordWrap(True)
-        self._apply_muted_text_style(self.origin_hint)
+        self.stock_height_input = QLineEdit()
+        self.stock_height_input.setPlaceholderText("mm")
+        self.stock_height_input.setValidator(QDoubleValidator(0.0, 10000.0, 3, self))
+        self.stock_height_input.editingFinished.connect(
+            lambda: self._stock_dimension_changed("height", self.stock_height_input)
+        )
+        self.stock_thickness_input = QLineEdit()
+        self.stock_thickness_input.setPlaceholderText("mm")
+        self.stock_thickness_input.setValidator(QDoubleValidator(0.0, 1000.0, 3, self))
+        self.stock_thickness_input.editingFinished.connect(
+            lambda: self._stock_dimension_changed(
+                "thickness", self.stock_thickness_input
+            )
+        )
+        stock_form.addRow("Width", self.stock_width_input)
+        stock_form.addRow("Height", self.stock_height_input)
+        stock_form.addRow("Thickness", self.stock_thickness_input)
+        card_layout.addLayout(stock_form)
+
+        self.stock_origin_value = QLabel()
+        self.stock_origin_value.setWordWrap(True)
+        card_layout.addWidget(self.stock_origin_value)
+
+        self.stock_hint = QLabel()
+        self.stock_hint.setWordWrap(True)
+        self._apply_muted_text_style(self.stock_hint)
 
         layout.addWidget(heading)
         layout.addWidget(body)
         layout.addWidget(card)
-        layout.addWidget(self.origin_hint)
+        layout.addWidget(self.stock_hint)
         layout.addStretch(1)
         return page
 
@@ -774,19 +783,29 @@ class MainWindow(QMainWindow):
         self.edge_cut_selection_value = QLabel("No path selected")
         self.edge_cut_selection_value.setWordWrap(True)
         self.edge_cut_tool_combo = QComboBox()
-        self.edge_cut_tool_combo.currentIndexChanged.connect(self._edge_cut_tool_changed)
+        self.edge_cut_tool_combo.currentIndexChanged.connect(
+            self._edge_cut_tool_changed
+        )
         self.edge_cut_depth_input = QLineEdit()
-        self.edge_cut_depth_input.setValidator(QDoubleValidator(0.0, 1_000_000.0, 3, self))
+        self.edge_cut_depth_input.setValidator(
+            QDoubleValidator(0.0, 1_000_000.0, 3, self)
+        )
         self.edge_cut_depth_input.editingFinished.connect(self._edge_cut_depth_changed)
         self.edge_cut_step_down_input = QLineEdit()
-        self.edge_cut_step_down_input.setValidator(QDoubleValidator(0.0, 1_000_000.0, 3, self))
-        self.edge_cut_step_down_input.editingFinished.connect(self._edge_cut_step_down_changed)
+        self.edge_cut_step_down_input.setValidator(
+            QDoubleValidator(0.0, 1_000_000.0, 3, self)
+        )
+        self.edge_cut_step_down_input.editingFinished.connect(
+            self._edge_cut_step_down_changed
+        )
         self.edge_cut_mode_combo = QComboBox()
         self.edge_cut_mode_combo.addItem("None", "none")
         self.edge_cut_mode_combo.addItem("Outside profile", "outside_profile")
         self.edge_cut_mode_combo.addItem("On contour", "on_contour")
         self.edge_cut_mode_combo.addItem("Inside profile", "inside_profile")
-        self.edge_cut_mode_combo.currentIndexChanged.connect(self._edge_cut_mode_changed)
+        self.edge_cut_mode_combo.currentIndexChanged.connect(
+            self._edge_cut_mode_changed
+        )
         form.addRow("Selected path", self.edge_cut_selection_value)
         form.addRow("Tool bit", self.edge_cut_tool_combo)
         form.addRow("Cut depth", self.edge_cut_depth_input)
@@ -805,8 +824,12 @@ class MainWindow(QMainWindow):
         path_action_row.addWidget(delete_all_button)
 
         self.edge_cut_profile_list = QListWidget()
-        self.edge_cut_profile_list.itemChanged.connect(self._edge_cut_profile_item_changed)
-        self.edge_cut_profile_list.currentRowChanged.connect(self._edge_cut_profile_selected)
+        self.edge_cut_profile_list.itemChanged.connect(
+            self._edge_cut_profile_item_changed
+        )
+        self.edge_cut_profile_list.currentRowChanged.connect(
+            self._edge_cut_profile_selected
+        )
 
         self.edge_cut_hint = QLabel(
             "Select a path from the list to edit it. The preview shows only generated paths as red dotted lines."
@@ -843,7 +866,9 @@ class MainWindow(QMainWindow):
         body.setWordWrap(True)
 
         self.generated_output_list = QListWidget()
-        self.generated_output_list.currentRowChanged.connect(self._generated_output_selected)
+        self.generated_output_list.currentRowChanged.connect(
+            self._generated_output_selected
+        )
 
         layout.addWidget(heading)
         layout.addWidget(body)
@@ -1122,10 +1147,7 @@ class MainWindow(QMainWindow):
             return
 
         dialog = ThemeSettingsDialog(
-            self._themes_directory,
-            options,
-            self.config.theme_file,
-            self,
+            self._themes_directory, options, self.config.theme_file, self
         )
         if dialog.exec() == 0:
             return
@@ -1137,11 +1159,7 @@ class MainWindow(QMainWindow):
         theme_path = self._themes_directory / selected_theme_file
         theme, warnings = load_theme(theme_path)
         if warnings:
-            QMessageBox.warning(
-                self,
-                "Theme warnings",
-                "\n".join(warnings),
-            )
+            QMessageBox.warning(self, "Theme warnings", "\n".join(warnings))
 
         self.config.theme_file = selected_theme_file
         self.config.theme = theme
@@ -1151,7 +1169,9 @@ class MainWindow(QMainWindow):
 
     def _replace_theme(self, new_theme: AppTheme) -> None:
         for field in fields(AppTheme):
-            setattr(self.theme, field.name, copy.deepcopy(getattr(new_theme, field.name)))
+            setattr(
+                self.theme, field.name, copy.deepcopy(getattr(new_theme, field.name))
+            )
 
         for label in self._muted_labels:
             self._apply_muted_text_style(label)
@@ -1167,7 +1187,8 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard_or_save_changes():
             return
         self.project.reset()
-        self.project.set_current_step(1)
+        self._apply_default_project_settings()
+        self.project.set_current_step(PcbProject.STEP_STOCK_DEFINITION)
         self.imported_gerbers = []
         self.imported_drills = []
         self.tool_library = self._default_tool_library()
@@ -1189,16 +1210,14 @@ class MainWindow(QMainWindow):
             return
         self._remember_project_load_path(Path(selected))
         self.load_project_path(
-            Path(selected),
-            show_message=True,
-            show_errors=True,
-            auto_resume=False,
+            Path(selected), show_message=True, show_errors=True, auto_resume=False
         )
 
     def _close_project(self) -> None:
         if not self._confirm_discard_or_save_changes():
             return
         self.project.reset()
+        self._apply_default_project_settings()
         self.project.set_current_step(0)
         self.imported_gerbers = []
         self.imported_drills = []
@@ -1261,8 +1280,7 @@ class MainWindow(QMainWindow):
 
         self.project = project
         saved_step = min(
-            self.project.current_step_index,
-            self.IMPLEMENTED_STEP_COUNT - 1,
+            self.project.current_step_index, self.IMPLEMENTED_STEP_COUNT - 1
         )
         target_step = saved_step if auto_resume else max(1, saved_step)
         self.project.set_current_step(target_step)
@@ -1307,9 +1325,7 @@ class MainWindow(QMainWindow):
             return
         if not self._step_is_valid(current):
             QMessageBox.information(
-                self,
-                "Wizard step incomplete",
-                self._validation_message(current),
+                self, "Wizard step incomplete", self._validation_message(current)
             )
             return
         self.project.completed_steps.add(current)
@@ -1341,16 +1357,12 @@ class MainWindow(QMainWindow):
             [item.path for item in self.imported_gerbers]
         ):
             self._mark_project_dirty()
-        self.project.set_current_step(1)
-        self.statusBar().showMessage(
-            f"Imported {len(imports)} Gerber file(s)",
-            3000,
-        )
+        self.project.set_current_step(PcbProject.STEP_GERBER_IMPORT)
+        self.statusBar().showMessage(f"Imported {len(imports)} Gerber file(s)", 3000)
         self._sync_ui()
 
     def _merge_imported_gerbers(
-        self,
-        imports: list[ImportedGerberFile],
+        self, imports: list[ImportedGerberFile]
     ) -> list[ImportedGerberFile]:
         merged = list(self.imported_gerbers)
         index_by_path = {
@@ -1391,16 +1403,12 @@ class MainWindow(QMainWindow):
             [item.path for item in self.imported_drills]
         ):
             self._mark_project_dirty()
-        self.project.set_current_step(2)
-        self.statusBar().showMessage(
-            f"Imported {len(imports)} drill file(s)",
-            3000,
-        )
+        self.project.set_current_step(PcbProject.STEP_DRILL_IMPORT)
+        self.statusBar().showMessage(f"Imported {len(imports)} drill file(s)", 3000)
         self._sync_ui()
 
     def _merge_imported_drills(
-        self,
-        imports: list[ImportedDrillFile],
+        self, imports: list[ImportedDrillFile]
     ) -> list[ImportedDrillFile]:
         merged = list(self.imported_drills)
         index_by_path = {
@@ -1420,42 +1428,56 @@ class MainWindow(QMainWindow):
 
     def _remove_selected_gerbers(self) -> None:
         selected_paths = {
-            item.data(Qt.ItemDataRole.UserRole) for item in self.gerber_list.selectedItems()
+            item.data(Qt.ItemDataRole.UserRole)
+            for item in self.gerber_list.selectedItems()
         }
         if not selected_paths:
             return
-        remaining = [item for item in self.imported_gerbers if str(item.path) not in selected_paths]
+        remaining = [
+            item
+            for item in self.imported_gerbers
+            if str(item.path) not in selected_paths
+        ]
         self.imported_gerbers = remaining
         if self.project.replace_gerber_paths([item.path for item in remaining]):
             self._mark_project_dirty()
-        self.project.set_current_step(1)
+        self.project.set_current_step(PcbProject.STEP_GERBER_IMPORT)
         self._sync_ui()
 
     def _clear_gerbers(self) -> None:
         self.imported_gerbers = []
         if self.project.replace_gerber_paths([]):
             self._mark_project_dirty()
-        self.project.set_current_step(1)
+        self.project.set_current_step(PcbProject.STEP_GERBER_IMPORT)
         self._sync_ui()
 
     def _remove_selected_drills(self) -> None:
         selected_paths = {
-            item.data(Qt.ItemDataRole.UserRole) for item in self.drill_list.selectedItems()
+            item.data(Qt.ItemDataRole.UserRole)
+            for item in self.drill_list.selectedItems()
         }
         if not selected_paths:
             return
-        remaining = [item for item in self.imported_drills if str(item.path) not in selected_paths]
+        remaining = [
+            item
+            for item in self.imported_drills
+            if str(item.path) not in selected_paths
+        ]
         self.imported_drills = remaining
         if self.project.replace_drill_paths([item.path for item in remaining]):
             self._mark_project_dirty()
-        self.project.set_current_step(min(self.project.current_step_index, 2))
+        self.project.set_current_step(
+            min(self.project.current_step_index, PcbProject.STEP_DRILL_IMPORT)
+        )
         self._sync_ui()
 
     def _clear_drills(self) -> None:
         self.imported_drills = []
         if self.project.replace_drill_paths([]):
             self._mark_project_dirty()
-        self.project.set_current_step(min(self.project.current_step_index, 2))
+        self.project.set_current_step(
+            min(self.project.current_step_index, PcbProject.STEP_DRILL_IMPORT)
+        )
         self._sync_ui()
 
     def _browse_tool_library(self) -> None:
@@ -1485,6 +1507,24 @@ class MainWindow(QMainWindow):
         tool_id = str(combo.currentData() or "")
         if self.project.set_selected_tool(role, tool_id):
             self._mark_project_dirty()
+        self._sync_ui()
+
+    def _stock_dimension_changed(self, field_name: str, widget: QLineEdit) -> None:
+        text = widget.text().strip()
+        if not text:
+            value = 0.0
+        else:
+            try:
+                value = float(text)
+            except ValueError:
+                self._sync_stock_definition_page()
+                return
+        changed = self.project.set_stock_dimensions(**{field_name: value})
+        if not changed:
+            self._sync_stock_definition_page()
+            return
+        self.toolpath_viewer.load_document(None)
+        self._mark_project_dirty()
         self._sync_ui()
 
     def _layer_assignment_changed(self, role: str, combo: QComboBox) -> None:
@@ -1546,7 +1586,9 @@ class MainWindow(QMainWindow):
     def _generate_front_isolation(self) -> None:
         gerber = self._assigned_gerber("front_copper")
         if gerber is None:
-            QMessageBox.information(self, "Front isolation", "Assign a front copper Gerber first.")
+            QMessageBox.information(
+                self, "Front isolation", "Assign a front copper Gerber first."
+            )
             return
         tool = self._selected_tool("v_bits")
         if tool is None:
@@ -1556,7 +1598,9 @@ class MainWindow(QMainWindow):
             output_path = self._cam_generator().generate_front_isolation(
                 gerber,
                 output_name="front-isolation.nc",
-                tool_tip_diameter=tool.numeric_parameter("tip_diameter", tool.numeric_parameter("diameter", 0.2)),
+                tool_tip_diameter=tool.numeric_parameter(
+                    "tip_diameter", tool.numeric_parameter("diameter", 0.2)
+                ),
                 origin_point=self._current_origin_point_required(),
             )
         except Exception as exc:
@@ -1567,7 +1611,9 @@ class MainWindow(QMainWindow):
     def _generate_back_isolation(self) -> None:
         gerber = self._assigned_gerber("back_copper")
         if gerber is None:
-            QMessageBox.information(self, "Back isolation", "Assign a back copper Gerber first.")
+            QMessageBox.information(
+                self, "Back isolation", "Assign a back copper Gerber first."
+            )
             return
         tool = self._selected_tool("v_bits")
         if tool is None:
@@ -1575,13 +1621,17 @@ class MainWindow(QMainWindow):
             return
         bounds = self._reference_board_bounds()
         if bounds is None:
-            QMessageBox.information(self, "Back isolation", "Board bounds are not available.")
+            QMessageBox.information(
+                self, "Back isolation", "Board bounds are not available."
+            )
             return
         try:
             output_path = self._cam_generator().generate_back_isolation(
                 gerber,
                 output_name="back-isolation.nc",
-                tool_tip_diameter=tool.numeric_parameter("tip_diameter", tool.numeric_parameter("diameter", 0.2)),
+                tool_tip_diameter=tool.numeric_parameter(
+                    "tip_diameter", tool.numeric_parameter("diameter", 0.2)
+                ),
                 mirror_edge=self.project.mirror_flip_edge,
                 board_bounds=bounds,
                 origin_point=self._current_origin_point_required(),
@@ -1596,10 +1646,8 @@ class MainWindow(QMainWindow):
         mill_tool = self._selected_tool("milling")
         if tool is None or mill_tool is None:
             QMessageBox.information(
-                self,
-                "Drilling",
-                "Select drilling and milling tools first.",
-        )
+                self, "Drilling", "Select drilling and milling tools first."
+            )
             return
         holes = []
         for drill in self._active_drills():
@@ -1607,9 +1655,7 @@ class MainWindow(QMainWindow):
         holes.extend(self._alignment_hole_positions())
         if not holes:
             QMessageBox.information(
-                self,
-                "Drilling",
-                "There are no drill or alignment holes to generate.",
+                self, "Drilling", "There are no drill or alignment holes to generate."
             )
             return
         try:
@@ -1634,14 +1680,21 @@ class MainWindow(QMainWindow):
     def _generate_edge_cut_paths(self, *, generate_all: bool) -> None:
         gerber = self._assigned_gerber("edges")
         if gerber is None:
-            QMessageBox.information(self, "Edge cuts", "Assign an edge-cuts Gerber first.")
+            QMessageBox.information(
+                self, "Edge cuts", "Assign an edge-cuts Gerber first."
+            )
             return
         self._refresh_edge_cut_validation()
         if not self._edge_cut_validation_result.is_valid:
             QMessageBox.warning(self, "Edge cuts", self._edge_validation_message())
             return
-        if self.tool_library is None or not self.tool_library.tools_by_category["milling"]:
-            QMessageBox.information(self, "Edge cuts", "Load a tool library with milling tools first.")
+        if (
+            self.tool_library is None
+            or not self.tool_library.tools_by_category["milling"]
+        ):
+            QMessageBox.information(
+                self, "Edge cuts", "Load a tool library with milling tools first."
+            )
             return
         path_indices = None if generate_all else self._selected_edge_cut_path_indices()
         if not generate_all and not path_indices:
@@ -1682,7 +1735,9 @@ class MainWindow(QMainWindow):
             )
         if self.project.replace_edge_cut_profiles(updated_paths):
             self._mark_project_dirty()
-        self._generated_edge_cut_preview_paths = self._visible_generated_edge_cut_preview_paths()
+        self._generated_edge_cut_preview_paths = (
+            self._visible_generated_edge_cut_preview_paths()
+        )
         try:
             generated_path_indices = {
                 index
@@ -1724,31 +1779,36 @@ class MainWindow(QMainWindow):
         if index == 0:
             return True
         if index == 1:
+            return self._stock_definition_is_valid()
+        if index == 2:
             return (
                 bool(self._active_gerbers())
                 and any(self.project.layer_assignments.values())
                 and self._edge_cut_validation_is_valid()
             )
-        if index == 2:
-            return not self.imported_drills or bool(self._active_drills())
         if index == 3:
-            return True
+            return not self.imported_drills or bool(self._active_drills())
         if index == 4:
-            return self._current_origin_point() is not None
+            return True
         if index == 5:
             return self.tool_library is not None and all(
                 self.project.selected_tools[role]
                 for role in ("drilling", "milling", "v_bits")
             )
         if index == 6:
-            return self._operation_optional_or_generated("front_isolation", "front_copper")
+            return self._operation_optional_or_generated(
+                "front_isolation", "front_copper"
+            )
         if index == 7:
-            return self._operation_optional_or_generated("back_isolation", "back_copper")
+            return self._operation_optional_or_generated(
+                "back_isolation", "back_copper"
+            )
         if index == 8:
             return self._drilling_optional_or_generated()
         if index == 9:
-            return self._edge_cut_validation_is_valid() and self._operation_optional_or_generated(
-                "edge_cuts", "edges"
+            return (
+                self._edge_cut_validation_is_valid()
+                and self._operation_optional_or_generated("edge_cuts", "edges")
             )
         if index == 10:
             return bool(self.project.generated_outputs)
@@ -1758,6 +1818,8 @@ class MainWindow(QMainWindow):
         if index == 0:
             return "Create or load a project before moving on."
         if index == 1:
+            return "Set stock width, height, thickness, and choose an origin point before moving on."
+        if index == 2:
             if not self.imported_gerbers:
                 return "Import at least one Gerber file before moving to the next step."
             if not self._active_gerbers():
@@ -1765,19 +1827,19 @@ class MainWindow(QMainWindow):
             if not self._edge_cut_validation_is_valid():
                 return self._edge_validation_message()
             return "Assign at least one active Gerber file to front copper, back copper, or edges."
-        if index == 2:
+        if index == 3:
             if not self.imported_drills:
                 return "Drill import is optional. Continue without drill files or import at least one drill file."
             return (
                 "Select at least one drill file before moving to the next step, "
                 "or clear the drill import if you do not want to use drill data."
             )
-        if index == 3:
-            return "Import usable board geometry, then choose the NC origin before moving to the generation steps."
         if index == 5:
             return "Load tools.yaml and select a drilling tool, a milling tool, and a V-bit."
         if index == 6:
-            return "Generate the front isolation NC file before moving to the next step."
+            return (
+                "Generate the front isolation NC file before moving to the next step."
+            )
         if index == 7:
             return "Generate the back isolation NC file before moving to the next step."
         if index == 8:
@@ -1805,26 +1867,14 @@ class MainWindow(QMainWindow):
         self.back_button.setEnabled(current > 0)
         self.next_button.setEnabled(current + 1 < self.IMPLEMENTED_STEP_COUNT)
         self.next_button.setText(
-            "Next"
-            if current + 1 < self.IMPLEMENTED_STEP_COUNT
-            else "Complete"
+            "Next" if current + 1 < self.IMPLEMENTED_STEP_COUNT else "Complete"
         )
-        self.project_value.setText(
-            str(self.project.project_path) if self.project.project_path else "Unsaved project"
-        )
-        self.gerber_count_value.setText(
-            f"Gerber files: {len(self._active_gerbers())}/{len(self.imported_gerbers)} active"
-        )
-        self.drill_count_value.setText(
-            f"Drill files: {len(self._active_drills())}/{len(self.imported_drills)} active"
-        )
-        self.step_status_value.setText(self._step_status_text())
         self._refresh_list_widgets()
+        self._sync_stock_definition_page()
         self._sync_tool_selection_page()
         self._sync_layer_assignment_page()
         self._sync_mirror_setup_page()
         self._sync_alignment_holes_page()
-        self._sync_origin_page()
         self._sync_edge_cut_page()
         self._sync_generated_outputs()
         assigned_edges = self.project.layer_assignments["edges"]
@@ -1838,23 +1888,27 @@ class MainWindow(QMainWindow):
         self.preview.set_mirror_setup(
             back_copper_path=(
                 None
-                if current in {PcbProject.STEP_ORIGIN, PcbProject.STEP_EDGE_CUTS}
+                if current
+                in {PcbProject.STEP_STOCK_DEFINITION, PcbProject.STEP_EDGE_CUTS}
                 else self.project.layer_assignments["back_copper"]
             ),
             edges_path=(
                 None
-                if current in {PcbProject.STEP_ORIGIN, PcbProject.STEP_EDGE_CUTS}
+                if current
+                in {PcbProject.STEP_STOCK_DEFINITION, PcbProject.STEP_EDGE_CUTS}
                 else self.project.layer_assignments["edges"]
             ),
             board_bounds=self._reference_board_bounds(),
             mirror_edge=(
                 ""
-                if current in {PcbProject.STEP_ORIGIN, PcbProject.STEP_EDGE_CUTS}
+                if current
+                in {PcbProject.STEP_STOCK_DEFINITION, PcbProject.STEP_EDGE_CUTS}
                 else self.project.mirror_flip_edge
             ),
             preview_mode=(
                 "overlay"
-                if current in {PcbProject.STEP_ORIGIN, PcbProject.STEP_EDGE_CUTS}
+                if current
+                in {PcbProject.STEP_STOCK_DEFINITION, PcbProject.STEP_EDGE_CUTS}
                 else self.project.mirror_preview_mode
             ),
         )
@@ -1868,15 +1922,23 @@ class MainWindow(QMainWindow):
             suppress_source_geometry=False,
         )
         self.preview.set_edge_cut_preview_paths(
-            self._visible_generated_edge_cut_preview_paths() if current == PcbProject.STEP_EDGE_CUTS else []
+            self._visible_generated_edge_cut_preview_paths()
+            if current == PcbProject.STEP_EDGE_CUTS
+            else []
         )
         self.preview.set_origin_marker(
-            self._reference_board_bounds() if current == PcbProject.STEP_ORIGIN else None,
-            self._current_origin_point() if current == PcbProject.STEP_ORIGIN else None,
+            self._stock_bounds()
+            if current == PcbProject.STEP_STOCK_DEFINITION
+            else None,
+            self._current_origin_point()
+            if current == PcbProject.STEP_STOCK_DEFINITION
+            else None,
             hotspot_points=(
-                self._origin_hotspot_points() if current == PcbProject.STEP_ORIGIN else None
+                self._origin_hotspot_points()
+                if current == PcbProject.STEP_STOCK_DEFINITION
+                else None
             ),
-            selection_enabled=current == PcbProject.STEP_ORIGIN,
+            selection_enabled=current == PcbProject.STEP_STOCK_DEFINITION,
         )
         showing_toolpath = (
             current >= PcbProject.STEP_FRONT_ISOLATION
@@ -1885,13 +1947,13 @@ class MainWindow(QMainWindow):
         self.preview_stack.setCurrentIndex(1 if showing_toolpath else 0)
         self.preview_toolbar.setVisible(
             (not showing_toolpath)
-            and current not in {PcbProject.STEP_ORIGIN, PcbProject.STEP_EDGE_CUTS}
+            and current
+            not in {PcbProject.STEP_STOCK_DEFINITION, PcbProject.STEP_EDGE_CUTS}
         )
         self._update_window_title()
         if page_changed:
             QTimer.singleShot(
-                0,
-                lambda: self.page_scroll.verticalScrollBar().setValue(0),
+                0, lambda: self.page_scroll.verticalScrollBar().setValue(0)
             )
         self._last_sidebar_page_index = current
         self._scroll_current_step_into_view()
@@ -1913,7 +1975,9 @@ class MainWindow(QMainWindow):
                 geometry_summary.append("outline")
             if not geometry_summary:
                 geometry_summary.append("no visible geometry detected")
-            item = QListWidgetItem(f"{gerber.display_name} ({', '.join(geometry_summary)})")
+            item = QListWidgetItem(
+                f"{gerber.display_name} ({', '.join(geometry_summary)})"
+            )
             item.setToolTip(str(gerber.path))
             item.setData(Qt.ItemDataRole.UserRole, str(gerber.path))
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -1940,51 +2004,14 @@ class MainWindow(QMainWindow):
             self.drill_list.addItem(item)
         self.drill_list.blockSignals(False)
 
-    def _step_status_text(self) -> str:
-        if self.project.dirty_from_step is not None:
-            return (
-                f"Changes were made at step {self.project.dirty_from_step + 1}. "
-                "Forward navigation is sequential until the wizard is replayed."
-            )
-        if self.project.current_step_index == 0:
-            return "Project setup is active. Create, open, or save a project file before continuing."
-        if self.project.current_step_index == 1:
-            if not self._edge_cut_validation_is_valid():
-                return self._edge_validation_message()
-            return (
-                "Import Gerber files, assign unique manufacturing roles, and choose any "
-                "mirror settings needed for the rest of the wizard."
-            )
-        if self.project.current_step_index == 2:
-            return (
-                "Drill import is optional, but if drill files are loaded at least one must remain "
-                "enabled to continue."
-            )
-        if self.project.current_step_index == 3:
-            return "Add optional alignment holes and confirm they appear outside the board in preview."
-        if self.project.current_step_index == 4:
-            return "Choose the NC work origin. The preview is forced to overlay so the origin can be placed on the board bounds."
-        if self.project.current_step_index == 5:
-            return "Load tools.yaml and choose the tools needed for drilling, milling, and V-bit operations."
-        if self.project.current_step_index == 6:
-            return "Generate front copper isolation if a front copper layer is assigned."
-        if self.project.current_step_index == 7:
-            return "Generate back copper isolation if a back copper layer is assigned."
-        if self.project.current_step_index == 8:
-            return "Generate drilling for imported drill files and alignment holes."
-        if self.project.current_step_index == 9:
-            return "Configure edge-cut paths and generate NC from the selected contour, tool, depth, step-down, and contour side."
-        if self.project.current_step_index == 10:
-            return "Select a generated NC file to inspect it in the 3D preview."
-        return "Stage 4 of the wizard is active."
-
     def _update_window_title(self) -> None:
         project_name = (
             self.project.project_path.name
             if self.project.project_path is not None
             else "Untitled Project"
         )
-        self.setWindowTitle(f"mekatrol-pcbcam - {project_name}")
+        dirty_prefix = "*" if self.has_unsaved_changes else ""
+        self.setWindowTitle(f"{dirty_prefix}mekatrol-pcbcam - {project_name}")
 
     def _load_dialog_directory(self) -> str:
         configured = self.config.file_locations.last_load_directory.strip()
@@ -2027,7 +2054,9 @@ class MainWindow(QMainWindow):
     def _remember_recent_project(self, path: Path) -> None:
         resolved_path = path.expanduser().resolve()
         resolved = str(resolved_path)
-        self.config.file_locations.last_load_project_directory = str(resolved_path.parent)
+        self.config.file_locations.last_load_project_directory = str(
+            resolved_path.parent
+        )
         recent_projects = [
             item
             for item in (self.config.file_locations.recent_projects or [])
@@ -2090,7 +2119,9 @@ class MainWindow(QMainWindow):
                 self.project.selected_tools[role] = ""
             return
         valid_ids = {
-            role: {tool.identifier for tool in self.tool_library.tools_by_category[role]}
+            role: {
+                tool.identifier for tool in self.tool_library.tools_by_category[role]
+            }
             for role in self.project.selected_tools
         }
         for role, selected in self.project.selected_tools.items():
@@ -2108,21 +2139,14 @@ class MainWindow(QMainWindow):
             self.project.selected_tools["drilling"],
         )
         self._populate_tool_combo(
-            self.milling_tool_combo,
-            "milling",
-            self.project.selected_tools["milling"],
+            self.milling_tool_combo, "milling", self.project.selected_tools["milling"]
         )
         self._populate_tool_combo(
-            self.vbit_tool_combo,
-            "v_bits",
-            self.project.selected_tools["v_bits"],
+            self.vbit_tool_combo, "v_bits", self.project.selected_tools["v_bits"]
         )
 
     def _populate_tool_combo(
-        self,
-        combo: QComboBox,
-        role: str,
-        selected_tool_id: str,
+        self, combo: QComboBox, role: str, selected_tool_id: str
     ) -> None:
         combo.blockSignals(True)
         combo.clear()
@@ -2150,11 +2174,11 @@ class MainWindow(QMainWindow):
             self.project.layer_assignments["back_copper"],
         )
         self._populate_layer_combo(
-            self.edges_combo,
-            "edges",
-            self.project.layer_assignments["edges"],
+            self.edges_combo, "edges", self.project.layer_assignments["edges"]
         )
-        default_hint = "At least one of front copper, back copper, or edges is required."
+        default_hint = (
+            "At least one of front copper, back copper, or edges is required."
+        )
         if self._edge_cut_validation_is_valid():
             self.layer_assignment_hint.setText(default_hint)
             self._apply_muted_text_style(self.layer_assignment_hint)
@@ -2163,10 +2187,7 @@ class MainWindow(QMainWindow):
         self._apply_error_text_style(self.layer_assignment_hint)
 
     def _populate_layer_combo(
-        self,
-        combo: QComboBox,
-        role: str,
-        selected_path: Path | None,
+        self, combo: QComboBox, role: str, selected_path: Path | None
     ) -> None:
         combo.blockSignals(True)
         combo.clear()
@@ -2283,7 +2304,10 @@ class MainWindow(QMainWindow):
             profile_found = False
             for row in range(self.edge_cut_profile_list.count()):
                 item = self.edge_cut_profile_list.item(row)
-                if item is not None and item.data(Qt.ItemDataRole.UserRole) == current_profile_index:
+                if (
+                    item is not None
+                    and item.data(Qt.ItemDataRole.UserRole) == current_profile_index
+                ):
                     self.edge_cut_profile_list.setCurrentRow(row)
                     profile_found = True
                     break
@@ -2324,7 +2348,9 @@ class MainWindow(QMainWindow):
         )
         self.edge_cut_mode_combo.blockSignals(False)
         self.edge_cut_depth_input.blockSignals(True)
-        self.edge_cut_depth_input.setText(self._format_edge_cut_numeric(selected_path.cut_depth))
+        self.edge_cut_depth_input.setText(
+            self._format_edge_cut_numeric(selected_path.cut_depth)
+        )
         self.edge_cut_depth_input.blockSignals(False)
         self.edge_cut_step_down_input.blockSignals(True)
         self.edge_cut_step_down_input.setText(
@@ -2362,7 +2388,11 @@ class MainWindow(QMainWindow):
     def _edge_cut_mode_changed(self, row: int) -> None:
         if self._selected_edge_cut_profile_index is None:
             return
-        if not (0 <= self._selected_edge_cut_profile_index < len(self.project.edge_cut_profiles)):
+        if not (
+            0
+            <= self._selected_edge_cut_profile_index
+            < len(self.project.edge_cut_profiles)
+        ):
             return
         mode = str(self.edge_cut_mode_combo.itemData(row) or "none")
         updated_profiles = list(self.project.edge_cut_profiles)
@@ -2386,7 +2416,11 @@ class MainWindow(QMainWindow):
     def _edge_cut_tool_changed(self, row: int) -> None:
         if self._selected_edge_cut_profile_index is None:
             return
-        if not (0 <= self._selected_edge_cut_profile_index < len(self.project.edge_cut_profiles)):
+        if not (
+            0
+            <= self._selected_edge_cut_profile_index
+            < len(self.project.edge_cut_profiles)
+        ):
             return
         tool_id = str(self.edge_cut_tool_combo.itemData(row) or "")
         updated_profiles = list(self.project.edge_cut_profiles)
@@ -2409,8 +2443,7 @@ class MainWindow(QMainWindow):
 
     def _edge_cut_depth_changed(self) -> None:
         value = self._parse_edge_cut_numeric_input(
-            self.edge_cut_depth_input,
-            fallback=self._default_edge_cut_depth(),
+            self.edge_cut_depth_input, fallback=self._default_edge_cut_depth()
         )
         if value is None:
             self._sync_ui()
@@ -2420,8 +2453,7 @@ class MainWindow(QMainWindow):
 
     def _edge_cut_step_down_changed(self) -> None:
         value = self._parse_edge_cut_numeric_input(
-            self.edge_cut_step_down_input,
-            fallback=self._default_edge_cut_step_down(),
+            self.edge_cut_step_down_input, fallback=self._default_edge_cut_step_down()
         )
         if value is None:
             self._sync_ui()
@@ -2430,19 +2462,24 @@ class MainWindow(QMainWindow):
         self._update_selected_edge_cut_path(step_down=value)
 
     def _update_selected_edge_cut_path(
-        self,
-        *,
-        cut_depth: float | None = None,
-        step_down: float | None = None,
+        self, *, cut_depth: float | None = None, step_down: float | None = None
     ) -> None:
         if self._selected_edge_cut_profile_index is None:
             return
-        if not (0 <= self._selected_edge_cut_profile_index < len(self.project.edge_cut_profiles)):
+        if not (
+            0
+            <= self._selected_edge_cut_profile_index
+            < len(self.project.edge_cut_profiles)
+        ):
             return
         updated_profiles = list(self.project.edge_cut_profiles)
         selected_path = updated_profiles[self._selected_edge_cut_profile_index]
-        next_cut_depth = selected_path.cut_depth if cut_depth is None else float(cut_depth)
-        next_step_down = selected_path.step_down if step_down is None else float(step_down)
+        next_cut_depth = (
+            selected_path.cut_depth if cut_depth is None else float(cut_depth)
+        )
+        next_step_down = (
+            selected_path.step_down if step_down is None else float(step_down)
+        )
         if (
             abs(selected_path.cut_depth - next_cut_depth) < 1e-9
             and abs(selected_path.step_down - next_step_down) < 1e-9
@@ -2478,7 +2515,9 @@ class MainWindow(QMainWindow):
             self._selected_edge_cut_profile_index = None
             return
         self._selected_edge_cut_polygon_indices = {
-            index for index in self._selected_edge_cut_polygon_indices if 0 <= index < len(polygons)
+            index
+            for index in self._selected_edge_cut_polygon_indices
+            if 0 <= index < len(polygons)
         }
         polygon_config_map: dict[str, EdgeCutPath] = {}
         for profile in self.project.edge_cut_profiles:
@@ -2487,7 +2526,9 @@ class MainWindow(QMainWindow):
         self.project.edge_cut_profiles = [
             EdgeCutPath(
                 polygon_keys=[self._polygon_key(polygon)],
-                mode=polygon_config_map.get(self._polygon_key(polygon), EdgeCutPath()).mode,
+                mode=polygon_config_map.get(
+                    self._polygon_key(polygon), EdgeCutPath()
+                ).mode,
                 tool_id=polygon_config_map.get(
                     self._polygon_key(polygon),
                     EdgeCutPath(tool_id=self.project.selected_tools.get("milling", "")),
@@ -2502,18 +2543,18 @@ class MainWindow(QMainWindow):
                     EdgeCutPath(step_down=self._default_edge_cut_step_down()),
                 ).step_down,
                 generated=polygon_config_map.get(
-                    self._polygon_key(polygon),
-                    EdgeCutPath(),
+                    self._polygon_key(polygon), EdgeCutPath()
                 ).generated,
                 visible=polygon_config_map.get(
-                    self._polygon_key(polygon),
-                    EdgeCutPath(visible=True),
+                    self._polygon_key(polygon), EdgeCutPath(visible=True)
                 ).visible,
             )
             for polygon in polygons
         ]
         if self._selected_edge_cut_profile_index is not None and not (
-            0 <= self._selected_edge_cut_profile_index < len(self.project.edge_cut_profiles)
+            0
+            <= self._selected_edge_cut_profile_index
+            < len(self.project.edge_cut_profiles)
         ):
             self._selected_edge_cut_profile_index = None
 
@@ -2560,7 +2601,9 @@ class MainWindow(QMainWindow):
         if self.project.replace_edge_cut_profiles(updated_paths):
             self.toolpath_viewer.load_document(None)
             self._mark_project_dirty()
-        self._generated_edge_cut_preview_paths = self._visible_generated_edge_cut_preview_paths()
+        self._generated_edge_cut_preview_paths = (
+            self._visible_generated_edge_cut_preview_paths()
+        )
         self._sync_ui()
 
     def _delete_all_edge_cut_paths(self) -> None:
@@ -2606,13 +2649,13 @@ class MainWindow(QMainWindow):
         )
         if self.project.replace_edge_cut_profiles(updated_paths):
             self._mark_project_dirty()
-        self._generated_edge_cut_preview_paths = self._visible_generated_edge_cut_preview_paths()
+        self._generated_edge_cut_preview_paths = (
+            self._visible_generated_edge_cut_preview_paths()
+        )
         self._sync_ui()
 
     def _resolved_edge_cut_paths(
-        self,
-        *,
-        path_indices: set[int] | None = None,
+        self, *, path_indices: set[int] | None = None
     ) -> list[dict[str, object]]:
         polygon_map = {
             self._polygon_key(polygon): polygon
@@ -2626,7 +2669,9 @@ class MainWindow(QMainWindow):
                 continue
             tool = self._edge_cut_tool_by_id(profile.tool_id)
             if tool is None:
-                raise ValueError(f"Path {profile_index + 1} does not have a valid milling tool.")
+                raise ValueError(
+                    f"Path {profile_index + 1} does not have a valid milling tool."
+                )
             for polygon_key in profile.polygon_keys:
                 polygon = polygon_map.get(polygon_key)
                 if polygon is None:
@@ -2654,11 +2699,17 @@ class MainWindow(QMainWindow):
     def _selected_edge_cut_path_indices(self) -> set[int]:
         if self._selected_edge_cut_profile_index is None:
             return set()
-        if not (0 <= self._selected_edge_cut_profile_index < len(self.project.edge_cut_profiles)):
+        if not (
+            0
+            <= self._selected_edge_cut_profile_index
+            < len(self.project.edge_cut_profiles)
+        ):
             return set()
         return {self._selected_edge_cut_profile_index}
 
-    def _visible_generated_edge_cut_preview_paths(self) -> list[list[tuple[float, float]]]:
+    def _visible_generated_edge_cut_preview_paths(
+        self,
+    ) -> list[list[tuple[float, float]]]:
         visible_paths: list[list[tuple[float, float]]] = []
         polygon_map = {
             self._polygon_key(polygon): polygon
@@ -2715,9 +2766,13 @@ class MainWindow(QMainWindow):
 
     def _selected_edge_cut_profile_mode(self) -> str:
         if self._selected_edge_cut_profile_index is not None and (
-            0 <= self._selected_edge_cut_profile_index < len(self.project.edge_cut_profiles)
+            0
+            <= self._selected_edge_cut_profile_index
+            < len(self.project.edge_cut_profiles)
         ):
-            return self.project.edge_cut_profiles[self._selected_edge_cut_profile_index].mode
+            return self.project.edge_cut_profiles[
+                self._selected_edge_cut_profile_index
+            ].mode
         return str(self.edge_cut_mode_combo.currentData() or "none")
 
     def _edge_cut_polygon_labels(self) -> dict[int, str]:
@@ -2763,10 +2818,7 @@ class MainWindow(QMainWindow):
         return f"{float(value):.3f}"
 
     def _parse_edge_cut_numeric_input(
-        self,
-        field: QLineEdit,
-        *,
-        fallback: float,
+        self, field: QLineEdit, *, fallback: float
     ) -> float | None:
         text = field.text().strip()
         if not text:
@@ -2823,8 +2875,7 @@ class MainWindow(QMainWindow):
     def _sync_alignment_holes_page(self) -> None:
         self.alignment_hole_list.clear()
         for hole, position in zip(
-            self.project.alignment_holes,
-            self._alignment_hole_positions(),
+            self.project.alignment_holes, self._alignment_hole_positions()
         ):
             item = QListWidgetItem(
                 f"{hole.edge} | along {hole.offset_along_edge:.3f} mm | "
@@ -2833,18 +2884,29 @@ class MainWindow(QMainWindow):
             )
             self.alignment_hole_list.addItem(item)
 
-    def _sync_origin_page(self) -> None:
-        has_bounds = self._reference_board_bounds() is not None
+    def _sync_stock_definition_page(self) -> None:
+        for widget, value in (
+            (self.stock_width_input, self.project.stock_width),
+            (self.stock_height_input, self.project.stock_height),
+            (self.stock_thickness_input, self.project.stock_thickness),
+        ):
+            widget.blockSignals(True)
+            widget.setText("" if value == 0.0 else f"{value:.3f}")
+            widget.blockSignals(False)
         selected_origin = self._current_origin_point()
-        self.origin_selection_value.setText(
-            f"Current origin: {format_origin_point(selected_origin)}"
-            if has_bounds and selected_origin is not None
-            else "Current origin: unavailable until board bounds are available"
+        origin_label = NC_ORIGIN_LABELS.get(
+            self.project.stock_origin,
+            self.project.stock_origin.replace("_", " ").title(),
         )
-        self.origin_hint.setText(
-            "The preview shows an overlay view only on this step. Hover over the board to reveal clickable origin points, then click one to set XY work zero."
-            if has_bounds
-            else "Import board geometry first so the origin marker can be placed on the board bounds."
+        self.stock_origin_value.setText(
+            f"Current origin: {origin_label} at {format_origin_point(selected_origin)}"
+            if selected_origin is not None
+            else "Current origin: set the stock dimensions, then click a stock hotspot"
+        )
+        self.stock_hint.setText(
+            "Hover over the stock rectangle in preview and click a corner, edge midpoint, or the center to set XY work zero."
+            if self._stock_bounds() is not None
+            else "Enter stock width, height, and thickness to activate the stock preview and origin hotspots."
         )
 
     def _alignment_hole_positions(self) -> list[tuple[float, float, float]]:
@@ -2905,19 +2967,24 @@ class MainWindow(QMainWindow):
             raise ValueError("Board bounds are not available.")
         return bounds
 
+    def _stock_definition_is_valid(self) -> bool:
+        return (
+            self.project.stock_width > 0.0
+            and self.project.stock_height > 0.0
+            and self.project.stock_thickness > 0.0
+            and self._current_origin_point() is not None
+        )
+
+    def _stock_bounds(self) -> tuple[float, float, float, float] | None:
+        if self.project.stock_width <= 0.0 or self.project.stock_height <= 0.0:
+            return None
+        return (0.0, self.project.stock_width, 0.0, self.project.stock_height)
+
     def _current_origin_point(self) -> tuple[float, float] | None:
-        if (
-            self.config.default_nc_origin_x is not None
-            and self.config.default_nc_origin_y is not None
-        ):
-            return (
-                self.config.default_nc_origin_x,
-                self.config.default_nc_origin_y,
-            )
-        bounds = self._reference_board_bounds()
+        bounds = self._stock_bounds()
         if bounds is None:
             return None
-        return legacy_origin_point_for_bounds(bounds, self.config.default_nc_origin)
+        return legacy_origin_point_for_bounds(bounds, self.project.stock_origin)
 
     def _current_origin_point_required(self) -> tuple[float, float]:
         point = self._current_origin_point()
@@ -2926,100 +2993,23 @@ class MainWindow(QMainWindow):
         return point
 
     def _origin_hotspot_points(self) -> dict[str, tuple[float, float]]:
-        points = {
-            "center": (
-                (bounds[0] + bounds[1]) * 0.5,
-                (bounds[2] + bounds[3]) * 0.5,
-            )
-            for bounds in [self._reference_board_bounds()]
-            if bounds is not None
+        bounds = self._stock_bounds()
+        if bounds is None:
+            return {}
+        x_min, x_max, y_min, y_max = bounds
+        x_mid = (x_min + x_max) * 0.5
+        y_mid = (y_min + y_max) * 0.5
+        return {
+            "top_left": (x_min, y_max),
+            "top_center": (x_mid, y_max),
+            "top_right": (x_max, y_max),
+            "center_left": (x_min, y_mid),
+            "center": (x_mid, y_mid),
+            "center_right": (x_max, y_mid),
+            "bottom_left": (x_min, y_min),
+            "bottom_center": (x_mid, y_min),
+            "bottom_right": (x_max, y_min),
         }
-        outline_points = self._origin_reference_points()
-        points.update({
-            f"vertex_{index}": point
-            for index, point in enumerate(outline_points)
-        })
-        return points
-
-    def _origin_reference_points(self) -> list[tuple[float, float]]:
-        edge_file = self._assigned_gerber("edges")
-        candidate_files = []
-        if edge_file is not None:
-            candidate_files.append(edge_file)
-        candidate_files.extend(
-            gerber for gerber in self._active_gerbers() if gerber is not edge_file
-        )
-        for gerber in candidate_files:
-            reference_points = self._gerber_origin_points(gerber)
-            if reference_points:
-                return reference_points
-        return []
-
-    def _gerber_origin_points(
-        self,
-        gerber: ImportedGerberFile,
-    ) -> list[tuple[float, float]]:
-        segment_points = self._origin_points_from_segments(gerber.segments)
-        arc_centers = self._unique_points(gerber.arc_centers)
-        if segment_points or arc_centers:
-            return self._unique_points(segment_points + arc_centers)
-
-        outline = gerber.outline
-        if len(outline) < 2:
-            return []
-        raw_points = outline[:-1] if outline[0] == outline[-1] else outline
-        return self._unique_points(raw_points)
-
-    def _origin_points_from_segments(
-        self,
-        segments: list[tuple[tuple[float, float], tuple[float, float]]],
-    ) -> list[tuple[float, float]]:
-        adjacency: dict[tuple[float, float], list[tuple[float, float]]] = {}
-        ordered_points: list[tuple[float, float]] = []
-        for start, end in segments:
-            if start == end:
-                continue
-            if start not in adjacency:
-                adjacency[start] = []
-                ordered_points.append(start)
-            if end not in adjacency:
-                adjacency[end] = []
-                ordered_points.append(end)
-            adjacency[start].append(end)
-            adjacency[end].append(start)
-
-        reference_points: list[tuple[float, float]] = []
-        for point in ordered_points:
-            neighbors = adjacency.get(point, [])
-            if not neighbors:
-                continue
-            if len(neighbors) != 2:
-                reference_points.append(point)
-                continue
-            if self._orientation(neighbors[0], point, neighbors[1]) != 0:
-                reference_points.append(point)
-        return reference_points
-
-    def _unique_points(
-        self,
-        points: list[tuple[float, float]],
-    ) -> list[tuple[float, float]]:
-        unique_points: list[tuple[float, float]] = []
-        for point in points:
-            if point not in unique_points:
-                unique_points.append(point)
-        return unique_points
-
-    def _orientation(
-        self,
-        p: tuple[float, float],
-        q: tuple[float, float],
-        r: tuple[float, float],
-    ) -> int:
-        value = ((q[1] - p[1]) * (r[0] - q[0])) - ((q[0] - p[0]) * (r[1] - q[1]))
-        if abs(value) < 1e-9:
-            return 0
-        return 1 if value > 0 else 2
 
     def _assigned_gerber(self, role: str) -> ImportedGerberFile | None:
         assigned_path = self.project.layer_assignments.get(role)
@@ -3035,9 +3025,7 @@ class MainWindow(QMainWindow):
         return None
 
     def _alignment_hole_position_for_bounds(
-        self,
-        hole: AlignmentHole,
-        bounds: tuple[float, float, float, float],
+        self, hole: AlignmentHole, bounds: tuple[float, float, float, float]
     ) -> tuple[float, float, float]:
         x_min, x_max, y_min, y_max = bounds
         if hole.edge == "left":
@@ -3074,18 +3062,22 @@ class MainWindow(QMainWindow):
         return None
 
     def _set_origin_location(self, x_pos: float, y_pos: float) -> None:
-        current = self._current_origin_point()
         next_point = (x_pos, y_pos)
-        if current == next_point:
+        selected_origin = next(
+            (
+                key
+                for key, point in self._origin_hotspot_points().items()
+                if point == next_point
+            ),
+            None,
+        )
+        if selected_origin is None or self.project.stock_origin == selected_origin:
             return
-        self.config.default_nc_origin_x = x_pos
-        self.config.default_nc_origin_y = y_pos
-        self._save_config(self.config)
-        self.project.mark_origin_changed()
+        self.project.set_stock_origin(selected_origin)
         self.toolpath_viewer.load_document(None)
         self._mark_project_dirty()
         self.statusBar().showMessage(
-            f"Default NC origin set to {format_origin_point(next_point)}",
+            f"Stock origin set to {NC_ORIGIN_LABELS.get(selected_origin, selected_origin)}",
             3000,
         )
         self._sync_ui()
@@ -3153,7 +3145,10 @@ class MainWindow(QMainWindow):
         if self.generated_output_list.count() == 0:
             self.toolpath_viewer.load_document(None)
             return
-        if self.generated_output_list.count() > 0 and self.generated_output_list.currentRow() < 0:
+        if (
+            self.generated_output_list.count() > 0
+            and self.generated_output_list.currentRow() < 0
+        ):
             self.generated_output_list.setCurrentRow(0)
 
     def _scroll_current_step_into_view(self) -> None:
@@ -3180,7 +3175,9 @@ class MainWindow(QMainWindow):
             return
         horizontal_scroll.setValue(max(0, step_right - viewport_width + margin))
 
-    def _operation_optional_or_generated(self, operation_key: str, layer_role: str) -> bool:
+    def _operation_optional_or_generated(
+        self, operation_key: str, layer_role: str
+    ) -> bool:
         if self.project.layer_assignments.get(layer_role) is None:
             return True
         return operation_key in self.project.generated_outputs
@@ -3192,12 +3189,16 @@ class MainWindow(QMainWindow):
 
     def _active_gerbers(self) -> list[ImportedGerberFile]:
         return [
-            gerber for gerber in self.imported_gerbers if self.project.is_gerber_selected(gerber.path)
+            gerber
+            for gerber in self.imported_gerbers
+            if self.project.is_gerber_selected(gerber.path)
         ]
 
     def _active_drills(self) -> list[ImportedDrillFile]:
         return [
-            drill for drill in self.imported_drills if self.project.is_drill_selected(drill.path)
+            drill
+            for drill in self.imported_drills
+            if self.project.is_drill_selected(drill.path)
         ]
 
     def _gerber_item_changed(self, item: QListWidgetItem) -> None:
@@ -3222,6 +3223,7 @@ class MainWindow(QMainWindow):
 
     def _mark_project_dirty(self) -> None:
         self.has_unsaved_changes = True
+        self._update_window_title()
 
     def _confirm_discard_or_save_changes(self) -> bool:
         if not self.has_unsaved_changes:

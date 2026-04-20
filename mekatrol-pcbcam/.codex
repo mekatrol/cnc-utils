@@ -11,3 +11,4 @@
 #
 # Design
 # - Avoid gradient colors in icons, graphics, and UI styling unless explicitly requested.
+# - Do not use spin controls for floating-point entry in the UI; use validated text inputs instead.
