@@ -51,6 +51,7 @@ class PcbPreviewWidget(QWidget):
         self._mirror_preview_mode = "side_by_side"
         self._origin_marker_bounds: tuple[float, float, float, float] | None = None
         self._origin_marker_point: tuple[float, float] | None = None
+        self._origin_marker_label = "(0, 0)"
         self._origin_hotspot_points_override: dict[str, tuple[float, float]] = {}
         self._origin_selection_enabled = False
         self._origin_hotspots_visible = False
@@ -114,9 +115,11 @@ class PcbPreviewWidget(QWidget):
         *,
         hotspot_points: dict[str, tuple[float, float]] | None = None,
         selection_enabled: bool = False,
+        marker_label: str = "(0, 0)",
     ) -> None:
         self._origin_marker_bounds = board_bounds
         self._origin_marker_point = point
+        self._origin_marker_label = marker_label
         self._origin_hotspot_points_override = dict(hotspot_points or {})
         self._origin_selection_enabled = selection_enabled
         if not selection_enabled:
@@ -662,7 +665,7 @@ class PcbPreviewWidget(QWidget):
         )
         painter.drawText(
             QPointF(screen_center.x() + radius + 10.0, screen_center.y() - radius - 4.0),
-            "(0, 0)",
+            self._origin_marker_label,
         )
         painter.restore()
 

@@ -10,7 +10,7 @@ from .nc_origin import DEFAULT_NC_ORIGIN, normalize_nc_origin
 
 
 class PcbProject:
-    VERSION = 7
+    VERSION = 9
     STEP_PROJECT = 0
     STEP_STOCK_DEFINITION = 1
     STEP_GERBER_IMPORT = 2
@@ -72,6 +72,9 @@ class PcbProject:
         }
         self.mirror_flip_edge: str = ""
         self.mirror_preview_mode: str = "side_by_side"
+        self.file_alignment: str = DEFAULT_NC_ORIGIN
+        self.file_alignment_horizontal_offset: float = 0.0
+        self.file_alignment_vertical_offset: float = 0.0
         self.alignment_holes: list[AlignmentHole] = []
         self.edge_cut_profiles: list[EdgeCutPath] = []
         self.generated_outputs: dict[str, Path] = {}
@@ -228,6 +231,32 @@ class PcbProject:
         self.mirror_preview_mode = normalized
         return changed
 
+    def set_file_alignment(self, alignment: str) -> bool:
+        normalized = normalize_nc_origin(alignment)
+        changed = self.file_alignment != normalized
+        self.file_alignment = normalized
+        if changed:
+            self._invalidate_from(self.STEP_ALIGNMENT_HOLES)
+        return changed
+
+    def set_file_alignment_offsets(
+        self, *, horizontal: float | None = None, vertical: float | None = None
+    ) -> bool:
+        changed = False
+        if horizontal is not None:
+            normalized_horizontal = max(0.0, float(horizontal))
+            if self.file_alignment_horizontal_offset != normalized_horizontal:
+                self.file_alignment_horizontal_offset = normalized_horizontal
+                changed = True
+        if vertical is not None:
+            normalized_vertical = max(0.0, float(vertical))
+            if self.file_alignment_vertical_offset != normalized_vertical:
+                self.file_alignment_vertical_offset = normalized_vertical
+                changed = True
+        if changed:
+            self._invalidate_from(self.STEP_ALIGNMENT_HOLES)
+        return changed
+
     def replace_alignment_holes(self, holes: list[AlignmentHole]) -> bool:
         changed = holes != self.alignment_holes
         self.alignment_holes = holes
@@ -350,6 +379,11 @@ class PcbProject:
                 "flip_edge": self.mirror_flip_edge or None,
                 "preview_mode": self.mirror_preview_mode,
             },
+            "alignment": {
+                "file_alignment": self.file_alignment,
+                "horizontal_offset": self.file_alignment_horizontal_offset,
+                "vertical_offset": self.file_alignment_vertical_offset,
+            },
             "alignment_holes": alignment_holes_data,
             "edge_cuts": {
                 "profiles": [
@@ -463,6 +497,23 @@ class PcbProject:
             raw_mode = mirror_data.get("preview_mode", "side_by_side")
             if isinstance(raw_mode, str):
                 project.set_mirror_preview_mode(raw_mode)
+        alignment_settings = loaded.get("alignment", {})
+        if isinstance(alignment_settings, dict):
+            raw_file_alignment = alignment_settings.get("file_alignment", "")
+            if isinstance(raw_file_alignment, str) and raw_file_alignment.strip():
+                project.file_alignment = normalize_nc_origin(raw_file_alignment)
+            try:
+                project.file_alignment_horizontal_offset = max(
+                    0.0, float(alignment_settings.get("horizontal_offset", 0.0))
+                )
+            except (TypeError, ValueError):
+                project.file_alignment_horizontal_offset = 0.0
+            try:
+                project.file_alignment_vertical_offset = max(
+                    0.0, float(alignment_settings.get("vertical_offset", 0.0))
+                )
+            except (TypeError, ValueError):
+                project.file_alignment_vertical_offset = 0.0
         alignment_data = loaded.get("alignment_holes", [])
         if isinstance(alignment_data, list):
             for item in alignment_data:

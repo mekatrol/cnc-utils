@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
     QComboBox,
-    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -86,7 +85,7 @@ class MainWindow(QMainWindow):
         "Stock Definition",
         "Gerber Import",
         "Drill Import",
-        "Alignment Holes",
+        "Alignment",
         "Tool Selection",
         "Front Isolation",
         "Back Isolation",
@@ -94,6 +93,17 @@ class MainWindow(QMainWindow):
         "Edge Cuts",
         "NC Preview",
     ]
+    FILE_ALIGNMENT_LABELS = {
+        "top_left": "Top Left",
+        "top_center": "Top Mid",
+        "top_right": "Top Right",
+        "center_left": "Center Left",
+        "center": "Center Mid",
+        "center_right": "Center Right",
+        "bottom_left": "Bottom Left",
+        "bottom_center": "Bottom Mid",
+        "bottom_right": "Bottom Right",
+    }
     IMPLEMENTED_STEP_COUNT = 11
 
     def __init__(
@@ -581,14 +591,17 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 5: Alignment Holes")
+        heading = QLabel("Step 5: Alignment")
         heading.setObjectName("pageHeading")
         body = QLabel(
-            "Define optional alignment holes outside the stock edge. Each hole uses "
-            "an edge reference plus offsets measured along that edge and outward "
-            "from the stock boundary."
+            "Click a stock reference point in the preview to align imported files as "
+            "a set, then define optional alignment holes outside the stock edge."
         )
         body.setWordWrap(True)
+
+        self.file_alignment_value = QLabel()
+        self.file_alignment_value.setWordWrap(True)
+        self._apply_muted_text_style(self.file_alignment_value)
 
         form_card = QFrame()
         form_card.setFrameShape(QFrame.Shape.StyledPanel)
@@ -597,26 +610,47 @@ class MainWindow(QMainWindow):
         form = QFormLayout(form_card)
         form.setContentsMargins(14, 14, 14, 14)
         form.setSpacing(10)
+        offset_validator = QDoubleValidator(0.0, 10000.0, 3, self)
+        offset_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
+        self.file_alignment_horizontal_offset_input = QLineEdit()
+        self.file_alignment_horizontal_offset_input.setValidator(offset_validator)
+        self.file_alignment_horizontal_offset_input.editingFinished.connect(
+            lambda: self._file_alignment_offset_changed(
+                "horizontal", self.file_alignment_horizontal_offset_input
+            )
+        )
+        self.file_alignment_vertical_offset_input = QLineEdit()
+        self.file_alignment_vertical_offset_input.setValidator(offset_validator)
+        self.file_alignment_vertical_offset_input.editingFinished.connect(
+            lambda: self._file_alignment_offset_changed(
+                "vertical", self.file_alignment_vertical_offset_input
+            )
+        )
         self.alignment_edge_combo = QComboBox()
         self.alignment_edge_combo.addItems(["left", "top", "right", "bottom"])
-        self.alignment_offset_along_spin = QDoubleSpinBox()
-        self.alignment_offset_along_spin.setDecimals(3)
-        self.alignment_offset_along_spin.setRange(-10000.0, 10000.0)
-        self.alignment_offset_along_spin.setSuffix(" mm")
-        self.alignment_offset_from_edge_spin = QDoubleSpinBox()
-        self.alignment_offset_from_edge_spin.setDecimals(3)
-        self.alignment_offset_from_edge_spin.setRange(0.0, 10000.0)
-        self.alignment_offset_from_edge_spin.setValue(2.0)
-        self.alignment_offset_from_edge_spin.setSuffix(" mm")
-        self.alignment_diameter_spin = QDoubleSpinBox()
-        self.alignment_diameter_spin.setDecimals(3)
-        self.alignment_diameter_spin.setRange(0.01, 100.0)
-        self.alignment_diameter_spin.setValue(1.0)
-        self.alignment_diameter_spin.setSuffix(" mm")
+        offset_along_validator = QDoubleValidator(-10000.0, 10000.0, 3, self)
+        offset_along_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
+        self.alignment_offset_along_input = QLineEdit()
+        self.alignment_offset_along_input.setValidator(offset_along_validator)
+        self.alignment_offset_along_input.setText("0.000")
+        self.alignment_offset_from_edge_input = QLineEdit()
+        self.alignment_offset_from_edge_input.setValidator(offset_validator)
+        self.alignment_offset_from_edge_input.setText("2.000")
+        diameter_validator = QDoubleValidator(0.01, 100.0, 3, self)
+        diameter_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
+        self.alignment_diameter_input = QLineEdit()
+        self.alignment_diameter_input.setValidator(diameter_validator)
+        self.alignment_diameter_input.setText("1.000")
+        form.addRow(
+            "Horizontal edge offset (mm)", self.file_alignment_horizontal_offset_input
+        )
+        form.addRow(
+            "Vertical edge offset (mm)", self.file_alignment_vertical_offset_input
+        )
         form.addRow("Edge", self.alignment_edge_combo)
-        form.addRow("Offset along edge", self.alignment_offset_along_spin)
-        form.addRow("Offset from edge", self.alignment_offset_from_edge_spin)
-        form.addRow("Hole diameter", self.alignment_diameter_spin)
+        form.addRow("Offset along edge (mm)", self.alignment_offset_along_input)
+        form.addRow("Offset from edge (mm)", self.alignment_offset_from_edge_input)
+        form.addRow("Hole diameter (mm)", self.alignment_diameter_input)
 
         button_row = QHBoxLayout()
         add_button = QPushButton("Add Alignment Hole")
@@ -638,6 +672,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(heading)
         layout.addWidget(body)
+        layout.addWidget(self.file_alignment_value)
         layout.addWidget(form_card)
         layout.addLayout(button_row)
         layout.addWidget(self.alignment_hole_list, 1)
@@ -1549,19 +1584,64 @@ class MainWindow(QMainWindow):
             self._mark_project_dirty()
         self._sync_ui()
 
+    def _file_alignment_offset_changed(self, axis: str, widget: QLineEdit) -> None:
+        text = widget.text().strip()
+        if not text:
+            value = 0.0
+        else:
+            try:
+                value = float(text)
+            except ValueError:
+                self._sync_alignment_holes_page()
+                return
+        kwargs = {axis: max(0.0, value)}
+        if self.project.set_file_alignment_offsets(
+            horizontal=kwargs.get("horizontal"), vertical=kwargs.get("vertical")
+        ):
+            self.toolpath_viewer.load_document(None)
+            self._mark_project_dirty()
+        self._sync_ui()
+
     def _add_alignment_hole(self) -> None:
+        offset_along = self._alignment_hole_numeric_input(
+            self.alignment_offset_along_input, fallback=0.0, minimum=-10000.0
+        )
+        offset_from_edge = self._alignment_hole_numeric_input(
+            self.alignment_offset_from_edge_input, fallback=2.0, minimum=0.0
+        )
+        diameter = self._alignment_hole_numeric_input(
+            self.alignment_diameter_input, fallback=1.0, minimum=0.01
+        )
+        if offset_along is None or offset_from_edge is None or diameter is None:
+            return
         holes = list(self.project.alignment_holes)
         holes.append(
             AlignmentHole(
                 edge=self.alignment_edge_combo.currentText(),
-                offset_along_edge=self.alignment_offset_along_spin.value(),
-                offset_from_edge=self.alignment_offset_from_edge_spin.value(),
-                diameter=self.alignment_diameter_spin.value(),
+                offset_along_edge=offset_along,
+                offset_from_edge=offset_from_edge,
+                diameter=diameter,
             )
         )
         if self.project.replace_alignment_holes(holes):
             self._mark_project_dirty()
         self._sync_ui()
+
+    def _alignment_hole_numeric_input(
+        self, widget: QLineEdit, *, fallback: float, minimum: float
+    ) -> float | None:
+        text = widget.text().strip()
+        if not text:
+            value = fallback
+        else:
+            try:
+                value = float(text)
+            except ValueError:
+                widget.setText(f"{fallback:.3f}")
+                return None
+        value = max(minimum, value)
+        widget.setText(f"{value:.3f}")
+        return value
 
     def _remove_selected_alignment_holes(self) -> None:
         selected_rows = sorted(
@@ -1886,8 +1966,8 @@ class MainWindow(QMainWindow):
             self._active_gerbers(),
             self._active_drills(),
             self._alignment_hole_positions(),
-            reference_gerber_files=self.imported_gerbers,
-            reference_drill_files=self.imported_drills,
+            reference_gerber_files=self._aligned_gerbers(self.imported_gerbers),
+            reference_drill_files=self._aligned_drills(self.imported_drills),
         )
         self.preview.set_mirror_setup(
             back_copper_path=(
@@ -1932,13 +2012,30 @@ class MainWindow(QMainWindow):
         )
         self.preview.set_origin_marker(
             stock_bounds if show_stock else None,
-            self._current_origin_point() if show_stock else None,
+            (
+                self._file_alignment_point()
+                if current == PcbProject.STEP_ALIGNMENT_HOLES
+                else self._current_origin_point()
+            )
+            if show_stock
+            else None,
             hotspot_points=(
                 self._origin_hotspot_points()
                 if current == PcbProject.STEP_STOCK_DEFINITION
+                else self._file_alignment_hotspot_points()
+                if current == PcbProject.STEP_ALIGNMENT_HOLES
                 else None
             ),
-            selection_enabled=current == PcbProject.STEP_STOCK_DEFINITION,
+            selection_enabled=current
+            in {
+                PcbProject.STEP_STOCK_DEFINITION,
+                PcbProject.STEP_ALIGNMENT_HOLES,
+            },
+            marker_label=(
+                "Alignment"
+                if current == PcbProject.STEP_ALIGNMENT_HOLES
+                else "(0, 0)"
+            ),
         )
         self.toolpath_viewer.set_stock_overlay(
             stock_bounds if show_stock else None,
@@ -2231,7 +2328,8 @@ class MainWindow(QMainWindow):
             refreshed_gerber = gerber
         else:
             self._replace_imported_gerber(refreshed_gerber)
-            gerber = refreshed_gerber
+            x_offset, y_offset = self._file_alignment_offset()
+            gerber = self._translate_gerber(refreshed_gerber, x_offset, y_offset)
         try:
             self._edge_cut_validation_result = validate_edge_segments(gerber.segments)
         except ModuleNotFoundError as exc:
@@ -2877,6 +2975,30 @@ class MainWindow(QMainWindow):
         )
 
     def _sync_alignment_holes_page(self) -> None:
+        self.file_alignment_horizontal_offset_input.blockSignals(True)
+        self.file_alignment_horizontal_offset_input.setText(
+            f"{self.project.file_alignment_horizontal_offset:.3f}"
+        )
+        self.file_alignment_horizontal_offset_input.blockSignals(False)
+        self.file_alignment_vertical_offset_input.blockSignals(True)
+        self.file_alignment_vertical_offset_input.setText(
+            f"{self.project.file_alignment_vertical_offset:.3f}"
+        )
+        self.file_alignment_vertical_offset_input.blockSignals(False)
+        selected_point = self._file_alignment_point()
+        alignment_label = self.FILE_ALIGNMENT_LABELS.get(
+            self.project.file_alignment,
+            self.project.file_alignment.replace("_", " ").title(),
+        )
+        self.file_alignment_value.setText(
+            "Imported files alignment: "
+            f"{alignment_label} at {format_origin_point(selected_point)}"
+            if selected_point is not None
+            else (
+                "Imported files alignment: set the stock dimensions, then click "
+                "a stock hotspot"
+            )
+        )
         self.alignment_hole_list.clear()
         for hole, position in zip(
             self.project.alignment_holes, self._alignment_hole_positions()
@@ -2996,6 +3118,84 @@ class MainWindow(QMainWindow):
             raise ValueError("NC origin point is not available.")
         return point
 
+    def _file_alignment_point(self) -> tuple[float, float] | None:
+        bounds = self._stock_bounds()
+        if bounds is None:
+            return None
+        return self._alignment_target_point_for_bounds(
+            bounds, self.project.file_alignment
+        )
+
+    def _file_alignment_offset(self) -> tuple[float, float]:
+        source_bounds = self._selected_import_bounds()
+        target_bounds = self._stock_bounds()
+        if source_bounds is None or target_bounds is None:
+            return 0.0, 0.0
+        source_point = legacy_origin_point_for_bounds(
+            source_bounds, self.project.file_alignment
+        )
+        target_point = self._alignment_target_point_for_bounds(
+            target_bounds, self.project.file_alignment
+        )
+        return target_point[0] - source_point[0], target_point[1] - source_point[1]
+
+    def _alignment_target_point_for_bounds(
+        self, bounds: tuple[float, float, float, float], alignment: str
+    ) -> tuple[float, float]:
+        x_min, x_max, y_min, y_max = bounds
+        x_mid = (x_min + x_max) * 0.5
+        y_mid = (y_min + y_max) * 0.5
+        horizontal_offset = min(
+            self.project.file_alignment_horizontal_offset,
+            max(0.0, (x_max - x_min) * 0.5),
+        )
+        vertical_offset = min(
+            self.project.file_alignment_vertical_offset,
+            max(0.0, (y_max - y_min) * 0.5),
+        )
+        if alignment.endswith("_left"):
+            x_pos = x_min + horizontal_offset
+        elif alignment.endswith("_right"):
+            x_pos = x_max - horizontal_offset
+        else:
+            x_pos = x_mid
+
+        if alignment.startswith("top_"):
+            y_pos = y_max - vertical_offset
+        elif alignment.startswith("bottom_"):
+            y_pos = y_min + vertical_offset
+        else:
+            y_pos = y_mid
+        return x_pos, y_pos
+
+    def _selected_import_bounds(self) -> tuple[float, float, float, float] | None:
+        bounds = None
+        for gerber in self._raw_active_gerbers():
+            if gerber.bounds.is_empty:
+                continue
+            bounds = self._extend_bounds(bounds, gerber.bounds)
+        for drill in self._raw_active_drills():
+            if drill.bounds.is_empty:
+                continue
+            bounds = self._extend_bounds(bounds, drill.bounds)
+        if bounds is None:
+            return None
+        return bounds[0], bounds[1], bounds[2], bounds[3]
+
+    def _extend_bounds(self, bounds: list[float] | None, next_bounds) -> list[float]:
+        if bounds is None:
+            return [
+                next_bounds.x_min,
+                next_bounds.x_max,
+                next_bounds.y_min,
+                next_bounds.y_max,
+            ]
+        bounds[0] = min(bounds[0], next_bounds.x_min)
+        bounds[1] = max(bounds[1], next_bounds.x_max)
+        bounds[2] = min(bounds[2], next_bounds.y_min)
+        bounds[3] = max(bounds[3], next_bounds.y_max)
+        return bounds
+
     def _origin_hotspot_points(self) -> dict[str, tuple[float, float]]:
         bounds = self._stock_bounds()
         if bounds is None:
@@ -3015,11 +3215,24 @@ class MainWindow(QMainWindow):
             "bottom_right": (x_max, y_min),
         }
 
+    def _file_alignment_hotspot_points(self) -> dict[str, tuple[float, float]]:
+        bounds = self._stock_bounds()
+        if bounds is None:
+            return {}
+        return {
+            key: self._alignment_target_point_for_bounds(bounds, key)
+            for key in self._origin_hotspot_points()
+        }
+
     def _assigned_gerber(self, role: str) -> ImportedGerberFile | None:
         assigned_path = self.project.layer_assignments.get(role)
         if assigned_path is None:
             return None
-        return self._imported_gerber_by_path(assigned_path)
+        gerber = self._imported_gerber_by_path(assigned_path)
+        if gerber is None:
+            return None
+        x_offset, y_offset = self._file_alignment_offset()
+        return self._translate_gerber(gerber, x_offset, y_offset)
 
     def _imported_gerber_by_path(self, path: Path) -> ImportedGerberFile | None:
         resolved_path = path.resolve()
@@ -3067,14 +3280,35 @@ class MainWindow(QMainWindow):
 
     def _set_origin_location(self, x_pos: float, y_pos: float) -> None:
         next_point = (x_pos, y_pos)
+        hotspot_points = (
+            self._file_alignment_hotspot_points()
+            if self.project.current_step_index == PcbProject.STEP_ALIGNMENT_HOLES
+            else self._origin_hotspot_points()
+        )
         selected_origin = next(
             (
                 key
-                for key, point in self._origin_hotspot_points().items()
+                for key, point in hotspot_points.items()
                 if point == next_point
             ),
             None,
         )
+        if self.project.current_step_index == PcbProject.STEP_ALIGNMENT_HOLES:
+            if (
+                selected_origin is None
+                or self.project.file_alignment == selected_origin
+            ):
+                return
+            self.project.set_file_alignment(selected_origin)
+            self.toolpath_viewer.load_document(None)
+            self._mark_project_dirty()
+            self.statusBar().showMessage(
+                "Imported files aligned to "
+                f"{self.FILE_ALIGNMENT_LABELS.get(selected_origin, selected_origin)}",
+                3000,
+            )
+            self._sync_ui()
+            return
         if selected_origin is None or self.project.stock_origin == selected_origin:
             return
         self.project.set_stock_origin(selected_origin)
@@ -3191,19 +3425,100 @@ class MainWindow(QMainWindow):
             return True
         return "drilling" in self.project.generated_outputs
 
-    def _active_gerbers(self) -> list[ImportedGerberFile]:
+    def _raw_active_gerbers(self) -> list[ImportedGerberFile]:
         return [
             gerber
             for gerber in self.imported_gerbers
             if self.project.is_gerber_selected(gerber.path)
         ]
 
-    def _active_drills(self) -> list[ImportedDrillFile]:
+    def _raw_active_drills(self) -> list[ImportedDrillFile]:
         return [
             drill
             for drill in self.imported_drills
             if self.project.is_drill_selected(drill.path)
         ]
+
+    def _active_gerbers(self) -> list[ImportedGerberFile]:
+        return self._aligned_gerbers(self._raw_active_gerbers())
+
+    def _active_drills(self) -> list[ImportedDrillFile]:
+        return self._aligned_drills(self._raw_active_drills())
+
+    def _aligned_gerbers(
+        self, gerbers: list[ImportedGerberFile]
+    ) -> list[ImportedGerberFile]:
+        x_offset, y_offset = self._file_alignment_offset()
+        return [
+            self._translate_gerber(gerber, x_offset, y_offset)
+            for gerber in gerbers
+        ]
+
+    def _aligned_drills(
+        self, drills: list[ImportedDrillFile]
+    ) -> list[ImportedDrillFile]:
+        x_offset, y_offset = self._file_alignment_offset()
+        return [
+            self._translate_drill(drill, x_offset, y_offset)
+            for drill in drills
+        ]
+
+    def _translate_gerber(
+        self, gerber: ImportedGerberFile, x_offset: float, y_offset: float
+    ) -> ImportedGerberFile:
+        if abs(x_offset) < 1e-9 and abs(y_offset) < 1e-9:
+            return gerber
+
+        def point(point: tuple[float, float]) -> tuple[float, float]:
+            return point[0] + x_offset, point[1] + y_offset
+
+        def polygon(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+            return [point(item) for item in points]
+
+        bounds = copy.copy(gerber.bounds)
+        if not bounds.is_empty:
+            bounds.x_min += x_offset
+            bounds.x_max += x_offset
+            bounds.y_min += y_offset
+            bounds.y_max += y_offset
+        return ImportedGerberFile(
+            path=gerber.path,
+            display_name=gerber.display_name,
+            traces=[
+                (point(start), point(end), width)
+                for start, end, width in gerber.traces
+            ],
+            segments=[(point(start), point(end)) for start, end in gerber.segments],
+            arc_centers=[point(center) for center in gerber.arc_centers],
+            pads=[
+                (point(center), copy.copy(definition))
+                for center, definition in gerber.pads
+            ],
+            regions=[polygon(region) for region in gerber.regions],
+            outline=polygon(gerber.outline),
+            bounds=bounds,
+        )
+
+    def _translate_drill(
+        self, drill: ImportedDrillFile, x_offset: float, y_offset: float
+    ) -> ImportedDrillFile:
+        if abs(x_offset) < 1e-9 and abs(y_offset) < 1e-9:
+            return drill
+        bounds = copy.copy(drill.bounds)
+        if not bounds.is_empty:
+            bounds.x_min += x_offset
+            bounds.x_max += x_offset
+            bounds.y_min += y_offset
+            bounds.y_max += y_offset
+        return ImportedDrillFile(
+            path=drill.path,
+            display_name=drill.display_name,
+            holes=[
+                (x_pos + x_offset, y_pos + y_offset, diameter)
+                for x_pos, y_pos, diameter in drill.holes
+            ],
+            bounds=bounds,
+        )
 
     def _gerber_item_changed(self, item: QListWidgetItem) -> None:
         raw_path = item.data(Qt.ItemDataRole.UserRole)
