@@ -135,10 +135,15 @@ class MainWindow(QMainWindow):
         self._selected_edge_cut_polygon_indices: set[int] = set()
         self._selected_edge_cut_profile_index: int | None = None
         self._generated_edge_cut_preview_paths: list[list[tuple[float, float]]] = []
+        self._alignment_preview_row_map: list[int] = []
 
         self.preview = PcbPreviewWidget(self.theme)
         self.preview.origin_selected.connect(self._set_origin_location)
         self.preview.edge_polygon_selected.connect(self._select_edge_cut_polygon)
+        self.preview.alignment_hole_selected.connect(self._select_alignment_hole)
+        self.preview.alignment_hole_position_selected.connect(
+            self._add_alignment_hole_at_position
+        )
         self.toolpath_viewer = ToolpathViewer(self.theme)
         self.preview_stack = QStackedWidget()
         self.preview_stack.addWidget(self.preview)
@@ -197,6 +202,14 @@ class MainWindow(QMainWindow):
 
     def _apply_default_project_settings(self) -> None:
         self.project.stock_origin = normalize_nc_origin(self.config.default_nc_origin)
+        self.project.file_alignment_horizontal_offset = max(
+            0.0, self.config.default_file_alignment_horizontal_offset
+        )
+        self.project.file_alignment_vertical_offset = max(
+            0.0, self.config.default_file_alignment_vertical_offset
+        )
+        self.project.file_alignment_horizontal_offset_loaded = False
+        self.project.file_alignment_vertical_offset_loaded = False
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -595,7 +608,7 @@ class MainWindow(QMainWindow):
         heading.setObjectName("pageHeading")
         body = QLabel(
             "Click a stock reference point in the preview to align imported files as "
-            "a set, then define optional alignment holes outside the stock edge."
+            "a set, then click a grid intersection to add mirrored alignment holes."
         )
         body.setWordWrap(True)
 
@@ -626,16 +639,19 @@ class MainWindow(QMainWindow):
                 "vertical", self.file_alignment_vertical_offset_input
             )
         )
-        self.alignment_edge_combo = QComboBox()
-        self.alignment_edge_combo.addItems(["left", "top", "right", "bottom"])
-        offset_along_validator = QDoubleValidator(-10000.0, 10000.0, 3, self)
-        offset_along_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
-        self.alignment_offset_along_input = QLineEdit()
-        self.alignment_offset_along_input.setValidator(offset_along_validator)
-        self.alignment_offset_along_input.setText("0.000")
-        self.alignment_offset_from_edge_input = QLineEdit()
-        self.alignment_offset_from_edge_input.setValidator(offset_validator)
-        self.alignment_offset_from_edge_input.setText("2.000")
+        grid_validator = QDoubleValidator(0.1, 10000.0, 3, self)
+        grid_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
+        self.alignment_grid_size_input = QLineEdit()
+        self.alignment_grid_size_input.setValidator(grid_validator)
+        self.alignment_grid_size_input.editingFinished.connect(
+            self._alignment_grid_size_changed
+        )
+        self.alignment_mirror_combo = QComboBox()
+        self.alignment_mirror_combo.addItem("Horizontal (left/right)", "horizontal")
+        self.alignment_mirror_combo.addItem("Vertical (top/bottom)", "vertical")
+        self.alignment_mirror_combo.currentIndexChanged.connect(
+            self._selected_alignment_hole_mirror_changed
+        )
         diameter_validator = QDoubleValidator(0.01, 100.0, 3, self)
         diameter_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
         self.alignment_diameter_input = QLineEdit()
@@ -647,25 +663,29 @@ class MainWindow(QMainWindow):
         form.addRow(
             "Vertical edge offset (mm)", self.file_alignment_vertical_offset_input
         )
-        form.addRow("Edge", self.alignment_edge_combo)
-        form.addRow("Offset along edge (mm)", self.alignment_offset_along_input)
-        form.addRow("Offset from edge (mm)", self.alignment_offset_from_edge_input)
+        form.addRow("Grid size (mm)", self.alignment_grid_size_input)
+        form.addRow("Mirror direction", self.alignment_mirror_combo)
         form.addRow("Hole diameter (mm)", self.alignment_diameter_input)
 
         button_row = QHBoxLayout()
-        add_button = QPushButton("Add Alignment Hole")
-        add_button.clicked.connect(self._add_alignment_hole)
         remove_button = QPushButton("Remove Selected")
         remove_button.clicked.connect(self._remove_selected_alignment_holes)
         clear_button = QPushButton("Clear All")
         clear_button.clicked.connect(self._clear_alignment_holes)
-        button_row.addWidget(add_button)
         button_row.addWidget(remove_button)
         button_row.addWidget(clear_button)
 
         self.alignment_hole_list = QListWidget()
+        self.alignment_hole_list.setSelectionMode(
+            QListWidget.SelectionMode.ExtendedSelection
+        )
+        self.alignment_hole_list.itemChanged.connect(self._alignment_hole_item_changed)
+        self.alignment_hole_list.itemSelectionChanged.connect(
+            self._alignment_hole_selection_changed
+        )
         self.alignment_holes_hint = QLabel(
-            "Alignment holes are optional. Added holes are shown in green in the preview."
+            "Alignment holes are optional. Checked rows are shown in green "
+            "and included in NC output."
         )
         self.alignment_holes_hint.setWordWrap(True)
         self._apply_muted_text_style(self.alignment_holes_hint)
@@ -1314,6 +1334,14 @@ class MainWindow(QMainWindow):
             return False
 
         self.project = project
+        if not self.project.file_alignment_horizontal_offset_loaded:
+            self.project.file_alignment_horizontal_offset = max(
+                0.0, self.config.default_file_alignment_horizontal_offset
+            )
+        if not self.project.file_alignment_vertical_offset_loaded:
+            self.project.file_alignment_vertical_offset = max(
+                0.0, self.config.default_file_alignment_vertical_offset
+            )
         saved_step = min(
             self.project.current_step_index, self.IMPLEMENTED_STEP_COUNT - 1
         )
@@ -1600,32 +1628,57 @@ class MainWindow(QMainWindow):
         ):
             self.toolpath_viewer.load_document(None)
             self._mark_project_dirty()
+        if axis == "horizontal":
+            self.config.default_file_alignment_horizontal_offset = kwargs["horizontal"]
+        else:
+            self.config.default_file_alignment_vertical_offset = kwargs["vertical"]
+        self._save_config(self.config)
+        if axis == "horizontal":
+            self.project.file_alignment_horizontal_offset_loaded = True
+        else:
+            self.project.file_alignment_vertical_offset_loaded = True
         self._sync_ui()
 
-    def _add_alignment_hole(self) -> None:
-        offset_along = self._alignment_hole_numeric_input(
-            self.alignment_offset_along_input, fallback=0.0, minimum=-10000.0
+    def _alignment_grid_size_changed(self) -> None:
+        grid_size = self._alignment_hole_numeric_input(
+            self.alignment_grid_size_input, fallback=5.0, minimum=0.1
         )
-        offset_from_edge = self._alignment_hole_numeric_input(
-            self.alignment_offset_from_edge_input, fallback=2.0, minimum=0.0
-        )
+        if grid_size is None:
+            return
+        if self.project.set_alignment_grid_size(grid_size):
+            self._mark_project_dirty()
+        self._sync_ui()
+
+    def _add_alignment_hole_at_position(self, x_pos: float, y_pos: float) -> None:
+        if self.project.current_step_index != PcbProject.STEP_ALIGNMENT_HOLES:
+            return
+        stock_bounds = self._stock_bounds()
+        if stock_bounds is None:
+            return
         diameter = self._alignment_hole_numeric_input(
             self.alignment_diameter_input, fallback=1.0, minimum=0.01
         )
-        if offset_along is None or offset_from_edge is None or diameter is None:
+        if diameter is None:
             return
+        x_min, x_max, y_min, y_max = stock_bounds
+        mirror_direction = str(
+            self.alignment_mirror_combo.currentData() or "horizontal"
+        )
         holes = list(self.project.alignment_holes)
         holes.append(
             AlignmentHole(
-                edge=self.alignment_edge_combo.currentText(),
-                offset_along_edge=offset_along,
-                offset_from_edge=offset_from_edge,
+                position_mode="board_xy",
+                x_offset=min(max(x_pos, x_min), x_max),
+                y_offset=min(max(y_pos, y_min), y_max),
                 diameter=diameter,
+                mirror_direction=mirror_direction,
+                enabled=True,
             )
         )
         if self.project.replace_alignment_holes(holes):
             self._mark_project_dirty()
         self._sync_ui()
+        self.alignment_hole_list.setCurrentRow(len(holes) - 1)
 
     def _alignment_hole_numeric_input(
         self, widget: QLineEdit, *, fallback: float, minimum: float
@@ -1642,6 +1695,16 @@ class MainWindow(QMainWindow):
         value = max(minimum, value)
         widget.setText(f"{value:.3f}")
         return value
+
+    def _current_alignment_hole_diameter(self) -> float:
+        text = self.alignment_diameter_input.text().strip()
+        if not text:
+            return 1.0
+        try:
+            value = float(text)
+        except ValueError:
+            return 1.0
+        return max(0.01, value)
 
     def _remove_selected_alignment_holes(self) -> None:
         selected_rows = sorted(
@@ -1662,6 +1725,88 @@ class MainWindow(QMainWindow):
         if self.project.replace_alignment_holes([]):
             self._mark_project_dirty()
         self._sync_ui()
+
+    def _alignment_hole_item_changed(self, item: QListWidgetItem) -> None:
+        row = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(row, int) or not 0 <= row < len(self.project.alignment_holes):
+            return
+        holes = list(self.project.alignment_holes)
+        hole = copy.copy(holes[row])
+        hole.enabled = item.checkState() == Qt.CheckState.Checked
+        holes[row] = hole
+        if self.project.replace_alignment_holes(holes):
+            self._mark_project_dirty()
+        self._sync_ui()
+
+    def _alignment_hole_selection_changed(self) -> None:
+        selected_rows = sorted(
+            {index.row() for index in self.alignment_hole_list.selectedIndexes()}
+        )
+        if not selected_rows:
+            self.alignment_mirror_combo.setEnabled(True)
+            self._sync_alignment_preview_selection()
+            return
+        first_row = selected_rows[0]
+        if 0 <= first_row < len(self.project.alignment_holes):
+            hole = self.project.alignment_holes[first_row]
+            index = self.alignment_mirror_combo.findData(hole.mirror_direction)
+            self.alignment_mirror_combo.blockSignals(True)
+            self.alignment_mirror_combo.setCurrentIndex(0 if index < 0 else index)
+            self.alignment_mirror_combo.blockSignals(False)
+        self._sync_alignment_preview_selection()
+
+    def _selected_alignment_preview_index(self) -> int | None:
+        selected_rows = sorted(
+            {index.row() for index in self.alignment_hole_list.selectedIndexes()}
+        )
+        if not selected_rows:
+            return None
+        selected_row = selected_rows[0]
+        for preview_index, row in enumerate(self._alignment_preview_row_map):
+            if row == selected_row:
+                return preview_index
+        return None
+
+    def _sync_alignment_preview_selection(self) -> None:
+        if self.project.current_step_index != PcbProject.STEP_ALIGNMENT_HOLES:
+            return
+        stock_bounds = self._stock_bounds()
+        self.preview.set_alignment_hole_selection(
+            stock_bounds,
+            selection_enabled=stock_bounds is not None,
+            selected_hole_index=self._selected_alignment_preview_index(),
+            grid_spacing=self.project.alignment_grid_size,
+            hover_diameter=self._current_alignment_hole_diameter(),
+        )
+
+    def _selected_alignment_hole_mirror_changed(self, index: int) -> None:
+        direction = str(self.alignment_mirror_combo.itemData(index) or "horizontal")
+        selected_rows = sorted(
+            {item.row() for item in self.alignment_hole_list.selectedIndexes()}
+        )
+        if not selected_rows:
+            return
+        holes = list(self.project.alignment_holes)
+        changed = False
+        for row in selected_rows:
+            if not 0 <= row < len(holes):
+                continue
+            hole = copy.copy(holes[row])
+            if hole.mirror_direction == direction:
+                continue
+            hole.mirror_direction = direction
+            holes[row] = hole
+            changed = True
+        if changed and self.project.replace_alignment_holes(holes):
+            self._mark_project_dirty()
+        self._sync_ui()
+
+    def _select_alignment_hole(self, preview_index: int) -> None:
+        if not 0 <= preview_index < len(self._alignment_preview_row_map):
+            return
+        row = self._alignment_preview_row_map[preview_index]
+        if 0 <= row < self.alignment_hole_list.count():
+            self.alignment_hole_list.setCurrentRow(row)
 
     def _generate_front_isolation(self) -> None:
         gerber = self._assigned_gerber("front_copper")
@@ -2027,15 +2172,22 @@ class MainWindow(QMainWindow):
                 else None
             ),
             selection_enabled=current
-            in {
-                PcbProject.STEP_STOCK_DEFINITION,
-                PcbProject.STEP_ALIGNMENT_HOLES,
-            },
+            in {PcbProject.STEP_STOCK_DEFINITION, PcbProject.STEP_ALIGNMENT_HOLES},
             marker_label=(
-                "Alignment"
-                if current == PcbProject.STEP_ALIGNMENT_HOLES
-                else "(0, 0)"
+                "Alignment" if current == PcbProject.STEP_ALIGNMENT_HOLES else "(0, 0)"
             ),
+        )
+        self.preview.set_alignment_hole_selection(
+            stock_bounds,
+            selection_enabled=current == PcbProject.STEP_ALIGNMENT_HOLES
+            and stock_bounds is not None,
+            selected_hole_index=(
+                self._selected_alignment_preview_index()
+                if current == PcbProject.STEP_ALIGNMENT_HOLES
+                else None
+            ),
+            grid_spacing=self.project.alignment_grid_size,
+            hover_diameter=self._current_alignment_hole_diameter(),
         )
         self.toolpath_viewer.set_stock_overlay(
             stock_bounds if show_stock else None,
@@ -2985,6 +3137,11 @@ class MainWindow(QMainWindow):
             f"{self.project.file_alignment_vertical_offset:.3f}"
         )
         self.file_alignment_vertical_offset_input.blockSignals(False)
+        self.alignment_grid_size_input.blockSignals(True)
+        self.alignment_grid_size_input.setText(
+            f"{self.project.alignment_grid_size:.3f}"
+        )
+        self.alignment_grid_size_input.blockSignals(False)
         selected_point = self._file_alignment_point()
         alignment_label = self.FILE_ALIGNMENT_LABELS.get(
             self.project.file_alignment,
@@ -2999,16 +3156,43 @@ class MainWindow(QMainWindow):
                 "a stock hotspot"
             )
         )
+        selected_rows = {
+            index.row() for index in self.alignment_hole_list.selectedIndexes()
+        }
+        current_row = self.alignment_hole_list.currentRow()
+        self.alignment_hole_list.blockSignals(True)
         self.alignment_hole_list.clear()
-        for hole, position in zip(
-            self.project.alignment_holes, self._alignment_hole_positions()
-        ):
+        for row, hole in enumerate(self.project.alignment_holes):
+            base_position, mirrored_position = self._alignment_hole_pair_positions(hole)
+            if base_position is None or mirrored_position is None:
+                position_label = "position unavailable"
+            else:
+                position_label = (
+                    f"at ({base_position[0]:.3f}, {base_position[1]:.3f}) mm -> "
+                    f"({mirrored_position[0]:.3f}, {mirrored_position[1]:.3f}) mm"
+                )
+            mirror_label = (
+                "horizontal" if hole.mirror_direction == "horizontal" else "vertical"
+            )
             item = QListWidgetItem(
-                f"{hole.edge} | along {hole.offset_along_edge:.3f} mm | "
-                f"out {hole.offset_from_edge:.3f} mm | dia {hole.diameter:.3f} mm | "
-                f"at ({position[0]:.3f} mm, {position[1]:.3f} mm)"
+                f"{position_label} | {mirror_label} mirror | dia {hole.diameter:.3f} mm"
+            )
+            item.setData(Qt.ItemDataRole.UserRole, row)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                Qt.CheckState.Checked if hole.enabled else Qt.CheckState.Unchecked
             )
             self.alignment_hole_list.addItem(item)
+            if row in selected_rows:
+                item.setSelected(True)
+        if current_row in selected_rows:
+            self.alignment_hole_list.setCurrentRow(current_row)
+        elif selected_rows:
+            self.alignment_hole_list.setCurrentRow(selected_rows[0])
+        else:
+            self.alignment_hole_list.setCurrentRow(-1)
+        self.alignment_hole_list.blockSignals(False)
+        self._alignment_hole_selection_changed()
 
     def _sync_stock_definition_page(self) -> None:
         for widget, value in (
@@ -3036,14 +3220,56 @@ class MainWindow(QMainWindow):
         )
 
     def _alignment_hole_positions(self) -> list[tuple[float, float, float]]:
+        self._alignment_preview_row_map = []
+        reference_bounds = self._stock_bounds()
+        if reference_bounds is None:
+            return []
+        positions: list[tuple[float, float, float]] = []
+        for row, hole in enumerate(self.project.alignment_holes):
+            if not hole.enabled:
+                continue
+            base_position = self._alignment_hole_position_for_bounds(
+                hole, reference_bounds
+            )
+            mirrored_position = self._mirrored_alignment_hole_position(
+                base_position, hole.mirror_direction, reference_bounds
+            )
+            positions.append(base_position)
+            self._alignment_preview_row_map.append(row)
+            if mirrored_position[:2] != base_position[:2]:
+                positions.append(mirrored_position)
+                self._alignment_preview_row_map.append(row)
+        return positions
+
+    def _alignment_hole_pair_positions(
+        self, hole: AlignmentHole
+    ) -> tuple[tuple[float, float, float] | None, tuple[float, float, float] | None]:
+        reference_bounds = self._stock_bounds()
+        if reference_bounds is None:
+            return None, None
+        base_position = self._alignment_hole_position_for_bounds(hole, reference_bounds)
+        mirrored_position = self._mirrored_alignment_hole_position(
+            base_position, hole.mirror_direction, reference_bounds
+        )
+        return base_position, mirrored_position
+
+    def _visible_alignment_hole_positions(self) -> list[tuple[float, float, float]]:
         reference_bounds = self._stock_bounds()
         if reference_bounds is None:
             return []
         positions: list[tuple[float, float, float]] = []
         for hole in self.project.alignment_holes:
-            positions.append(
-                self._alignment_hole_position_for_bounds(hole, reference_bounds)
+            if not hole.enabled:
+                continue
+            base_position = self._alignment_hole_position_for_bounds(
+                hole, reference_bounds
             )
+            mirrored_position = self._mirrored_alignment_hole_position(
+                base_position, hole.mirror_direction, reference_bounds
+            )
+            positions.append(base_position)
+            if mirrored_position[:2] != base_position[:2]:
+                positions.append(mirrored_position)
         return positions
 
     def _reference_board_bounds(self) -> tuple[float, float, float, float] | None:
@@ -3150,8 +3376,7 @@ class MainWindow(QMainWindow):
             max(0.0, (x_max - x_min) * 0.5),
         )
         vertical_offset = min(
-            self.project.file_alignment_vertical_offset,
-            max(0.0, (y_max - y_min) * 0.5),
+            self.project.file_alignment_vertical_offset, max(0.0, (y_max - y_min) * 0.5)
         )
         if alignment.endswith("_left"):
             x_pos = x_min + horizontal_offset
@@ -3245,6 +3470,12 @@ class MainWindow(QMainWindow):
         self, hole: AlignmentHole, bounds: tuple[float, float, float, float]
     ) -> tuple[float, float, float]:
         x_min, x_max, y_min, y_max = bounds
+        if hole.position_mode == "board_xy":
+            return (
+                min(max(hole.x_offset, x_min), x_max),
+                min(max(hole.y_offset, y_min), y_max),
+                hole.diameter,
+            )
         if hole.edge == "left":
             return (
                 x_min - hole.offset_from_edge,
@@ -3269,6 +3500,18 @@ class MainWindow(QMainWindow):
             hole.diameter,
         )
 
+    def _mirrored_alignment_hole_position(
+        self,
+        hole_position: tuple[float, float, float],
+        mirror_direction: str,
+        bounds: tuple[float, float, float, float],
+    ) -> tuple[float, float, float]:
+        x_min, x_max, y_min, y_max = bounds
+        x_pos, y_pos, diameter = hole_position
+        if mirror_direction == "vertical":
+            return x_pos, y_min + y_max - y_pos, diameter
+        return x_min + x_max - x_pos, y_pos, diameter
+
     def _selected_tool(self, role: str):
         if self.tool_library is None:
             return None
@@ -3286,12 +3529,7 @@ class MainWindow(QMainWindow):
             else self._origin_hotspot_points()
         )
         selected_origin = next(
-            (
-                key
-                for key, point in hotspot_points.items()
-                if point == next_point
-            ),
-            None,
+            (key for key, point in hotspot_points.items() if point == next_point), None
         )
         if self.project.current_step_index == PcbProject.STEP_ALIGNMENT_HOLES:
             if (
@@ -3421,7 +3659,7 @@ class MainWindow(QMainWindow):
         return operation_key in self.project.generated_outputs
 
     def _drilling_optional_or_generated(self) -> bool:
-        if not self._active_drills() and not self.project.alignment_holes:
+        if not self._active_drills() and not self._alignment_hole_positions():
             return True
         return "drilling" in self.project.generated_outputs
 
@@ -3450,18 +3688,14 @@ class MainWindow(QMainWindow):
     ) -> list[ImportedGerberFile]:
         x_offset, y_offset = self._file_alignment_offset()
         return [
-            self._translate_gerber(gerber, x_offset, y_offset)
-            for gerber in gerbers
+            self._translate_gerber(gerber, x_offset, y_offset) for gerber in gerbers
         ]
 
     def _aligned_drills(
         self, drills: list[ImportedDrillFile]
     ) -> list[ImportedDrillFile]:
         x_offset, y_offset = self._file_alignment_offset()
-        return [
-            self._translate_drill(drill, x_offset, y_offset)
-            for drill in drills
-        ]
+        return [self._translate_drill(drill, x_offset, y_offset) for drill in drills]
 
     def _translate_gerber(
         self, gerber: ImportedGerberFile, x_offset: float, y_offset: float
@@ -3485,8 +3719,7 @@ class MainWindow(QMainWindow):
             path=gerber.path,
             display_name=gerber.display_name,
             traces=[
-                (point(start), point(end), width)
-                for start, end, width in gerber.traces
+                (point(start), point(end), width) for start, end, width in gerber.traces
             ],
             segments=[(point(start), point(end)) for start, end in gerber.segments],
             arc_centers=[point(center) for center in gerber.arc_centers],

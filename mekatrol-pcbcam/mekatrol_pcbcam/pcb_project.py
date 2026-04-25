@@ -4,13 +4,13 @@ from pathlib import Path
 
 import yaml
 
-from .edge_cut_profile import EdgeCutPath
 from .alignment_hole import AlignmentHole
+from .edge_cut_profile import EdgeCutPath
 from .nc_origin import DEFAULT_NC_ORIGIN, normalize_nc_origin
 
 
 class PcbProject:
-    VERSION = 9
+    VERSION = 10
     STEP_PROJECT = 0
     STEP_STOCK_DEFINITION = 1
     STEP_GERBER_IMPORT = 2
@@ -75,6 +75,9 @@ class PcbProject:
         self.file_alignment: str = DEFAULT_NC_ORIGIN
         self.file_alignment_horizontal_offset: float = 0.0
         self.file_alignment_vertical_offset: float = 0.0
+        self.file_alignment_horizontal_offset_loaded: bool = False
+        self.file_alignment_vertical_offset_loaded: bool = False
+        self.alignment_grid_size: float = 5.0
         self.alignment_holes: list[AlignmentHole] = []
         self.edge_cut_profiles: list[EdgeCutPath] = []
         self.generated_outputs: dict[str, Path] = {}
@@ -85,6 +88,17 @@ class PcbProject:
 
     def reset(self) -> None:
         self.__init__()
+
+    def _loaded_bool(self, value: object, fallback: bool = True) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "yes", "1", "on"}:
+                return True
+            if normalized in {"false", "no", "0", "off"}:
+                return False
+        return fallback
 
     def replace_gerber_paths(self, paths: list[Path]) -> bool:
         normalized = [path.resolve() for path in paths]
@@ -257,6 +271,14 @@ class PcbProject:
             self._invalidate_from(self.STEP_ALIGNMENT_HOLES)
         return changed
 
+    def set_alignment_grid_size(self, grid_size: float) -> bool:
+        normalized = max(0.1, float(grid_size))
+        changed = self.alignment_grid_size != normalized
+        self.alignment_grid_size = normalized
+        if changed:
+            self._invalidate_from(self.STEP_ALIGNMENT_HOLES)
+        return changed
+
     def replace_alignment_holes(self, holes: list[AlignmentHole]) -> bool:
         changed = holes != self.alignment_holes
         self.alignment_holes = holes
@@ -280,8 +302,7 @@ class PcbProject:
     def set_current_step(self, index: int) -> None:
         self.current_step_index = max(0, min(index, self.TOTAL_STEPS - 1))
         self.highest_commenced_step = max(
-            self.highest_commenced_step,
-            self.current_step_index,
+            self.highest_commenced_step, self.current_step_index
         )
 
     def can_navigate_to(self, index: int, implemented_step_count: int) -> bool:
@@ -297,10 +318,13 @@ class PcbProject:
         if self.dirty_from_step is not None and index > self.dirty_from_step:
             self.dirty_from_step = None
 
-    def last_completed_step_index(self, implemented_step_count: int | None = None) -> int:
-        upper_bound = self.TOTAL_STEPS if implemented_step_count is None else min(
-            implemented_step_count,
-            self.TOTAL_STEPS,
+    def last_completed_step_index(
+        self, implemented_step_count: int | None = None
+    ) -> int:
+        upper_bound = (
+            self.TOTAL_STEPS
+            if implemented_step_count is None
+            else min(implemented_step_count, self.TOTAL_STEPS)
         )
         valid_completed_steps = [
             step for step in self.completed_steps if 0 <= step < upper_bound
@@ -316,20 +340,28 @@ class PcbProject:
         alignment_holes_data = []
         for hole in self.alignment_holes:
             if hole.position_mode == "board_xy":
-                alignment_holes_data.append({
-                    "position_mode": "board_xy",
-                    "x_offset": hole.x_offset,
-                    "y_offset": hole.y_offset,
-                    "diameter": hole.diameter,
-                })
+                alignment_holes_data.append(
+                    {
+                        "position_mode": "board_xy",
+                        "x_offset": hole.x_offset,
+                        "y_offset": hole.y_offset,
+                        "diameter": hole.diameter,
+                        "mirror_direction": hole.mirror_direction,
+                        "enabled": hole.enabled,
+                    }
+                )
                 continue
-            alignment_holes_data.append({
-                "position_mode": "legacy_edge",
-                "edge": hole.edge,
-                "offset_along_edge": hole.offset_along_edge,
-                "offset_from_edge": hole.offset_from_edge,
-                "diameter": hole.diameter,
-            })
+            alignment_holes_data.append(
+                {
+                    "position_mode": "legacy_edge",
+                    "edge": hole.edge,
+                    "offset_along_edge": hole.offset_along_edge,
+                    "offset_from_edge": hole.offset_from_edge,
+                    "diameter": hole.diameter,
+                    "mirror_direction": hole.mirror_direction,
+                    "enabled": hole.enabled,
+                }
+            )
         payload = {
             "version": self.VERSION,
             "gerber_files": [
@@ -361,8 +393,7 @@ class PcbProject:
                     None
                     if self.tool_library_path is None
                     else self._to_relative_path(
-                        self.tool_library_path,
-                        self.project_path.parent,
+                        self.tool_library_path, self.project_path.parent
                     )
                 ),
                 "selected_tools": dict(self.selected_tools),
@@ -383,6 +414,7 @@ class PcbProject:
                 "file_alignment": self.file_alignment,
                 "horizontal_offset": self.file_alignment_horizontal_offset,
                 "vertical_offset": self.file_alignment_vertical_offset,
+                "grid_size": self.alignment_grid_size,
             },
             "alignment_holes": alignment_holes_data,
             "edge_cuts": {
@@ -397,7 +429,7 @@ class PcbProject:
                         "visible": profile.visible,
                     }
                     for profile in self.edge_cut_profiles
-                ],
+                ]
             },
             "generated_outputs": {
                 key: self._to_relative_path(value, self.project_path.parent)
@@ -415,8 +447,7 @@ class PcbProject:
             },
         }
         self.project_path.write_text(
-            yaml.safe_dump(payload, sort_keys=False),
-            encoding="utf-8",
+            yaml.safe_dump(payload, sort_keys=False), encoding="utf-8"
         )
 
     @classmethod
@@ -471,8 +502,7 @@ class PcbProject:
         raw_tool_library_path = tool_library_data.get("path")
         if isinstance(raw_tool_library_path, str) and raw_tool_library_path.strip():
             project.tool_library_path = project._from_relative_path(
-                raw_tool_library_path,
-                project.project_path.parent,
+                raw_tool_library_path, project.project_path.parent
             )
         selected_tools = tool_library_data.get("selected_tools", {})
         if isinstance(selected_tools, dict):
@@ -486,8 +516,7 @@ class PcbProject:
                 raw_path = layer_data.get(role)
                 if isinstance(raw_path, str) and raw_path.strip():
                     project.layer_assignments[role] = project._from_relative_path(
-                        raw_path,
-                        project.project_path.parent,
+                        raw_path, project.project_path.parent
                     )
         mirror_data = loaded.get("mirror", {})
         if isinstance(mirror_data, dict):
@@ -502,6 +531,12 @@ class PcbProject:
             raw_file_alignment = alignment_settings.get("file_alignment", "")
             if isinstance(raw_file_alignment, str) and raw_file_alignment.strip():
                 project.file_alignment = normalize_nc_origin(raw_file_alignment)
+            project.file_alignment_horizontal_offset_loaded = (
+                "horizontal_offset" in alignment_settings
+            )
+            project.file_alignment_vertical_offset_loaded = (
+                "vertical_offset" in alignment_settings
+            )
             try:
                 project.file_alignment_horizontal_offset = max(
                     0.0, float(alignment_settings.get("horizontal_offset", 0.0))
@@ -514,6 +549,12 @@ class PcbProject:
                 )
             except (TypeError, ValueError):
                 project.file_alignment_vertical_offset = 0.0
+            try:
+                project.alignment_grid_size = max(
+                    0.1, float(alignment_settings.get("grid_size", 5.0))
+                )
+            except (TypeError, ValueError):
+                project.alignment_grid_size = 5.0
         alignment_data = loaded.get("alignment_holes", [])
         if isinstance(alignment_data, list):
             for item in alignment_data:
@@ -530,6 +571,11 @@ class PcbProject:
                                 x_offset=float(item.get("x_offset", 0.0)),
                                 y_offset=float(item.get("y_offset", 0.0)),
                                 diameter=float(item.get("diameter", 0.0)),
+                                mirror_direction=str(
+                                    item.get("mirror_direction", "horizontal")
+                                ).strip()
+                                or "horizontal",
+                                enabled=project._loaded_bool(item.get("enabled", True)),
                             )
                         )
                         continue
@@ -540,6 +586,11 @@ class PcbProject:
                             edge=str(item.get("edge", "")).strip(),
                             offset_along_edge=float(item.get("offset_along_edge", 0.0)),
                             offset_from_edge=float(item.get("offset_from_edge", 0.0)),
+                            mirror_direction=str(
+                                item.get("mirror_direction", "horizontal")
+                            ).strip()
+                            or "horizontal",
+                            enabled=project._loaded_bool(item.get("enabled", True)),
                         )
                     )
                 except (TypeError, ValueError):
@@ -594,19 +645,20 @@ class PcbProject:
         generated_output_data = loaded.get("generated_outputs", {})
         if isinstance(generated_output_data, dict):
             for key, raw_path in generated_output_data.items():
-                if isinstance(key, str) and isinstance(raw_path, str) and raw_path.strip():
+                if (
+                    isinstance(key, str)
+                    and isinstance(raw_path, str)
+                    and raw_path.strip()
+                ):
                     project.generated_outputs[key] = project._from_relative_path(
-                        raw_path,
-                        project.project_path.parent,
+                        raw_path, project.project_path.parent
                     )
         wizard_data = loaded.get("wizard", {})
         project.current_step_index = project._step_index_for_key(
-            wizard_data.get("current_step"),
-            0,
+            wizard_data.get("current_step"), 0
         )
         project.highest_commenced_step = project._step_index_for_key(
-            wizard_data.get("highest_commenced_step"),
-            project.current_step_index,
+            wizard_data.get("highest_commenced_step"), project.current_step_index
         )
         raw_completed_steps = wizard_data.get("completed_steps", [])
         if isinstance(raw_completed_steps, list):
@@ -619,7 +671,9 @@ class PcbProject:
             project.completed_steps = set()
         project.completed_steps.add(0)
         project.selected_gerber_paths = {
-            path for path in project.selected_gerber_paths if path in project.gerber_paths
+            path
+            for path in project.selected_gerber_paths
+            if path in project.gerber_paths
         }
         project.selected_drill_paths = {
             path for path in project.selected_drill_paths if path in project.drill_paths
@@ -632,9 +686,7 @@ class PcbProject:
         return project
 
     def _invalidate_from(self, index: int) -> None:
-        self.completed_steps = {
-            step for step in self.completed_steps if step <= index
-        }
+        self.completed_steps = {step for step in self.completed_steps if step <= index}
         if index < self.highest_commenced_step:
             self.dirty_from_step = (
                 index

@@ -57,6 +57,7 @@ def _append_config_warning(
 ) -> None:
     warnings.append(f"{field_name}: {reason}; using {default!r}.")
 
+
 def _asset_path(*parts: str) -> Path:
     return Path(__file__).resolve().parents[1] / "assets" / Path(*parts)
 
@@ -198,6 +199,58 @@ def _parse_optional_int(
         return None
 
 
+def _parse_float(
+    value: object,
+    default: float,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+    field_name: str | None = None,
+    warnings: list[str] | None = None,
+) -> float:
+    if isinstance(value, bool):
+        if field_name is not None and warnings is not None:
+            _append_config_warning(
+                warnings,
+                field_name,
+                f"expected a number but got boolean {_describe_value(value)}",
+                default,
+            )
+        return default
+
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        if field_name is not None and warnings is not None and value is not None:
+            _append_config_warning(
+                warnings,
+                field_name,
+                f"could not parse number from {_describe_value(value)}",
+                default,
+            )
+        return default
+
+    if minimum is not None and parsed < minimum:
+        if field_name is not None and warnings is not None:
+            _append_config_warning(
+                warnings,
+                field_name,
+                f"value {parsed} is below minimum {minimum}",
+                default,
+            )
+        return default
+    if maximum is not None and parsed > maximum:
+        if field_name is not None and warnings is not None:
+            _append_config_warning(
+                warnings,
+                field_name,
+                f"value {parsed} is above maximum {maximum}",
+                default,
+            )
+        return default
+    return parsed
+
+
 def _parse_string(
     value: object,
     default: str = "",
@@ -243,10 +296,7 @@ def _parse_bool(
 
 
 def _parse_string_list(
-    value: object,
-    *,
-    field_name: str | None = None,
-    warnings: list[str] | None = None,
+    value: object, *, field_name: str | None = None, warnings: list[str] | None = None
 ) -> list[str]:
     if value is None:
         return []
@@ -275,10 +325,7 @@ def _parse_string_list(
 
 def _parse_window_state(value: object, *, warnings: list[str] | None = None) -> str:
     parsed = _parse_string(
-        value,
-        "normal",
-        field_name="ui_save_state.window_state",
-        warnings=warnings,
+        value, "normal", field_name="ui_save_state.window_state", warnings=warnings
     ).lower()
     if parsed in VALID_WINDOW_STATES:
         return parsed
@@ -300,10 +347,7 @@ def _parse_log_level(
     warnings: list[str] | None = None,
 ) -> str:
     parsed = _parse_string(
-        value,
-        default,
-        field_name=field_name,
-        warnings=warnings,
+        value, default, field_name=field_name, warnings=warnings
     ).upper()
     if parsed in VALID_LOG_LEVELS:
         return parsed
@@ -408,7 +452,9 @@ def _load_config() -> tuple[AppConfig, list[str]]:
 
     app_data = data.get("app", {}) if isinstance(data, dict) else {}
     logging_data = data.get("logging", {}) if isinstance(data, dict) else {}
-    file_locations_data = data.get("file_locations", {}) if isinstance(data, dict) else {}
+    file_locations_data = (
+        data.get("file_locations", {}) if isinstance(data, dict) else {}
+    )
     ui_data = data.get("ui_save_state", {}) if isinstance(data, dict) else {}
 
     if not isinstance(app_data, dict):
@@ -427,9 +473,7 @@ def _load_config() -> tuple[AppConfig, list[str]]:
         ui_data = {}
 
     logging_level = _parse_log_level(
-        logging_data.get("level"),
-        field_name="logging.level",
-        warnings=warnings,
+        logging_data.get("level"), field_name="logging.level", warnings=warnings
     )
 
     config = AppConfig(
@@ -453,6 +497,20 @@ def _load_config() -> tuple[AppConfig, list[str]]:
                 field_name="app.default_nc_origin",
                 warnings=warnings,
             )
+        ),
+        default_file_alignment_horizontal_offset=_parse_float(
+            app_data.get("default_file_alignment_horizontal_offset"),
+            5.0,
+            minimum=0.0,
+            field_name="app.default_file_alignment_horizontal_offset",
+            warnings=warnings,
+        ),
+        default_file_alignment_vertical_offset=_parse_float(
+            app_data.get("default_file_alignment_vertical_offset"),
+            5.0,
+            minimum=0.0,
+            field_name="app.default_file_alignment_vertical_offset",
+            warnings=warnings,
         ),
         logging=LoggingConfig(
             level=logging_level,
@@ -564,6 +622,10 @@ def _save_config(config: AppConfig) -> None:
             f"  theme_file: {_yaml_scalar(config.theme_file)}",
             "  # Default NC work origin used by the stock definition step.",
             f"  default_nc_origin: {_yaml_scalar(config.default_nc_origin)}",
+            "  # Default horizontal edge offset for imported-file alignment, in millimeters.",
+            f"  default_file_alignment_horizontal_offset: {config.default_file_alignment_horizontal_offset}",
+            "  # Default vertical edge offset for imported-file alignment, in millimeters.",
+            f"  default_file_alignment_vertical_offset: {config.default_file_alignment_vertical_offset}",
             "",
             "logging:",
             "  # Default log level for the mekatrol_pcbcam application loggers.",
@@ -682,8 +744,7 @@ def _configure_logging(config: AppConfig) -> Path:
     configured_path = _resolve_log_path(config.logging.path)
     fallback_path = _resolve_log_path(_default_log_path())
     formatter = logging.Formatter(
-        "%(asctime)s %(levelname)s [%(name)s] %(message)s",
-        "%Y-%m-%d %H:%M:%S",
+        "%(asctime)s %(levelname)s [%(name)s] %(message)s", "%Y-%m-%d %H:%M:%S"
     )
 
     handler: logging.Handler
@@ -822,7 +883,9 @@ def _apply_saved_window_placement(
         x = config.ui_save_state.window_x
         y = config.ui_save_state.window_y
 
-        window.resize(max(MINIMUM_WINDOW_WIDTH, width), max(MINIMUM_WINDOW_HEIGHT, height))
+        window.resize(
+            max(MINIMUM_WINDOW_WIDTH, width), max(MINIMUM_WINDOW_HEIGHT, height)
+        )
         if x is not None and y is not None:
             window.move(x, y)
             _clamp_window_to_screen(window, startup_screen)
@@ -917,9 +980,7 @@ def main() -> int:
         splash.wait_for_click()
 
     window = MainWindow(
-        config,
-        themes_directory=_themes_directory(),
-        save_config=_save_config,
+        config, themes_directory=_themes_directory(), save_config=_save_config
     )
     window.setWindowIcon(app.windowIcon())
     _apply_saved_window_placement(window, startup_screen, config)
@@ -938,7 +999,9 @@ def main() -> int:
                 logger.info("Loading most recent project on startup: %s", candidate)
                 window.load_project_path(candidate, auto_resume=True)
             else:
-                logger.warning("Most recent startup project does not exist: %s", candidate)
+                logger.warning(
+                    "Most recent startup project does not exist: %s", candidate
+                )
     splash.mark_startup_complete()
     if not _debug_hold_splash_enabled():
         # Normal startup keeps the splash visible for at least the configured

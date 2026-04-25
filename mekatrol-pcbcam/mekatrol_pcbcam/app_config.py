@@ -13,6 +13,8 @@ class AppConfig:
     splash_minimum_visible_ms: int = DEFAULT_SPLASH_MINIMUM_VISIBLE_MS
     theme_file: str = "dark.yaml"
     default_nc_origin: str = DEFAULT_NC_ORIGIN
+    default_file_alignment_horizontal_offset: float = 5.0
+    default_file_alignment_vertical_offset: float = 5.0
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     file_locations: FileLocations = field(default_factory=FileLocations)
     ui_save_state: UiSaveState = field(default_factory=UiSaveState)
