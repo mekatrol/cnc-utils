@@ -36,18 +36,6 @@ class PcbProject:
         "edge_cuts",
         "nc_preview",
     ]
-    LEGACY_STEP_KEY_MAP = {
-        "stock": STEP_STOCK_DEFINITION,
-        "layer_assignment": STEP_GERBER_IMPORT,
-        "mirror_setup": STEP_GERBER_IMPORT,
-        "alignment_holes": STEP_ALIGNMENT_HOLES,
-        "origin": STEP_STOCK_DEFINITION,
-        "front_isolation": STEP_FRONT_ISOLATION,
-        "back_isolation": STEP_BACK_ISOLATION,
-        "drilling": STEP_DRILLING,
-        "edge_cuts": STEP_EDGE_CUTS,
-        "nc_preview": STEP_NC_PREVIEW,
-    }
 
     def __init__(self) -> None:
         self.project_path: Path | None = None
@@ -75,8 +63,6 @@ class PcbProject:
         self.file_alignment: str = DEFAULT_NC_ORIGIN
         self.file_alignment_horizontal_offset: float = 0.0
         self.file_alignment_vertical_offset: float = 0.0
-        self.file_alignment_horizontal_offset_loaded: bool = False
-        self.file_alignment_vertical_offset_loaded: bool = False
         self.alignment_grid_size: float = 5.0
         self.alignment_holes: list[AlignmentHole] = []
         self.edge_cut_profiles: list[EdgeCutPath] = []
@@ -88,17 +74,6 @@ class PcbProject:
 
     def reset(self) -> None:
         self.__init__()
-
-    def _loaded_bool(self, value: object, fallback: bool = True) -> bool:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            normalized = value.strip().lower()
-            if normalized in {"true", "yes", "1", "on"}:
-                return True
-            if normalized in {"false", "no", "0", "off"}:
-                return False
-        return fallback
 
     def replace_gerber_paths(self, paths: list[Path]) -> bool:
         normalized = [path.resolve() for path in paths]
@@ -339,24 +314,10 @@ class PcbProject:
         self.project_path.parent.mkdir(parents=True, exist_ok=True)
         alignment_holes_data = []
         for hole in self.alignment_holes:
-            if hole.position_mode == "board_xy":
-                alignment_holes_data.append(
-                    {
-                        "position_mode": "board_xy",
-                        "x_offset": hole.x_offset,
-                        "y_offset": hole.y_offset,
-                        "diameter": hole.diameter,
-                        "mirror_direction": hole.mirror_direction,
-                        "enabled": hole.enabled,
-                    }
-                )
-                continue
             alignment_holes_data.append(
                 {
-                    "position_mode": "legacy_edge",
-                    "edge": hole.edge,
-                    "offset_along_edge": hole.offset_along_edge,
-                    "offset_from_edge": hole.offset_from_edge,
+                    "x_offset": hole.x_offset,
+                    "y_offset": hole.y_offset,
                     "diameter": hole.diameter,
                     "mirror_direction": hole.mirror_direction,
                     "enabled": hole.enabled,
@@ -531,27 +492,21 @@ class PcbProject:
             raw_file_alignment = alignment_settings.get("file_alignment", "")
             if isinstance(raw_file_alignment, str) and raw_file_alignment.strip():
                 project.file_alignment = normalize_nc_origin(raw_file_alignment)
-            project.file_alignment_horizontal_offset_loaded = (
-                "horizontal_offset" in alignment_settings
-            )
-            project.file_alignment_vertical_offset_loaded = (
-                "vertical_offset" in alignment_settings
-            )
             try:
                 project.file_alignment_horizontal_offset = max(
-                    0.0, float(alignment_settings.get("horizontal_offset", 0.0))
+                    0.0, float(alignment_settings["horizontal_offset"])
                 )
             except (TypeError, ValueError):
                 project.file_alignment_horizontal_offset = 0.0
             try:
                 project.file_alignment_vertical_offset = max(
-                    0.0, float(alignment_settings.get("vertical_offset", 0.0))
+                    0.0, float(alignment_settings["vertical_offset"])
                 )
             except (TypeError, ValueError):
                 project.file_alignment_vertical_offset = 0.0
             try:
                 project.alignment_grid_size = max(
-                    0.1, float(alignment_settings.get("grid_size", 5.0))
+                    0.1, float(alignment_settings["grid_size"])
                 )
             except (TypeError, ValueError):
                 project.alignment_grid_size = 5.0
@@ -561,39 +516,16 @@ class PcbProject:
                 if not isinstance(item, dict):
                     continue
                 try:
-                    mode = str(item.get("position_mode", "")).strip()
-                    if mode == "board_xy" or (
-                        "x_offset" in item and "y_offset" in item
-                    ):
-                        project.alignment_holes.append(
-                            AlignmentHole(
-                                position_mode="board_xy",
-                                x_offset=float(item.get("x_offset", 0.0)),
-                                y_offset=float(item.get("y_offset", 0.0)),
-                                diameter=float(item.get("diameter", 0.0)),
-                                mirror_direction=str(
-                                    item.get("mirror_direction", "horizontal")
-                                ).strip()
-                                or "horizontal",
-                                enabled=project._loaded_bool(item.get("enabled", True)),
-                            )
-                        )
-                        continue
                     project.alignment_holes.append(
                         AlignmentHole(
-                            position_mode="legacy_edge",
-                            diameter=float(item.get("diameter", 0.0)),
-                            edge=str(item.get("edge", "")).strip(),
-                            offset_along_edge=float(item.get("offset_along_edge", 0.0)),
-                            offset_from_edge=float(item.get("offset_from_edge", 0.0)),
-                            mirror_direction=str(
-                                item.get("mirror_direction", "horizontal")
-                            ).strip()
-                            or "horizontal",
-                            enabled=project._loaded_bool(item.get("enabled", True)),
+                            x_offset=float(item["x_offset"]),
+                            y_offset=float(item["y_offset"]),
+                            diameter=float(item["diameter"]),
+                            mirror_direction=str(item["mirror_direction"]).strip(),
+                            enabled=bool(item["enabled"]),
                         )
                     )
-                except (TypeError, ValueError):
+                except (KeyError, TypeError, ValueError):
                     continue
         edge_cut_data = loaded.get("edge_cuts", {})
         if isinstance(edge_cut_data, dict):
@@ -623,25 +555,6 @@ class PcbProject:
                                 visible=bool(raw_profile.get("visible", True)),
                             )
                         )
-            else:
-                polygon_modes = edge_cut_data.get("polygon_modes", {})
-                if isinstance(polygon_modes, dict):
-                    for key, value in polygon_modes.items():
-                        if isinstance(key, str) and isinstance(value, str):
-                            normalized_key = key.strip()
-                            normalized_value = value.strip()
-                            if normalized_key and normalized_value:
-                                project.edge_cut_profiles.append(
-                                    EdgeCutPath(
-                                        polygon_keys=[normalized_key],
-                                        mode=normalized_value,
-                                        tool_id="",
-                                        cut_depth=1.8,
-                                        step_down=0.4,
-                                        generated=False,
-                                        visible=True,
-                                    )
-                                )
         generated_output_data = loaded.get("generated_outputs", {})
         if isinstance(generated_output_data, dict):
             for key, raw_path in generated_output_data.items():
@@ -734,9 +647,6 @@ class PcbProject:
     def _step_index_for_key(self, key: object, default: int = 0) -> int:
         if not isinstance(key, str):
             return default
-        legacy_index = self.LEGACY_STEP_KEY_MAP.get(key.strip())
-        if legacy_index is not None:
-            return legacy_index
         try:
             return self.STEP_KEYS.index(key.strip())
         except ValueError:

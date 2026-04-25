@@ -208,8 +208,6 @@ class MainWindow(QMainWindow):
         self.project.file_alignment_vertical_offset = max(
             0.0, self.config.default_file_alignment_vertical_offset
         )
-        self.project.file_alignment_horizontal_offset_loaded = False
-        self.project.file_alignment_vertical_offset_loaded = False
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -1334,14 +1332,6 @@ class MainWindow(QMainWindow):
             return False
 
         self.project = project
-        if not self.project.file_alignment_horizontal_offset_loaded:
-            self.project.file_alignment_horizontal_offset = max(
-                0.0, self.config.default_file_alignment_horizontal_offset
-            )
-        if not self.project.file_alignment_vertical_offset_loaded:
-            self.project.file_alignment_vertical_offset = max(
-                0.0, self.config.default_file_alignment_vertical_offset
-            )
         saved_step = min(
             self.project.current_step_index, self.IMPLEMENTED_STEP_COUNT - 1
         )
@@ -1633,10 +1623,6 @@ class MainWindow(QMainWindow):
         else:
             self.config.default_file_alignment_vertical_offset = kwargs["vertical"]
         self._save_config(self.config)
-        if axis == "horizontal":
-            self.project.file_alignment_horizontal_offset_loaded = True
-        else:
-            self.project.file_alignment_vertical_offset_loaded = True
         self._sync_ui()
 
     def _alignment_grid_size_changed(self) -> None:
@@ -1667,7 +1653,6 @@ class MainWindow(QMainWindow):
         holes = list(self.project.alignment_holes)
         holes.append(
             AlignmentHole(
-                position_mode="board_xy",
                 x_offset=min(max(x_pos, x_min), x_max),
                 y_offset=min(max(y_pos, y_min), y_max),
                 diameter=diameter,
@@ -3470,33 +3455,9 @@ class MainWindow(QMainWindow):
         self, hole: AlignmentHole, bounds: tuple[float, float, float, float]
     ) -> tuple[float, float, float]:
         x_min, x_max, y_min, y_max = bounds
-        if hole.position_mode == "board_xy":
-            return (
-                min(max(hole.x_offset, x_min), x_max),
-                min(max(hole.y_offset, y_min), y_max),
-                hole.diameter,
-            )
-        if hole.edge == "left":
-            return (
-                x_min - hole.offset_from_edge,
-                y_min + hole.offset_along_edge,
-                hole.diameter,
-            )
-        if hole.edge == "right":
-            return (
-                x_max + hole.offset_from_edge,
-                y_min + hole.offset_along_edge,
-                hole.diameter,
-            )
-        if hole.edge == "top":
-            return (
-                x_min + hole.offset_along_edge,
-                y_max + hole.offset_from_edge,
-                hole.diameter,
-            )
         return (
-            x_min + hole.offset_along_edge,
-            y_min - hole.offset_from_edge,
+            min(max(hole.x_offset, x_min), x_max),
+            min(max(hole.y_offset, y_min), y_max),
             hole.diameter,
         )
 
