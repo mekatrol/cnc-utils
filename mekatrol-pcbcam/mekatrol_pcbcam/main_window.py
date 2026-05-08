@@ -87,7 +87,6 @@ class MainWindow(QMainWindow):
         "Gerber Import",
         "Drill Import",
         "Alignment",
-        "Tool Selection",
         "Front Isolation",
         "Back Isolation",
         "Drilling",
@@ -105,7 +104,7 @@ class MainWindow(QMainWindow):
         "bottom_center": "Bottom Mid",
         "bottom_right": "Bottom Right",
     }
-    IMPLEMENTED_STEP_COUNT = 11
+    IMPLEMENTED_STEP_COUNT = 10
 
     def __init__(
         self,
@@ -137,6 +136,8 @@ class MainWindow(QMainWindow):
         self._selected_edge_cut_profile_index: int | None = None
         self._generated_edge_cut_preview_paths: list[list[tuple[float, float]]] = []
         self._alignment_preview_row_map: list[int] = []
+        self.operation_tool_combos: dict[str, tuple[QComboBox, str]] = {}
+        self.tool_library_value_labels: list[QLabel] = []
 
         self.preview = PcbPreviewWidget(self.theme)
         self.preview.origin_selected.connect(self._set_origin_location)
@@ -250,32 +251,37 @@ class MainWindow(QMainWindow):
         self.page_stack.addWidget(self._build_gerber_page())
         self.page_stack.addWidget(self._build_drill_page())
         self.page_stack.addWidget(self._build_alignment_holes_page())
-        self.page_stack.addWidget(self._build_tool_selection_page())
         self.page_stack.addWidget(
             self._build_operation_page(
-                "Step 7: Front Isolation",
+                "Step 6: Front Isolation",
                 "Generate front copper isolation G-code from the assigned front copper layer.",
                 "Generate Front Isolation",
                 "_generate_front_isolation",
                 "front_isolation",
+                [("V-bit", "front_isolation", "v_bits")],
             )
         )
         self.page_stack.addWidget(
             self._build_operation_page(
-                "Step 8: Back Isolation",
+                "Step 7: Back Isolation",
                 "Generate back copper isolation G-code from the assigned back copper layer.",
                 "Generate Back Isolation",
                 "_generate_back_isolation",
                 "back_isolation",
+                [("V-bit", "back_isolation", "v_bits")],
             )
         )
         self.page_stack.addWidget(
             self._build_operation_page(
-                "Step 9: Drilling",
+                "Step 8: Drilling",
                 "Generate drilling G-code for imported drill holes and optional alignment holes.",
                 "Generate Drill Operations",
                 "_generate_drilling_operations",
                 "drilling",
+                [
+                    ("Drilling tool", "drilling_drill", "drilling"),
+                    ("Milling tool", "drilling_mill", "milling"),
+                ],
             )
         )
         self.page_stack.addWidget(self._build_edge_cuts_page())
@@ -439,69 +445,6 @@ class MainWindow(QMainWindow):
         layout.addLayout(button_row)
         layout.addWidget(self.drill_list)
         layout.addWidget(self.drill_hint)
-        layout.addStretch(1)
-        return page
-
-    def _build_tool_selection_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
-
-        heading = QLabel("Step 6: Tool Selection")
-        heading.setObjectName("pageHeading")
-        body = QLabel(
-            "Choose one drilling tool, one milling tool, and one V-bit from the "
-            "configured tool library. These choices are stored in the project and "
-            "will feed the CAM generation stages."
-        )
-        body.setWordWrap(True)
-
-        button_row = QHBoxLayout()
-        load_button = QPushButton("Load tools.yaml")
-        load_button.clicked.connect(self._browse_tool_library)
-        clear_button = QPushButton("Clear Tool Library")
-        clear_button.clicked.connect(self._clear_tool_library)
-        button_row.addWidget(load_button)
-        button_row.addWidget(clear_button)
-
-        form_card = QFrame()
-        form_card.setFrameShape(QFrame.Shape.StyledPanel)
-        form_card.setObjectName("sidebarPanelCard")
-        self._sidebar_panels.append(form_card)
-        form = QFormLayout(form_card)
-        form.setContentsMargins(14, 14, 14, 14)
-        form.setSpacing(10)
-        self.tool_library_value = QLabel("No tool library loaded")
-        self.tool_library_value.setWordWrap(True)
-        self.drilling_tool_combo = QComboBox()
-        self.drilling_tool_combo.currentIndexChanged.connect(
-            lambda _: self._tool_selection_changed("drilling", self.drilling_tool_combo)
-        )
-        self.milling_tool_combo = QComboBox()
-        self.milling_tool_combo.currentIndexChanged.connect(
-            lambda _: self._tool_selection_changed("milling", self.milling_tool_combo)
-        )
-        self.vbit_tool_combo = QComboBox()
-        self.vbit_tool_combo.currentIndexChanged.connect(
-            lambda _: self._tool_selection_changed("v_bits", self.vbit_tool_combo)
-        )
-        form.addRow("Library", self.tool_library_value)
-        form.addRow("Drilling", self.drilling_tool_combo)
-        form.addRow("Milling", self.milling_tool_combo)
-        form.addRow("V-bit", self.vbit_tool_combo)
-
-        self.tool_selection_hint = QLabel(
-            "Load a tool library and select all three tool types."
-        )
-        self.tool_selection_hint.setWordWrap(True)
-        self._apply_muted_text_style(self.tool_selection_hint)
-
-        layout.addWidget(heading)
-        layout.addWidget(body)
-        layout.addLayout(button_row)
-        layout.addWidget(form_card)
-        layout.addWidget(self.tool_selection_hint)
         layout.addStretch(1)
         return page
 
@@ -770,6 +713,7 @@ class MainWindow(QMainWindow):
         button_text: str,
         handler_name: str,
         operation_key: str,
+        tool_rows: list[tuple[str, str, str]],
     ) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -798,10 +742,47 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(heading)
         layout.addWidget(body)
+        layout.addWidget(self._build_operation_tool_card(tool_rows))
         layout.addWidget(button)
         layout.addWidget(path_value)
         layout.addStretch(1)
         return page
+
+    def _build_operation_tool_card(
+        self, tool_rows: list[tuple[str, str, str]]
+    ) -> QWidget:
+        card = QFrame()
+        card.setFrameShape(QFrame.Shape.StyledPanel)
+        card.setObjectName("sidebarPanelCard")
+        self._sidebar_panels.append(card)
+        form = QFormLayout(card)
+        form.setContentsMargins(14, 14, 14, 14)
+        form.setSpacing(10)
+
+        library_value = QLabel("No tool library loaded")
+        library_value.setWordWrap(True)
+        self.tool_library_value_labels.append(library_value)
+
+        button_row = QHBoxLayout()
+        load_button = QPushButton("Load tools.yaml")
+        load_button.clicked.connect(self._browse_tool_library)
+        clear_button = QPushButton("Clear Tool Library")
+        clear_button.clicked.connect(self._clear_tool_library)
+        button_row.addWidget(load_button)
+        button_row.addWidget(clear_button)
+
+        form.addRow("Library", library_value)
+        form.addRow(button_row)
+        for label, operation_tool_key, role in tool_rows:
+            combo = QComboBox()
+            combo.currentIndexChanged.connect(
+                lambda _, key=operation_tool_key, widget=combo: (
+                    self._operation_tool_changed(key, widget)
+                )
+            )
+            self.operation_tool_combos[operation_tool_key] = (combo, role)
+            form.addRow(label, combo)
+        return card
 
     def _build_edge_cuts_page(self) -> QWidget:
         page = QWidget()
@@ -809,7 +790,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 10: Edge Cuts")
+        heading = QLabel("Step 9: Edge Cuts")
         heading.setObjectName("pageHeading")
         body = QLabel(
             "Each validated contour becomes a path entry. Select a path from the list, then choose "
@@ -819,10 +800,13 @@ class MainWindow(QMainWindow):
         body.setWordWrap(True)
 
         action_row = QHBoxLayout()
+        load_tools_button = QPushButton("Load tools.yaml")
+        load_tools_button.clicked.connect(self._browse_tool_library)
         generate_selected_button = QPushButton("Generate Selected Path")
         generate_selected_button.clicked.connect(self._generate_selected_edge_cut_path)
         generate_all_button = QPushButton("Generate All Paths")
         generate_all_button.clicked.connect(self._generate_edge_cuts)
+        action_row.addWidget(load_tools_button)
         action_row.addWidget(generate_selected_button)
         action_row.addWidget(generate_all_button)
 
@@ -836,6 +820,9 @@ class MainWindow(QMainWindow):
 
         self.edge_cut_selection_value = QLabel("No path selected")
         self.edge_cut_selection_value.setWordWrap(True)
+        self.edge_cut_tool_library_value = QLabel("No tool library loaded")
+        self.edge_cut_tool_library_value.setWordWrap(True)
+        self.tool_library_value_labels.append(self.edge_cut_tool_library_value)
         self.edge_cut_tool_combo = QComboBox()
         self.edge_cut_tool_combo.currentIndexChanged.connect(
             self._edge_cut_tool_changed
@@ -861,6 +848,7 @@ class MainWindow(QMainWindow):
             self._edge_cut_mode_changed
         )
         form.addRow("Selected path", self.edge_cut_selection_value)
+        form.addRow("Library", self.edge_cut_tool_library_value)
         form.addRow("Tool bit", self.edge_cut_tool_combo)
         form.addRow("Cut depth", self.edge_cut_depth_input)
         form.addRow("Step-down", self.edge_cut_step_down_input)
@@ -912,7 +900,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        heading = QLabel("Step 11: NC Preview")
+        heading = QLabel("Step 10: NC Preview")
         heading.setObjectName("pageHeading")
         body = QLabel(
             "Select any generated NC file to inspect it in the 3D toolpath viewer."
@@ -1580,15 +1568,15 @@ class MainWindow(QMainWindow):
         self.tool_library = None
         if self.project.set_tool_library_path(None):
             self._mark_project_dirty()
-        for role in list(self.project.selected_tools):
-            if self.project.selected_tools[role]:
-                self.project.selected_tools[role] = ""
+        for operation_key in list(self.project.operation_tools):
+            if self.project.operation_tools[operation_key]:
+                self.project.operation_tools[operation_key] = ""
                 self._mark_project_dirty()
         self._sync_ui()
 
-    def _tool_selection_changed(self, role: str, combo: QComboBox) -> None:
+    def _operation_tool_changed(self, operation_key: str, combo: QComboBox) -> None:
         tool_id = str(combo.currentData() or "")
-        if self.project.set_selected_tool(role, tool_id):
+        if self.project.set_operation_tool(operation_key, tool_id):
             self._mark_project_dirty()
         self._sync_ui()
 
@@ -1830,7 +1818,7 @@ class MainWindow(QMainWindow):
                 self, "Front isolation", "Assign a front copper Gerber first."
             )
             return
-        tool = self._selected_tool("v_bits")
+        tool = self._operation_tool("front_isolation", "v_bits")
         if tool is None:
             QMessageBox.information(self, "Front isolation", "Select a V-bit first.")
             return
@@ -1855,7 +1843,7 @@ class MainWindow(QMainWindow):
                 self, "Back isolation", "Assign a back copper Gerber first."
             )
             return
-        tool = self._selected_tool("v_bits")
+        tool = self._operation_tool("back_isolation", "v_bits")
         if tool is None:
             QMessageBox.information(self, "Back isolation", "Select a V-bit first.")
             return
@@ -1882,8 +1870,8 @@ class MainWindow(QMainWindow):
         self._register_generated_output("back_isolation", output_path)
 
     def _generate_drilling_operations(self) -> None:
-        tool = self._selected_tool("drilling")
-        mill_tool = self._selected_tool("milling")
+        tool = self._operation_tool("drilling_drill", "drilling")
+        mill_tool = self._operation_tool("drilling_mill", "milling")
         if tool is None or mill_tool is None:
             QMessageBox.information(
                 self, "Drilling", "Select drilling and milling tools first."
@@ -2031,26 +2019,21 @@ class MainWindow(QMainWindow):
         if index == 4:
             return True
         if index == 5:
-            return self.tool_library is not None and all(
-                self.project.selected_tools[role]
-                for role in ("drilling", "milling", "v_bits")
-            )
-        if index == 6:
             return self._operation_optional_or_generated(
                 "front_isolation", "front_copper"
             )
-        if index == 7:
+        if index == 6:
             return self._operation_optional_or_generated(
                 "back_isolation", "back_copper"
             )
-        if index == 8:
+        if index == 7:
             return self._drilling_optional_or_generated()
-        if index == 9:
+        if index == 8:
             return (
                 self._edge_cut_validation_is_valid()
                 and self._operation_optional_or_generated("edge_cuts", "edges")
             )
-        if index == 10:
+        if index == 9:
             return bool(self.project.generated_outputs)
         return False
 
@@ -2075,16 +2058,14 @@ class MainWindow(QMainWindow):
                 "or clear the drill import if you do not want to use drill data."
             )
         if index == 5:
-            return "Load tools.yaml and select a drilling tool, a milling tool, and a V-bit."
-        if index == 6:
             return (
                 "Generate the front isolation NC file before moving to the next step."
             )
-        if index == 7:
+        if index == 6:
             return "Generate the back isolation NC file before moving to the next step."
-        if index == 8:
+        if index == 7:
             return "Generate the drilling NC file before moving to the next step."
-        if index == 9:
+        if index == 8:
             if not self._edge_cut_validation_is_valid():
                 return self._edge_validation_message()
             return "Generate the edge cut NC file before moving to the next step."
@@ -2111,7 +2092,7 @@ class MainWindow(QMainWindow):
         )
         self._refresh_list_widgets()
         self._sync_stock_definition_page()
-        self._sync_tool_selection_page()
+        self._sync_tool_controls()
         self._sync_layer_assignment_page()
         self._sync_mirror_setup_page()
         self._sync_alignment_holes_page()
@@ -2393,35 +2374,37 @@ class MainWindow(QMainWindow):
 
     def _prune_invalid_tool_selections(self) -> None:
         if self.tool_library is None:
-            for role in self.project.selected_tools:
-                self.project.selected_tools[role] = ""
+            for operation_key in self.project.operation_tools:
+                self.project.operation_tools[operation_key] = ""
             return
         valid_ids = {
             role: {
                 tool.identifier for tool in self.tool_library.tools_by_category[role]
             }
-            for role in self.project.selected_tools
+            for role in ("drilling", "milling", "v_bits")
         }
-        for role, selected in self.project.selected_tools.items():
+        operation_roles = {
+            "front_isolation": "v_bits",
+            "back_isolation": "v_bits",
+            "drilling_drill": "drilling",
+            "drilling_mill": "milling",
+        }
+        for operation_key, role in operation_roles.items():
+            selected = self.project.operation_tools.get(operation_key, "")
             if selected and selected not in valid_ids[role]:
-                self.project.selected_tools[role] = ""
+                self.project.operation_tools[operation_key] = ""
 
-    def _sync_tool_selection_page(self) -> None:
+    def _sync_tool_controls(self) -> None:
         if self.tool_library is None:
-            self.tool_library_value.setText("No tool library loaded")
+            library_text = "No tool library loaded"
         else:
-            self.tool_library_value.setText(str(self.tool_library.path))
-        self._populate_tool_combo(
-            self.drilling_tool_combo,
-            "drilling",
-            self.project.selected_tools["drilling"],
-        )
-        self._populate_tool_combo(
-            self.milling_tool_combo, "milling", self.project.selected_tools["milling"]
-        )
-        self._populate_tool_combo(
-            self.vbit_tool_combo, "v_bits", self.project.selected_tools["v_bits"]
-        )
+            library_text = str(self.tool_library.path)
+        for label in self.tool_library_value_labels:
+            label.setText(library_text)
+        for operation_key, (combo, role) in self.operation_tool_combos.items():
+            self._populate_tool_combo(
+                combo, role, self.project.operation_tools.get(operation_key, "")
+            )
 
     def _populate_tool_combo(
         self, combo: QComboBox, role: str, selected_tool_id: str
@@ -2810,9 +2793,9 @@ class MainWindow(QMainWindow):
                 ).mode,
                 tool_id=polygon_config_map.get(
                     self._polygon_key(polygon),
-                    EdgeCutPath(tool_id=self.project.selected_tools.get("milling", "")),
+                    EdgeCutPath(tool_id=""),
                 ).tool_id
-                or self.project.selected_tools.get("milling", ""),
+                or "",
                 cut_depth=polygon_config_map.get(
                     self._polygon_key(polygon),
                     EdgeCutPath(cut_depth=self._default_edge_cut_depth()),
@@ -3513,10 +3496,10 @@ class MainWindow(QMainWindow):
             return x_pos, y_min + y_max - y_pos, diameter
         return x_min + x_max - x_pos, y_pos, diameter
 
-    def _selected_tool(self, role: str):
+    def _operation_tool(self, operation_key: str, role: str):
         if self.tool_library is None:
             return None
-        selected_id = self.project.selected_tools.get(role, "")
+        selected_id = self.project.operation_tools.get(operation_key, "")
         for tool in self.tool_library.tools_by_category[role]:
             if tool.identifier == selected_id:
                 return tool

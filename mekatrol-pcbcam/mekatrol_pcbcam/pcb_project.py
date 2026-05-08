@@ -10,26 +10,24 @@ from .nc_origin import DEFAULT_NC_ORIGIN, normalize_nc_origin
 
 
 class PcbProject:
-    VERSION = 10
+    VERSION = 1
     STEP_PROJECT = 0
     STEP_STOCK_DEFINITION = 1
     STEP_GERBER_IMPORT = 2
     STEP_DRILL_IMPORT = 3
     STEP_ALIGNMENT_HOLES = 4
-    STEP_TOOL_SELECTION = 5
-    STEP_FRONT_ISOLATION = 6
-    STEP_BACK_ISOLATION = 7
-    STEP_DRILLING = 8
-    STEP_EDGE_CUTS = 9
-    STEP_NC_PREVIEW = 10
-    TOTAL_STEPS = 11
+    STEP_FRONT_ISOLATION = 5
+    STEP_BACK_ISOLATION = 6
+    STEP_DRILLING = 7
+    STEP_EDGE_CUTS = 8
+    STEP_NC_PREVIEW = 9
+    TOTAL_STEPS = 10
     STEP_KEYS = [
         "project",
         "stock_definition",
         "gerber_import",
         "drill_import",
         "alignment_holes",
-        "tool_selection",
         "front_isolation",
         "back_isolation",
         "drilling",
@@ -48,10 +46,11 @@ class PcbProject:
         self.stock_height: float = 60.0
         self.stock_thickness: float = 1.6
         self.stock_origin: str = DEFAULT_NC_ORIGIN
-        self.selected_tools: dict[str, str] = {
-            "drilling": "",
-            "milling": "",
-            "v_bits": "",
+        self.operation_tools: dict[str, str] = {
+            "front_isolation": "",
+            "back_isolation": "",
+            "drilling_drill": "",
+            "drilling_mill": "",
         }
         self.layer_assignments: dict[str, Path | None] = {
             "front_copper": None,
@@ -148,7 +147,7 @@ class PcbProject:
         changed = resolved != self.tool_library_path
         self.tool_library_path = resolved
         if changed:
-            self._invalidate_from(self.STEP_TOOL_SELECTION)
+            self._invalidate_from(self.STEP_FRONT_ISOLATION)
         return changed
 
     def set_stock_dimensions(
@@ -180,13 +179,20 @@ class PcbProject:
             self._invalidate_from(self.STEP_STOCK_DEFINITION)
         return changed
 
-    def set_selected_tool(self, role: str, tool_id: str) -> bool:
+    def set_operation_tool(self, operation_key: str, tool_id: str) -> bool:
         normalized = tool_id.strip()
-        changed = self.selected_tools.get(role, "") != normalized
-        self.selected_tools[role] = normalized
+        changed = self.operation_tools.get(operation_key, "") != normalized
+        self.operation_tools[operation_key] = normalized
         if changed:
-            self._invalidate_from(self.STEP_TOOL_SELECTION)
+            self._invalidate_from(self._operation_step(operation_key))
         return changed
+
+    def _operation_step(self, operation_key: str) -> int:
+        if operation_key == "back_isolation":
+            return self.STEP_BACK_ISOLATION
+        if operation_key in {"drilling", "drilling_drill", "drilling_mill"}:
+            return self.STEP_DRILLING
+        return self.STEP_FRONT_ISOLATION
 
     def set_layer_assignment(self, role: str, path: Path | None) -> bool:
         resolved = None if path is None else path.resolve()
@@ -357,7 +363,7 @@ class PcbProject:
                         self.tool_library_path, self.project_path.parent
                     )
                 ),
-                "selected_tools": dict(self.selected_tools),
+                "operation_tools": dict(self.operation_tools),
             },
             "layers": {
                 key: (
@@ -414,6 +420,10 @@ class PcbProject:
     @classmethod
     def load_from_path(cls, path: Path) -> PcbProject:
         loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if not isinstance(loaded, dict):
+            raise ValueError("Project file must contain a top-level mapping.")
+        if loaded.get("version") != cls.VERSION:
+            raise ValueError(f"Project file version must be {cls.VERSION}.")
         project = cls()
         project.project_path = path.resolve()
         project.gerber_paths = [
@@ -465,12 +475,12 @@ class PcbProject:
             project.tool_library_path = project._from_relative_path(
                 raw_tool_library_path, project.project_path.parent
             )
-        selected_tools = tool_library_data.get("selected_tools", {})
-        if isinstance(selected_tools, dict):
-            for role in project.selected_tools:
-                value = selected_tools.get(role, "")
+        operation_tools = tool_library_data.get("operation_tools", {})
+        if isinstance(operation_tools, dict):
+            for operation_key in project.operation_tools:
+                value = operation_tools.get(operation_key, "")
                 if isinstance(value, str):
-                    project.selected_tools[role] = value.strip()
+                    project.operation_tools[operation_key] = value.strip()
         layer_data = loaded.get("layers", {})
         if isinstance(layer_data, dict):
             for role in project.layer_assignments:
