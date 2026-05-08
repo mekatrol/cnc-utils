@@ -50,8 +50,5 @@ class ExcellonFileParser:
                 bounds.include_point(x, y, diameter * 0.5)
 
         return ImportedDrillFile(
-            path=file_path,
-            display_name=file_path.name,
-            holes=holes,
-            bounds=bounds,
+            path=file_path, display_name=file_path.name, holes=holes, bounds=bounds
         )

@@ -42,8 +42,7 @@ def normalize_nc_origin(value: str) -> str:
 
 
 def legacy_origin_point_for_bounds(
-    bounds: tuple[float, float, float, float],
-    origin: str,
+    bounds: tuple[float, float, float, float], origin: str
 ) -> tuple[float, float]:
     normalized = normalize_nc_origin(origin)
     x_min, x_max, y_min, y_max = bounds

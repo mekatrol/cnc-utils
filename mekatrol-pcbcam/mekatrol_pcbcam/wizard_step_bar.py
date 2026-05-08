@@ -71,7 +71,9 @@ class WizardStepBar(QWidget):
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.fillRect(self.rect(), self._theme.named_color("wizard_step_bar_background"))
+        painter.fillRect(
+            self.rect(), self._theme.named_color("wizard_step_bar_background")
+        )
 
         _, arrow = self._layout_metrics()
         self._refresh_step_geometry()
@@ -112,10 +114,7 @@ class WizardStepBar(QWidget):
     def _layout_metrics(self) -> tuple[int, float]:
         arrow = 24.0
         widths = self._step_widths()
-        total_width = max(
-            int(sum(widths) - max(0, len(widths) - 1) * arrow),
-            1,
-        )
+        total_width = max(int(sum(widths) - max(0, len(widths) - 1) * arrow), 1)
         return total_width, arrow
 
     def _step_widths(self) -> list[int]:

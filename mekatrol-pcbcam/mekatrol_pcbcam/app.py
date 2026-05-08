@@ -706,34 +706,30 @@ def _ensure_default_tools_file() -> Path:
     if path.exists():
         return path
 
-    content = "\n".join(
-        [
-            "# Default mekatrol-pcbcam tool library.",
-            "tools:",
-            "  - id: 4a89c55d-d624-4b99-b4bf-60c54267c2d0",
-            "    name: V-Bit 0.2 mm Tip",
-            "    type: v-bit",
-            "    tip_diameter: 0.2",
-            "    tip_angle: 30",
-            "    feed_rate: 300",
-            "    preferred_speed: 12000",
-            "",
-            "  - id: e8a9fe20-d062-428f-b96a-b23bc03f7fd9",
-            "    name: Twist Drill 0.1 mm",
-            "    type: drill",
-            "    diameter: 0.1",
-            "    feed_rate: 120",
-            "    preferred_speed: 12000",
-            "",
-            "  - id: 50d851ae-cbc5-4579-8d58-1fa5d738701c",
-            "    name: Square End Mill 0.1 mm",
-            "    type: endmill",
-            "    diameter: 0.1",
-            "    feed_rate: 300",
-            "    preferred_speed: 12000",
-            "",
-        ]
-    )
+    content = """# Default mekatrol-pcbcam tool library.
+tools:
+  - id: 4a89c55d-d624-4b99-b4bf-60c54267c2d0
+    name: V-Bit 0.2 mm Tip
+    type: v-bit
+    tip_diameter: 0.2
+    tip_angle: 30
+    feed_rate: 300
+    preferred_speed: 12000
+
+  - id: e8a9fe20-d062-428f-b96a-b23bc03f7fd9
+    name: Twist Drill 0.1 mm
+    type: drill
+    diameter: 0.1
+    feed_rate: 120
+    preferred_speed: 12000
+
+  - id: 50d851ae-cbc5-4579-8d58-1fa5d738701c
+    name: Square End Mill 0.1 mm
+    type: endmill
+    diameter: 0.1
+    feed_rate: 300
+    preferred_speed: 12000
+"""
     path.write_text(content, encoding="utf-8")
     return path
 

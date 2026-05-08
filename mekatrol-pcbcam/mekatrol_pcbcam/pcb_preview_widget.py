@@ -106,6 +106,7 @@ class PcbPreviewWidget(QWidget):
         board_bounds: tuple[float, float, float, float] | None,
         mirror_edge: str,
         preview_mode: str,
+        fit_view: bool = True,
     ) -> None:
         self._back_copper_path = back_copper_path
         self._edges_path = edges_path
@@ -113,7 +114,10 @@ class PcbPreviewWidget(QWidget):
         self._mirror_edge = mirror_edge.strip()
         self._mirror_preview_mode = preview_mode.strip() or "side_by_side"
         self._rebuild_bounds()
-        self.fit_to_view()
+        if fit_view:
+            self.fit_to_view()
+        else:
+            self.update()
 
     def set_origin_marker(
         self,
@@ -123,6 +127,7 @@ class PcbPreviewWidget(QWidget):
         hotspot_points: dict[str, tuple[float, float]] | None = None,
         selection_enabled: bool = False,
         marker_label: str = "(0, 0)",
+        fit_view: bool = True,
     ) -> None:
         self._origin_marker_bounds = board_bounds
         self._origin_marker_point = point
@@ -133,7 +138,7 @@ class PcbPreviewWidget(QWidget):
             self._origin_hotspots_visible = False
             self._hovered_origin_key = None
         self._rebuild_bounds()
-        if board_bounds is not None:
+        if board_bounds is not None and fit_view:
             self.fit_to_view()
         else:
             self.update()

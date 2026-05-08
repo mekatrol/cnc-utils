@@ -21,7 +21,9 @@ class InMemoryLogTracker:
 
     def warning_entries(self) -> list[DiagnosticEntry]:
         with self._lock:
-            return [entry for entry in self._entries if entry.level_no >= logging.WARNING]
+            return [
+                entry for entry in self._entries if entry.level_no >= logging.WARNING
+            ]
 
     def clear(self) -> None:
         with self._lock:

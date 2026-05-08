@@ -182,15 +182,13 @@ class GerberFileParser:
                     if start != point:
                         self._segments.append((start, point))
                     if aperture:
-                        width = float(aperture.get("diameter", aperture.get("width", 0.1)))
+                        width = float(
+                            aperture.get("diameter", aperture.get("width", 0.1))
+                        )
                         self._traces.append((start, point, width))
                 else:
                     self._append_arc_segments(
-                        start,
-                        point,
-                        i_offset,
-                        j_offset,
-                        aperture=aperture,
+                        start, point, i_offset, j_offset, aperture=aperture
                     )
         elif operation == 3 and aperture:
             self._pads.append((point, aperture))
@@ -218,10 +216,7 @@ class GerberFileParser:
             self._current_region_points.append(point)
 
     def _process_region_arc(
-        self,
-        point: Point,
-        i_offset: float | None,
-        j_offset: float | None,
+        self, point: Point, i_offset: float | None, j_offset: float | None
     ) -> None:
         if self._current_x is None or self._current_y is None:
             self._process_region_point(point, 1)
@@ -274,11 +269,7 @@ class GerberFileParser:
             self._bounds.include_point(segment_end[0], segment_end[1], 0.2)
 
     def _approximate_arc_points(
-        self,
-        start: Point,
-        end: Point,
-        i_offset: float | None,
-        j_offset: float | None,
+        self, start: Point, end: Point, i_offset: float | None, j_offset: float | None
     ) -> list[Point]:
         if i_offset is None or j_offset is None:
             return []
@@ -295,9 +286,17 @@ class GerberFileParser:
         end_angle = math.atan2(end[1] - center_y, end[0] - center_x)
         sweep = self._arc_sweep(start_angle, end_angle)
         if abs(sweep) < 1e-9 and start != end:
-            sweep = (-2.0 * math.pi) if self._interpolation_mode == "clockwise" else (2.0 * math.pi)
+            sweep = (
+                (-2.0 * math.pi)
+                if self._interpolation_mode == "clockwise"
+                else (2.0 * math.pi)
+            )
         elif abs(sweep) < 1e-9 and start == end:
-            sweep = (-2.0 * math.pi) if self._interpolation_mode == "clockwise" else (2.0 * math.pi)
+            sweep = (
+                (-2.0 * math.pi)
+                if self._interpolation_mode == "clockwise"
+                else (2.0 * math.pi)
+            )
 
         max_angle_step = math.radians(10.0)
         max_chord = 0.5
@@ -433,7 +432,9 @@ class GerberFileParser:
         start, end = segment
         epsilon = 1e-9
         return (
-            min(start[0], end[0]) - epsilon <= point[0] <= max(start[0], end[0]) + epsilon
+            min(start[0], end[0]) - epsilon
+            <= point[0]
+            <= max(start[0], end[0]) + epsilon
             and min(start[1], end[1]) - epsilon
             <= point[1]
             <= max(start[1], end[1]) + epsilon

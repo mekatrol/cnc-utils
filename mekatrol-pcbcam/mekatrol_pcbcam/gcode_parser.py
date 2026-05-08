@@ -111,10 +111,7 @@ class GCodeParser:
         return None
 
     def _resolve_target(
-        self,
-        current: Point3D,
-        words: dict[str, str],
-        absolute_mode: bool,
+        self, current: Point3D, words: dict[str, str], absolute_mode: bool
     ) -> Point3D:
         next_values = {axis: getattr(current, axis.lower()) for axis in AXES}
         for axis in AXES:

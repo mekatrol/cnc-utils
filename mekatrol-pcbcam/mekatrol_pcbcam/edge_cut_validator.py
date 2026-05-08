@@ -30,7 +30,9 @@ def validate_edge_segments(segments: list[LineSegment]) -> EdgeCutValidationResu
     filtered_segments = _collapse_colinear_segments(filtered_segments)
     if not filtered_segments:
         return EdgeCutValidationResult(
-            issues=["The selected edge cut layer does not contain any usable edge segments."]
+            issues=[
+                "The selected edge cut layer does not contain any usable edge segments."
+            ]
         )
 
     issues: list[str] = []
@@ -44,7 +46,9 @@ def validate_edge_segments(segments: list[LineSegment]) -> EdgeCutValidationResu
     polygons, continuity_error_segments = _build_closed_loops(filtered_segments)
     if continuity_error_segments:
         error_segments.extend(continuity_error_segments)
-        issues.append("Each polygon must have a continuous boundary with no dangling edges.")
+        issues.append(
+            "Each polygon must have a continuous boundary with no dangling edges."
+        )
     if not polygons:
         issues.append("Edge segments do not form any closed polygons.")
 
@@ -102,11 +106,15 @@ def _point_on_segment(point: Point, segment: LineSegment) -> bool:
     epsilon = 1e-9
     return (
         min(start[0], end[0]) - epsilon <= point[0] <= max(start[0], end[0]) + epsilon
-        and min(start[1], end[1]) - epsilon <= point[1] <= max(start[1], end[1]) + epsilon
+        and min(start[1], end[1]) - epsilon
+        <= point[1]
+        <= max(start[1], end[1]) + epsilon
     )
 
 
-def _build_closed_loops(segments: list[LineSegment]) -> tuple[list[Polygon], list[LineSegment]]:
+def _build_closed_loops(
+    segments: list[LineSegment],
+) -> tuple[list[Polygon], list[LineSegment]]:
     adjacency: dict[Point, list[tuple[Point, int]]] = {}
     for index, (start, end) in enumerate(segments):
         adjacency.setdefault(start, []).append((end, index))
@@ -198,7 +206,9 @@ def _collapse_colinear_segments(segments: list[LineSegment]) -> list[LineSegment
     return collapsed
 
 
-def _build_adjacency(segments: list[LineSegment]) -> dict[Point, list[tuple[Point, int]]]:
+def _build_adjacency(
+    segments: list[LineSegment],
+) -> dict[Point, list[tuple[Point, int]]]:
     adjacency: dict[Point, list[tuple[Point, int]]] = {}
     for index, (start, end) in enumerate(segments):
         adjacency.setdefault(start, []).append((end, index))

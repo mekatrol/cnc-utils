@@ -22,7 +22,9 @@ def discover_theme_options(themes_directory: Path) -> list[ThemeOption]:
     if not themes_directory.exists():
         return options
 
-    for path in sorted(themes_directory.glob("*.yaml"), key=lambda item: item.name.lower()):
+    for path in sorted(
+        themes_directory.glob("*.yaml"), key=lambda item: item.name.lower()
+    ):
         theme, _warnings = load_theme(path)
         display_name = theme.theme_info.name.strip() or path.stem
         options.append(
@@ -81,7 +83,9 @@ class ThemeSettingsDialog(QDialog):
             f'Themes folder: <a href="themes-folder">{themes_directory}</a>'
         )
         folder_link.setTextFormat(Qt.TextFormat.RichText)
-        folder_link.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        folder_link.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
         folder_link.setOpenExternalLinks(False)
         folder_link.linkActivated.connect(self._open_themes_folder)
         layout.addWidget(folder_link)
@@ -119,7 +123,5 @@ class ThemeSettingsDialog(QDialog):
         if QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._themes_directory))):
             return
         QMessageBox.warning(
-            self,
-            "Open themes folder",
-            f"Could not open {self._themes_directory}.",
+            self, "Open themes folder", f"Could not open {self._themes_directory}."
         )

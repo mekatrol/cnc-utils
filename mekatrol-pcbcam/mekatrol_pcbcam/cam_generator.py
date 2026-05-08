@@ -34,10 +34,7 @@ class CamGenerator:
     ) -> Path:
         geometry = self._combined_copper_geometry(gerber)
         paths = self._isolation_paths(geometry, tool_tip_diameter)
-        translated_paths = self._translate_paths_to_origin(
-            paths,
-            origin_point,
-        )
+        translated_paths = self._translate_paths_to_origin(paths, origin_point)
         output_path = self.output_directory / output_name
         self._write_line_operation(
             output_path,
@@ -64,10 +61,7 @@ class CamGenerator:
         geometry = self._combined_copper_geometry(gerber)
         mirrored = self._mirror_geometry(geometry, mirror_edge, board_bounds)
         paths = self._isolation_paths(mirrored, tool_tip_diameter)
-        translated_paths = self._translate_paths_to_origin(
-            paths,
-            origin_point,
-        )
+        translated_paths = self._translate_paths_to_origin(paths, origin_point)
         output_path = self.output_directory / output_name
         tool_comment = (
             f"V-bit tip {tool_tip_diameter:.3f} mm, "
@@ -110,12 +104,7 @@ class CamGenerator:
                     raise ValueError(
                         f"Hole diameter {target_diameter:.3f} mm is smaller than selected drill {drill_diameter:.3f} mm."
                     )
-                self._write_peck_drill(
-                    gcode_file,
-                    x,
-                    y,
-                    final_hole_depth,
-                )
+                self._write_peck_drill(gcode_file, x, y, final_hole_depth)
             gcode_file.write("M5\n")
 
             holes_to_enlarge = [
@@ -152,8 +141,7 @@ class CamGenerator:
         translated_specs = [
             {
                 "toolpath": self._translate_points_to_origin(
-                    list(spec["toolpath"]),
-                    origin_point,
+                    list(spec["toolpath"]), origin_point
                 ),
                 "mill_diameter": float(spec["mill_diameter"]),
                 "cut_depth": float(spec["cut_depth"]),
@@ -184,9 +172,7 @@ class CamGenerator:
                 while current_depth > final_depth:
                     current_depth = max(current_depth - step_down, final_depth)
                     self._write_polyline(
-                        gcode_file,
-                        spec["toolpath"],
-                        cut_depth=current_depth,
+                        gcode_file, spec["toolpath"], cut_depth=current_depth
                     )
             if active_tool_key is not None:
                 gcode_file.write("M5\n")
@@ -209,11 +195,7 @@ class CamGenerator:
         ]
 
     def _edge_cut_toolpath(
-        self,
-        outline: list[tuple[float, float]],
-        *,
-        cut_mode: str,
-        tool_radius: float,
+        self, outline: list[tuple[float, float]], *, cut_mode: str, tool_radius: float
     ) -> list[tuple[float, float]]:
         if len(outline) < 4:
             raise ValueError("Edge-cut polygons must contain at least three segments.")
@@ -233,7 +215,9 @@ class CamGenerator:
             offset_polygon = max(offset_polygon.geoms, key=lambda item: item.area)
         boundary = offset_polygon.boundary
         if not isinstance(boundary, LineString):
-            raise ValueError("Unsupported edge-cut boundary generated for the selected contour.")
+            raise ValueError(
+                "Unsupported edge-cut boundary generated for the selected contour."
+            )
         return [(float(x_pos), float(y_pos)) for x_pos, y_pos in boundary.coords]
 
     def _combined_copper_geometry(self, gerber):
@@ -244,7 +228,11 @@ class CamGenerator:
         pads = []
         for center, aperture in gerber.pads:
             if aperture["type"] == "circle":
-                pads.append(Point(center[0], center[1]).buffer(float(aperture["diameter"]) * 0.5))
+                pads.append(
+                    Point(center[0], center[1]).buffer(
+                        float(aperture["diameter"]) * 0.5
+                    )
+                )
             elif aperture["type"] == "rectangle":
                 half_width = float(aperture["width"]) * 0.5
                 half_height = float(aperture["height"]) * 0.5
@@ -257,9 +245,7 @@ class CamGenerator:
                     )
                 )
         regions = [
-            Polygon(region).buffer(0)
-            for region in gerber.regions
-            if len(region) >= 3
+            Polygon(region).buffer(0) for region in gerber.regions if len(region) >= 3
         ]
         geometry = unary_union(traces + pads + regions)
         if geometry.is_empty:
@@ -295,9 +281,7 @@ class CamGenerator:
         return geometry
 
     def _translate_paths_to_origin(
-        self,
-        paths: list[LineString],
-        origin_point: tuple[float, float],
+        self, paths: list[LineString], origin_point: tuple[float, float]
     ) -> list[LineString]:
         origin_x, origin_y = origin_point
         translated = [
@@ -306,9 +290,7 @@ class CamGenerator:
         return translated
 
     def _translate_points_to_origin(
-        self,
-        points: list[tuple[float, float]],
-        origin_point: tuple[float, float],
+        self, points: list[tuple[float, float]], origin_point: tuple[float, float]
     ) -> list[tuple[float, float]]:
         origin_x, origin_y = origin_point
         translated = [(x - origin_x, y - origin_y) for x, y in points]
@@ -351,7 +333,9 @@ class CamGenerator:
             gcode_file.write(f"G1 X{x:.3f} Y{y:.3f}\n")
         gcode_file.write(f"G0 Z{self.safe_height:.3f}\n")
 
-    def _write_peck_drill(self, gcode_file, x: float, y: float, final_depth: float) -> None:
+    def _write_peck_drill(
+        self, gcode_file, x: float, y: float, final_depth: float
+    ) -> None:
         gcode_file.write(f"G0 X{x:.3f} Y{y:.3f}\n")
         gcode_file.write(f"G0 Z{self.surface_height:.3f}\n")
         current_depth = 0.0

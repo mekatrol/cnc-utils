@@ -290,15 +290,10 @@ class SplashScreen(QSplashScreen):
 
         painter.save()
         painter.setPen(self._theme.named_color("splash_link"))
-        painter.drawText(
-            website_url_rect, Qt.AlignmentFlag.AlignLeft, website_url_text
-        )
+        painter.drawText(website_url_rect, Qt.AlignmentFlag.AlignLeft, website_url_text)
         underline_y = website_url_rect.bottom() - max(1, metrics.descent() // 2)
         painter.drawLine(
-            website_url_rect.left(),
-            underline_y,
-            website_url_rect.right(),
-            underline_y,
+            website_url_rect.left(), underline_y, website_url_rect.right(), underline_y
         )
         painter.restore()
 

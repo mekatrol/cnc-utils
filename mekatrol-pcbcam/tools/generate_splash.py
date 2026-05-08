@@ -45,7 +45,12 @@ def _draw_board_icon(draw: ImageDraw.ImageDraw, origin: tuple[int, int]) -> None
         (ox + 38, oy + 136, 22),
     ]
     for px, py, radius in pads:
-        draw.ellipse((px - radius, py - radius, px + radius, py + radius), fill=WHITE, outline=BLUE, width=6)
+        draw.ellipse(
+            (px - radius, py - radius, px + radius, py + radius),
+            fill=WHITE,
+            outline=BLUE,
+            width=6,
+        )
         inner = max(6, radius // 3)
         draw.ellipse((px - inner, py - inner, px + inner, py + inner), fill=BLUE)
 
@@ -55,11 +60,33 @@ def _draw_board_icon(draw: ImageDraw.ImageDraw, origin: tuple[int, int]) -> None
     draw.line((ox + 206, oy + 104, ox + 164, oy + 138), fill=BLUE, width=14)
     draw.line((ox + 38, oy + 136, ox + 105, oy + 188), fill=BLUE, width=14)
 
-    draw.ellipse((hub_center[0] - 56, hub_center[1] - 56, hub_center[0] + 56, hub_center[1] + 56), fill=WHITE, outline=BLUE, width=8)
-    draw.ellipse((hub_center[0] - 24, hub_center[1] - 24, hub_center[0] + 24, hub_center[1] + 24), fill=BLUE)
+    draw.ellipse(
+        (
+            hub_center[0] - 56,
+            hub_center[1] - 56,
+            hub_center[0] + 56,
+            hub_center[1] + 56,
+        ),
+        fill=WHITE,
+        outline=BLUE,
+        width=8,
+    )
+    draw.ellipse(
+        (
+            hub_center[0] - 24,
+            hub_center[1] - 24,
+            hub_center[0] + 24,
+            hub_center[1] + 24,
+        ),
+        fill=BLUE,
+    )
 
     for offset in (168, 200, 232):
-        draw.line((hub_center[0] + 56, offset + oy - 40, ox + 284, offset + oy - 40), fill=BLUE, width=12)
+        draw.line(
+            (hub_center[0] + 56, offset + oy - 40, ox + 284, offset + oy - 40),
+            fill=BLUE,
+            width=12,
+        )
 
 
 def _draw_glow(base: Image.Image) -> Image.Image:

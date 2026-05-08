@@ -2103,12 +2103,14 @@ class MainWindow(QMainWindow):
         show_stock = (
             current >= PcbProject.STEP_STOCK_DEFINITION and stock_bounds is not None
         )
+        fit_preview_view = page_changed or current != PcbProject.STEP_EDGE_CUTS
         self.preview.load_project_geometry(
             self._active_gerbers(),
             self._active_drills(),
             self._alignment_hole_positions(),
             reference_gerber_files=self._aligned_gerbers(self.imported_gerbers),
             reference_drill_files=self._aligned_drills(self.imported_drills),
+            fit_view=fit_preview_view,
         )
         self.preview.set_mirror_setup(
             back_copper_path=(
@@ -2136,6 +2138,7 @@ class MainWindow(QMainWindow):
                 in {PcbProject.STEP_STOCK_DEFINITION, PcbProject.STEP_EDGE_CUTS}
                 else self.project.mirror_preview_mode
             ),
+            fit_view=fit_preview_view,
         )
         self.preview.set_edge_validation(
             assigned_edges,
@@ -2172,6 +2175,7 @@ class MainWindow(QMainWindow):
             marker_label=(
                 "Alignment" if current == PcbProject.STEP_ALIGNMENT_HOLES else "(0, 0)"
             ),
+            fit_view=fit_preview_view,
         )
         self.preview.set_alignment_hole_selection(
             stock_bounds,
@@ -2792,8 +2796,7 @@ class MainWindow(QMainWindow):
                     self._polygon_key(polygon), EdgeCutPath()
                 ).mode,
                 tool_id=polygon_config_map.get(
-                    self._polygon_key(polygon),
-                    EdgeCutPath(tool_id=""),
+                    self._polygon_key(polygon), EdgeCutPath(tool_id="")
                 ).tool_id
                 or "",
                 cut_depth=polygon_config_map.get(

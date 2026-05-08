@@ -23,8 +23,7 @@ class MirrorPreviewWidget(QWidget):
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             painter.fillRect(
-                self.rect(),
-                self._theme.named_color("mirror_preview_background"),
+                self.rect(), self._theme.named_color("mirror_preview_background")
             )
 
             board_rect = self.rect().adjusted(34, 24, -34, -24)
@@ -86,20 +85,12 @@ class MirrorPreviewWidget(QWidget):
         if abs(direction.x()) > abs(direction.y()):
             sign = 1 if direction.x() >= 0 else -1
             head = QPolygonF(
-                [
-                    end,
-                    end + QPointF(-12 * sign, -8),
-                    end + QPointF(-12 * sign, 8),
-                ]
+                [end, end + QPointF(-12 * sign, -8), end + QPointF(-12 * sign, 8)]
             )
         else:
             sign = 1 if direction.y() >= 0 else -1
             head = QPolygonF(
-                [
-                    end,
-                    end + QPointF(-8, -12 * sign),
-                    end + QPointF(8, -12 * sign),
-                ]
+                [end, end + QPointF(-8, -12 * sign), end + QPointF(8, -12 * sign)]
             )
         painter.setBrush(self._theme.named_color("mirror_preview_highlight"))
         painter.drawPolygon(head)

@@ -33,11 +33,7 @@ class WizardStepButton(QPushButton):
         self.setStyleSheet("background: transparent; border: 0;")
 
     def set_step_state(
-        self,
-        *,
-        is_current: bool,
-        is_completed: bool,
-        is_enabled: bool,
+        self, *, is_current: bool, is_completed: bool, is_enabled: bool
     ) -> None:
         self.is_current = is_current
         self.is_completed = is_completed

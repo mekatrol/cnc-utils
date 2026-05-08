@@ -4,7 +4,15 @@ import logging
 import math
 
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QPen, QPolygonF, QWheelEvent
+from PySide6.QtGui import (
+    QColor,
+    QMouseEvent,
+    QPainter,
+    QPaintEvent,
+    QPen,
+    QPolygonF,
+    QWheelEvent,
+)
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
 from .camera_state import CameraState
@@ -131,9 +139,7 @@ class ToolpathViewer(QOpenGLWidget):
         center_x = (bounds[0] + bounds[2]) * 0.5
         center_y = (bounds[1] + bounds[3]) * 0.5
         self.camera = CameraState(
-            zoom=max(zoom, 0.0005),
-            pan_x=-center_x * zoom,
-            pan_y=-center_y * zoom,
+            zoom=max(zoom, 0.0005), pan_x=-center_x * zoom, pan_y=-center_y * zoom
         )
         self.update()
         logger.debug(
@@ -174,8 +180,7 @@ class ToolpathViewer(QOpenGLWidget):
             self.camera.yaw += delta.x() * 0.01
             self.camera.pitch += delta.y() * 0.01
             self.camera.pitch = max(
-                math.radians(-89.0),
-                min(math.radians(89.0), self.camera.pitch),
+                math.radians(-89.0), min(math.radians(89.0), self.camera.pitch)
             )
             self.update()
         elif self._right_drag:
@@ -216,12 +221,7 @@ class ToolpathViewer(QOpenGLWidget):
 
     def _draw_grid(self, painter: QPainter) -> None:
         spacing = self._grid_spacing()
-        margin = max(
-            spacing * 4.0,
-            self._span_x * 0.2,
-            self._span_y * 0.2,
-            5.0,
-        )
+        margin = max(spacing * 4.0, self._span_x * 0.2, self._span_y * 0.2, 5.0)
         min_x = min(self._bounds_min.x, 0.0) - margin
         max_x = max(self._bounds_max.x, 0.0) + margin
         min_y = min(self._bounds_min.y, 0.0) - margin
@@ -237,9 +237,7 @@ class ToolpathViewer(QOpenGLWidget):
             is_major = self._is_major_grid_line(value, spacing)
             painter.setPen(major_pen if is_major else minor_pen)
             self._draw_line(
-                painter,
-                Point3D(value, start_y, 0.0),
-                Point3D(value, end_y, 0.0),
+                painter, Point3D(value, start_y, 0.0), Point3D(value, end_y, 0.0)
             )
             value += spacing
         value = start_y
@@ -247,31 +245,19 @@ class ToolpathViewer(QOpenGLWidget):
             is_major = self._is_major_grid_line(value, spacing)
             painter.setPen(major_pen if is_major else minor_pen)
             self._draw_line(
-                painter,
-                Point3D(start_x, value, 0.0),
-                Point3D(end_x, value, 0.0),
+                painter, Point3D(start_x, value, 0.0), Point3D(end_x, value, 0.0)
             )
             value += spacing
 
     def _draw_axes(self, painter: QPainter) -> None:
         axis_length = max(self._span_x, self._span_y, 10.0) * 0.6
         painter.setPen(QPen(self._theme.named_color("toolpath_axis_x"), 2))
-        self._draw_line(
-            painter,
-            Point3D(0.0, 0.0, 0.0),
-            Point3D(axis_length, 0.0, 0.0),
-        )
+        self._draw_line(painter, Point3D(0.0, 0.0, 0.0), Point3D(axis_length, 0.0, 0.0))
         painter.setPen(QPen(self._theme.named_color("toolpath_axis_y"), 2))
-        self._draw_line(
-            painter,
-            Point3D(0.0, 0.0, 0.0),
-            Point3D(0.0, axis_length, 0.0),
-        )
+        self._draw_line(painter, Point3D(0.0, 0.0, 0.0), Point3D(0.0, axis_length, 0.0))
         painter.setPen(QPen(self._theme.named_color("toolpath_axis_z"), 2))
         self._draw_line(
-            painter,
-            Point3D(0.0, 0.0, 0.0),
-            Point3D(0.0, 0.0, axis_length * 0.35),
+            painter, Point3D(0.0, 0.0, 0.0), Point3D(0.0, 0.0, axis_length * 0.35)
         )
 
     def _draw_toolpath(self, painter: QPainter) -> None:
@@ -334,9 +320,7 @@ class ToolpathViewer(QOpenGLWidget):
         if not self.document:
             painter.drawText(16, 50, "Open an .nc file to inspect its motion path.")
             painter.drawText(
-                16,
-                72,
-                "Left drag: orbit   Right drag: pan   Wheel: zoom   F: fit",
+                16, 72, "Left drag: orbit   Right drag: pan   Wheel: zoom   F: fit"
             )
             return
 
@@ -409,13 +393,15 @@ class ToolpathViewer(QOpenGLWidget):
 
     def _is_major_grid_line(self, value: float, spacing: float) -> bool:
         major_spacing = spacing * 5.0
-        return math.isclose(value / major_spacing, round(value / major_spacing), abs_tol=1e-6)
+        return math.isclose(
+            value / major_spacing, round(value / major_spacing), abs_tol=1e-6
+        )
 
     def _nice_spacing(self, value: float) -> float:
         if value <= 0:
             return 1.0
         exponent = math.floor(math.log10(value))
-        fraction = value / (10 ** exponent)
+        fraction = value / (10**exponent)
         if fraction < 1.5:
             nice = 1.0
         elif fraction < 3.5:
@@ -424,4 +410,4 @@ class ToolpathViewer(QOpenGLWidget):
             nice = 5.0
         else:
             nice = 10.0
-        return nice * (10 ** exponent)
+        return nice * (10**exponent)
