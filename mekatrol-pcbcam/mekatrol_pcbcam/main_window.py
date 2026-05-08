@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -78,6 +79,53 @@ class CurrentPageStackedWidget(QStackedWidget):
         if current is not None:
             return current.minimumSizeHint()
         return super().minimumSizeHint()
+
+
+class ResponsiveButtonGrid(QWidget):
+    def __init__(self, *, min_column_width: int = 180, parent=None) -> None:
+        super().__init__(parent)
+        self._min_column_width = min_column_width
+        self._buttons: list[QPushButton] = []
+        self._column_count = 0
+        self._layout = QGridLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(8)
+
+    def addButton(self, button: QPushButton) -> None:
+        button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._buttons.append(button)
+        self._relayout()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._relayout()
+
+    def _relayout(self) -> None:
+        if not self._buttons:
+            return
+
+        available_width = self.width() if self.width() > 0 else self.sizeHint().width()
+        column_count = max(1, available_width // self._min_column_width)
+        column_count = min(column_count, len(self._buttons))
+        if column_count == self._column_count and self._layout.count() == len(
+            self._buttons
+        ):
+            return
+
+        while self._layout.count():
+            self._layout.takeAt(0)
+
+        previous_column_count = self._column_count
+        self._column_count = column_count
+        for index, button in enumerate(self._buttons):
+            row = index // column_count
+            column = index % column_count
+            self._layout.addWidget(button, row, column)
+            button.show()
+        for column in range(max(previous_column_count, column_count)):
+            self._layout.setColumnStretch(column, 1 if column < column_count else 0)
+        self._layout.invalidate()
+        self.updateGeometry()
 
 
 class MainWindow(QMainWindow):
@@ -799,17 +847,6 @@ class MainWindow(QMainWindow):
         )
         body.setWordWrap(True)
 
-        action_row = QHBoxLayout()
-        load_tools_button = QPushButton("Load tools.yaml")
-        load_tools_button.clicked.connect(self._browse_tool_library)
-        generate_selected_button = QPushButton("Generate Selected Path")
-        generate_selected_button.clicked.connect(self._generate_selected_edge_cut_path)
-        generate_all_button = QPushButton("Generate All Paths")
-        generate_all_button.clicked.connect(self._generate_edge_cuts)
-        action_row.addWidget(load_tools_button)
-        action_row.addWidget(generate_selected_button)
-        action_row.addWidget(generate_all_button)
-
         card = QFrame()
         card.setFrameShape(QFrame.Shape.StyledPanel)
         card.setObjectName("sidebarPanelCard")
@@ -857,13 +894,23 @@ class MainWindow(QMainWindow):
         path_list_label = QLabel("Path List")
         path_list_label.setObjectName("sectionHeading")
 
-        path_action_row = QHBoxLayout()
-        delete_selected_button = QPushButton("Delete Selected Path")
-        delete_selected_button.clicked.connect(self._delete_selected_edge_cut_path)
+        path_action_grid = ResponsiveButtonGrid(min_column_width=168)
+        self.edge_cut_generate_selected_button = QPushButton("Generate Selected Path")
+        self.edge_cut_generate_selected_button.clicked.connect(
+            self._generate_selected_edge_cut_path
+        )
+        generate_all_button = QPushButton("Generate All Paths")
+        generate_all_button.clicked.connect(self._generate_edge_cuts)
+        self.edge_cut_delete_selected_button = QPushButton("Delete Selected Path")
+        self.edge_cut_delete_selected_button.clicked.connect(
+            self._delete_selected_edge_cut_path
+        )
         delete_all_button = QPushButton("Delete All Paths")
         delete_all_button.clicked.connect(self._delete_all_edge_cut_paths)
-        path_action_row.addWidget(delete_selected_button)
-        path_action_row.addWidget(delete_all_button)
+        path_action_grid.addButton(self.edge_cut_generate_selected_button)
+        path_action_grid.addButton(generate_all_button)
+        path_action_grid.addButton(self.edge_cut_delete_selected_button)
+        path_action_grid.addButton(delete_all_button)
 
         self.edge_cut_profile_list = QListWidget()
         self.edge_cut_profile_list.itemChanged.connect(
@@ -884,10 +931,9 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(heading)
         layout.addWidget(body)
-        layout.addLayout(action_row)
         layout.addWidget(card)
         layout.addWidget(path_list_label)
-        layout.addLayout(path_action_row)
+        layout.addWidget(path_action_grid)
         layout.addWidget(self.edge_cut_profile_list, 1)
         layout.addWidget(self.edge_cut_hint)
         layout.addWidget(self.edge_cuts_value)
@@ -2097,6 +2143,7 @@ class MainWindow(QMainWindow):
         self._sync_mirror_setup_page()
         self._sync_alignment_holes_page()
         self._sync_edge_cut_page()
+        self._sync_edge_cut_action_buttons()
         self._sync_generated_outputs()
         assigned_edges = self.project.layer_assignments["edges"]
         stock_bounds = self._stock_bounds()
@@ -2971,6 +3018,34 @@ class MainWindow(QMainWindow):
         ):
             return set()
         return {self._selected_edge_cut_profile_index}
+
+    def _sync_edge_cut_action_buttons(self) -> None:
+        if not hasattr(self, "edge_cut_generate_selected_button"):
+            return
+        has_selected_path = bool(self._selected_edge_cut_path_indices())
+        self.edge_cut_delete_selected_button.setEnabled(has_selected_path)
+        self.edge_cut_generate_selected_button.setEnabled(
+            self._selected_edge_cut_path_can_generate()
+        )
+
+    def _selected_edge_cut_path_can_generate(self) -> bool:
+        selected_indices = self._selected_edge_cut_path_indices()
+        if len(selected_indices) != 1:
+            return False
+        if self._assigned_gerber("edges") is None:
+            return False
+        if not self._edge_cut_validation_result.is_valid:
+            return False
+        profile = self.project.edge_cut_profiles[next(iter(selected_indices))]
+        if profile.mode == "none":
+            return False
+        if self._edge_cut_tool_by_id(profile.tool_id) is None:
+            return False
+        polygon_keys = {
+            self._polygon_key(polygon)
+            for polygon in self._edge_cut_validation_result.polygons
+        }
+        return any(key in polygon_keys for key in profile.polygon_keys)
 
     def _visible_generated_edge_cut_preview_paths(
         self,

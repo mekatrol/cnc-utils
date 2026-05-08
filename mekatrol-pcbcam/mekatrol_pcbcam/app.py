@@ -724,9 +724,9 @@ tools:
     preferred_speed: 12000
 
   - id: 50d851ae-cbc5-4579-8d58-1fa5d738701c
-    name: Square End Mill 0.1 mm
+    name: Square End Mill 2.0 mm
     type: endmill
-    diameter: 0.1
+    diameter: 02.0
     feed_rate: 300
     preferred_speed: 12000
 """
