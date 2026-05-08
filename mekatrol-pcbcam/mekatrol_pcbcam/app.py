@@ -44,7 +44,6 @@ from .theme import (
 )
 from .ui_save_state import UiSaveState
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -710,29 +709,28 @@ def _ensure_default_tools_file() -> Path:
     content = "\n".join(
         [
             "# Default mekatrol-pcbcam tool library.",
-            "# Tool names follow common CAM terminology:",
-            "# - chamfer_mill for V-bit style engraving/isolation tools",
-            "# - drill for twist drills",
-            "# - end_mill for square end mills",
-            "v_bits:",
-            "  - id: vbit_0p2_30deg",
+            "tools:",
+            "  - id: 4a89c55d-d624-4b99-b4bf-60c54267c2d0",
             "    name: V-Bit 0.2 mm Tip",
-            "    type: chamfer_mill",
+            "    type: v-bit",
             "    tip_diameter: 0.2",
-            "    angle: 30",
+            "    tip_angle: 30",
+            "    feed_rate: 300",
+            "    preferred_speed: 12000",
             "",
-            "drilling:",
-            "  - id: drill_0p1",
+            "  - id: e8a9fe20-d062-428f-b96a-b23bc03f7fd9",
             "    name: Twist Drill 0.1 mm",
             "    type: drill",
             "    diameter: 0.1",
+            "    feed_rate: 120",
+            "    preferred_speed: 12000",
             "",
-            "milling:",
-            "  - id: endmill_0p1_square",
+            "  - id: 50d851ae-cbc5-4579-8d58-1fa5d738701c",
             "    name: Square End Mill 0.1 mm",
-            "    type: end_mill",
+            "    type: endmill",
             "    diameter: 0.1",
-            "    corner_style: square",
+            "    feed_rate: 300",
+            "    preferred_speed: 12000",
             "",
         ]
     )

@@ -55,6 +55,7 @@ from .pcb_project import PcbProject
 from .theme import AppTheme, load_theme
 from .theme_settings_dialog import ThemeSettingsDialog, discover_theme_options
 from .tool_library import ToolLibrary
+from .tool_settings_dialog import ToolSettingsDialog
 from .viewer import ToolpathViewer
 from .wizard_step_bar import WizardStepBar
 
@@ -980,6 +981,9 @@ class MainWindow(QMainWindow):
         theme_action = QAction("Theme...", self)
         theme_action.triggered.connect(self._open_theme_settings)
         settings_menu.addAction(theme_action)
+        tools_action = QAction("Tools...", self)
+        tools_action.triggered.connect(self._open_tool_settings)
+        settings_menu.addAction(tools_action)
 
     def _apply_muted_text_style(self, label: QLabel) -> None:
         if label not in self._muted_labels:
@@ -1219,6 +1223,32 @@ class MainWindow(QMainWindow):
         self._save_config(self.config)
         self._replace_theme(theme)
         self.statusBar().showMessage(f"Theme changed to {theme.theme_info.name}", 3000)
+
+    def _open_tool_settings(self) -> None:
+        path = self._editable_tool_library_path()
+        if not path.exists():
+            tool_library = None
+        elif self.tool_library is None or self.tool_library.path != path:
+            try:
+                tool_library = ToolLibrary.load(path)
+            except Exception as exc:
+                logger.exception("Failed to load tool library for editing: %s", path)
+                QMessageBox.warning(
+                    self,
+                    "Tool settings",
+                    f"{path} is not in the current tool format.\n"
+                    f"{exc}\n\nSaving will replace it with the current format.",
+                )
+                tool_library = None
+        else:
+            tool_library = self.tool_library
+
+        dialog = ToolSettingsDialog(path, tool_library, self)
+        if dialog.exec() == 0 or not dialog.saved():
+            return
+
+        self._load_tool_library(path, show_errors=True)
+        self.statusBar().showMessage(f"Saved tool library {path.name}", 3000)
 
     def _replace_theme(self, new_theme: AppTheme) -> None:
         for field in fields(AppTheme):
@@ -2335,11 +2365,7 @@ class MainWindow(QMainWindow):
         self._sync_ui()
 
     def _default_tool_library(self) -> ToolLibrary | None:
-        config_root = QStandardPaths.writableLocation(
-            QStandardPaths.StandardLocation.GenericConfigLocation
-        )
-        base_path = Path(config_root) if config_root else Path.home() / ".config"
-        candidate = base_path / ORGANIZATION_NAME / APPLICATION_NAME / "tools.yaml"
+        candidate = self._default_tool_library_path()
         if not candidate.exists():
             return None
         try:
@@ -2350,6 +2376,20 @@ class MainWindow(QMainWindow):
         self.project.tool_library_path = candidate.resolve()
         self._prune_invalid_tool_selections()
         return library
+
+    def _default_tool_library_path(self) -> Path:
+        config_root = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.GenericConfigLocation
+        )
+        base_path = Path(config_root) if config_root else Path.home() / ".config"
+        return base_path / ORGANIZATION_NAME / APPLICATION_NAME / "tools.yaml"
+
+    def _editable_tool_library_path(self) -> Path:
+        if self.tool_library is not None:
+            return self.tool_library.path
+        if self.project.tool_library_path is not None:
+            return self.project.tool_library_path
+        return self._default_tool_library_path()
 
     def _prune_invalid_tool_selections(self) -> None:
         if self.tool_library is None:
