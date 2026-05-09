@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import math
 from collections.abc import Callable
 from dataclasses import fields
 from pathlib import Path
@@ -53,8 +54,11 @@ from .nc_origin import (
 )
 from .pcb_preview_widget import PcbPreviewWidget
 from .pcb_project import PcbProject
+from .point_3d import Point3D
 from .theme import AppTheme, load_theme
 from .theme_settings_dialog import ThemeSettingsDialog, discover_theme_options
+from .toolpath_document import ToolpathDocument
+from .toolpath_stats import ToolpathStats
 from .tool_library import ToolLibrary
 from .tool_settings_dialog import ToolSettingsDialog
 from .viewer import ToolpathViewer
@@ -186,6 +190,9 @@ class MainWindow(QMainWindow):
         self._alignment_preview_row_map: list[int] = []
         self.operation_tool_combos: dict[str, tuple[QComboBox, str]] = {}
         self.tool_library_value_labels: list[QLabel] = []
+        self._hidden_generated_output_keys: set[str] = set()
+        self._loaded_generated_output_keys: tuple[str, ...] = ()
+        self._loaded_generated_output_paths: tuple[str, ...] = ()
 
         self.preview = PcbPreviewWidget(self.theme)
         self.preview.origin_selected.connect(self._set_origin_location)
@@ -949,13 +956,13 @@ class MainWindow(QMainWindow):
         heading = QLabel("Step 10: NC Preview")
         heading.setObjectName("pageHeading")
         body = QLabel(
-            "Select any generated NC file to inspect it in the 3D toolpath viewer."
+            "Generated NC files are shown together in the 3D toolpath viewer. Toggle files in the list to show or hide them."
         )
         body.setWordWrap(True)
 
         self.generated_output_list = QListWidget()
-        self.generated_output_list.currentRowChanged.connect(
-            self._generated_output_selected
+        self.generated_output_list.itemChanged.connect(
+            self._generated_output_item_changed
         )
 
         layout.addWidget(heading)
@@ -1310,6 +1317,9 @@ class MainWindow(QMainWindow):
         self.imported_drills = []
         self.tool_library = self._default_tool_library()
         self.generated_documents = {}
+        self._hidden_generated_output_keys = set()
+        self._loaded_generated_output_keys = ()
+        self._loaded_generated_output_paths = ()
         self.has_unsaved_changes = False
         self.statusBar().showMessage("Started new project", 3000)
         self._sync_ui()
@@ -1340,6 +1350,9 @@ class MainWindow(QMainWindow):
         self.imported_drills = []
         self.tool_library = self._default_tool_library()
         self.generated_documents = {}
+        self._hidden_generated_output_keys = set()
+        self._loaded_generated_output_keys = ()
+        self._loaded_generated_output_paths = ()
         self.has_unsaved_changes = False
         self.statusBar().showMessage("Closed project", 3000)
         self._sync_ui()
@@ -1406,6 +1419,9 @@ class MainWindow(QMainWindow):
         self._load_tool_library_from_project(show_errors=show_errors)
         self._remember_recent_project(path)
         self.generated_documents = {}
+        self._hidden_generated_output_keys = set()
+        self._loaded_generated_output_keys = ()
+        self._loaded_generated_output_paths = ()
         self.has_unsaved_changes = False
         if show_message:
             self.statusBar().showMessage(f"Opened {Path(path).name}", 3000)
@@ -2028,18 +2044,16 @@ class MainWindow(QMainWindow):
             return
         self._register_generated_output("edge_cuts", output_path)
 
-    def _generated_output_selected(self, row: int) -> None:
-        if row < 0:
-            self.toolpath_viewer.load_document(None)
-            return
-        item = self.generated_output_list.item(row)
-        if item is None:
-            return
+    def _generated_output_item_changed(self, item: QListWidgetItem) -> None:
         operation_key = item.data(Qt.ItemDataRole.UserRole)
-        path = self.project.generated_outputs.get(str(operation_key))
-        if path is None:
+        if not operation_key:
             return
-        self._load_generated_document(path)
+        key = str(operation_key)
+        if item.checkState() == Qt.CheckState.Checked:
+            self._hidden_generated_output_keys.discard(key)
+        else:
+            self._hidden_generated_output_keys.add(key)
+        self._load_selected_generated_documents()
 
     def _parse_gerber_paths(self, paths: list[Path]) -> list[ImportedGerberFile]:
         imports = [self.gerber_parser.parse_file(path) for path in paths]
@@ -2150,7 +2164,10 @@ class MainWindow(QMainWindow):
         show_stock = (
             current >= PcbProject.STEP_STOCK_DEFINITION and stock_bounds is not None
         )
-        fit_preview_view = page_changed or current != PcbProject.STEP_EDGE_CUTS
+        fit_preview_view = page_changed or current not in {
+            PcbProject.STEP_ALIGNMENT_HOLES,
+            PcbProject.STEP_EDGE_CUTS,
+        }
         self.preview.load_project_geometry(
             self._active_gerbers(),
             self._active_drills(),
@@ -3636,14 +3653,27 @@ class MainWindow(QMainWindow):
 
     def _register_generated_output(self, operation_key: str, path: Path) -> None:
         self.project.generated_outputs[operation_key] = path.resolve()
+        self._hidden_generated_output_keys.discard(operation_key)
+        self._loaded_generated_output_keys = ()
+        self._loaded_generated_output_paths = ()
         self._mark_project_dirty()
         self._load_generated_document(path)
         self._sync_ui()
 
     def _load_generated_document(self, path: Path) -> None:
-        document = self.gcode_parser.parse_file(path)
-        self.generated_documents[str(path.resolve())] = document
+        document = self._generated_document(path, force=True)
         self.toolpath_viewer.load_document(document)
+
+    def _generated_document(
+        self, path: Path, *, force: bool = False
+    ) -> ToolpathDocument:
+        resolved_path = path.resolve()
+        cache_key = str(resolved_path)
+        document = self.generated_documents.get(cache_key)
+        if force or document is None:
+            document = self.gcode_parser.parse_file(resolved_path)
+            self.generated_documents[cache_key] = document
+        return document
 
     def _sync_generated_outputs(self) -> None:
         generated_map = {
@@ -3658,11 +3688,10 @@ class MainWindow(QMainWindow):
             path = self.project.generated_outputs.get(key)
             label.setText(str(path) if path is not None else "Not generated yet")
 
+        generated_keys = set(self.project.generated_outputs)
+        self._hidden_generated_output_keys.intersection_update(generated_keys)
+
         self.generated_output_list.blockSignals(True)
-        current_key = None
-        current_item = self.generated_output_list.currentItem()
-        if current_item is not None:
-            current_key = current_item.data(Qt.ItemDataRole.UserRole)
         self.generated_output_list.clear()
         for key, title in (
             ("front_isolation", "Front Isolation"),
@@ -3676,18 +3705,102 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(f"{title}: {path.name}")
             item.setToolTip(str(path))
             item.setData(Qt.ItemDataRole.UserRole, key)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                Qt.CheckState.Unchecked
+                if key in self._hidden_generated_output_keys
+                else Qt.CheckState.Checked
+            )
             self.generated_output_list.addItem(item)
-            if current_key == key:
-                self.generated_output_list.setCurrentItem(item)
         self.generated_output_list.blockSignals(False)
-        if self.generated_output_list.count() == 0:
+        self._load_selected_generated_documents()
+
+    def _load_selected_generated_documents(self) -> None:
+        documents = []
+        selected_keys = []
+        selected_paths = []
+        for key in (
+            "front_isolation",
+            "back_isolation",
+            "drilling",
+            "edge_cuts",
+        ):
+            if key in self._hidden_generated_output_keys:
+                continue
+            path = self.project.generated_outputs.get(key)
+            if path is None:
+                continue
+            try:
+                document = self._generated_document(path)
+            except Exception:
+                logger.exception("Failed to load generated NC output: %s", path)
+                continue
+            selected_keys.append(key)
+            selected_paths.append(str(path.resolve()))
+            documents.append(document)
+        selected_key_state = tuple(selected_keys)
+        selected_path_state = tuple(selected_paths)
+        if (
+            selected_key_state == self._loaded_generated_output_keys
+            and selected_path_state == self._loaded_generated_output_paths
+        ):
+            return
+        self._loaded_generated_output_keys = selected_key_state
+        self._loaded_generated_output_paths = selected_path_state
+        if not documents:
             self.toolpath_viewer.load_document(None)
             return
-        if (
-            self.generated_output_list.count() > 0
-            and self.generated_output_list.currentRow() < 0
-        ):
-            self.generated_output_list.setCurrentRow(0)
+        if len(documents) == 1:
+            self.toolpath_viewer.load_document(documents[0])
+            return
+        self.toolpath_viewer.load_document(self._combined_toolpath_document(documents))
+
+    def _combined_toolpath_document(
+        self, documents: list[ToolpathDocument]
+    ) -> ToolpathDocument:
+        segments = [segment for document in documents for segment in document.segments]
+        if not segments:
+            return ToolpathDocument(
+                path=Path("Selected NC paths"),
+                segments=[],
+                stats=ToolpathStats(
+                    min_point=Point3D(0.0, 0.0, 0.0),
+                    max_point=Point3D(0.0, 0.0, 0.0),
+                    segment_count=0,
+                    rapid_count=0,
+                    cut_count=0,
+                    path_length=0.0,
+                ),
+            )
+        min_point = Point3D(
+            min(min(segment.start.x, segment.end.x) for segment in segments),
+            min(min(segment.start.y, segment.end.y) for segment in segments),
+            min(min(segment.start.z, segment.end.z) for segment in segments),
+        )
+        max_point = Point3D(
+            max(max(segment.start.x, segment.end.x) for segment in segments),
+            max(max(segment.start.y, segment.end.y) for segment in segments),
+            max(max(segment.start.z, segment.end.z) for segment in segments),
+        )
+        path_length = sum(
+            math.dist(
+                (segment.start.x, segment.start.y, segment.start.z),
+                (segment.end.x, segment.end.y, segment.end.z),
+            )
+            for segment in segments
+        )
+        return ToolpathDocument(
+            path=Path("Selected NC paths"),
+            segments=segments,
+            stats=ToolpathStats(
+                min_point=min_point,
+                max_point=max_point,
+                segment_count=len(segments),
+                rapid_count=sum(1 for segment in segments if segment.rapid),
+                cut_count=sum(1 for segment in segments if not segment.rapid),
+                path_length=path_length,
+            ),
+        )
 
     def _scroll_current_step_into_view(self) -> None:
         current_rect = self.step_bar.step_bounds(self.project.current_step_index)
