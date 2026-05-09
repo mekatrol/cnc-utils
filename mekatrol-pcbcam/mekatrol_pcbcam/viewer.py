@@ -51,7 +51,10 @@ class ToolpathViewer(QOpenGLWidget):
         self._origin_point: tuple[float, float] | None = None
         logger.debug("Toolpath viewer initialized")
 
-    def load_document(self, document: ToolpathDocument | None) -> None:
+    def load_document(
+        self, document: ToolpathDocument | None, *, preserve_camera: bool = False
+    ) -> None:
+        previous_camera = self.camera
         self.document = document
         if document is None or not document.segments:
             self._pivot = Point3D(0.0, 0.0, 0.0)
@@ -62,7 +65,16 @@ class ToolpathViewer(QOpenGLWidget):
             self._span_y = 100.0
             self._span_z = 0.0
             self._apply_stock_bounds()
-            self.camera = CameraState()
+            if preserve_camera:
+                self.camera = CameraState(
+                    yaw=previous_camera.yaw,
+                    pitch=previous_camera.pitch,
+                    zoom=previous_camera.zoom,
+                    pan_x=previous_camera.pan_x,
+                    pan_y=previous_camera.pan_y,
+                )
+            else:
+                self.camera = CameraState()
             self.update()
             logger.debug("Viewer reset to empty document state")
             return
@@ -88,7 +100,17 @@ class ToolpathViewer(QOpenGLWidget):
             self._pivot.y,
             self._pivot.z,
         )
-        self.fit_to_view()
+        if preserve_camera:
+            self.camera = CameraState(
+                yaw=previous_camera.yaw,
+                pitch=previous_camera.pitch,
+                zoom=previous_camera.zoom,
+                pan_x=previous_camera.pan_x,
+                pan_y=previous_camera.pan_y,
+            )
+            self.update()
+        else:
+            self.fit_to_view()
 
     def set_stock_overlay(
         self,

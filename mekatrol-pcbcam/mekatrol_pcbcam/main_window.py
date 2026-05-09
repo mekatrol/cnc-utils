@@ -2183,7 +2183,7 @@ class MainWindow(QMainWindow):
             self._hidden_generated_output_keys.discard(key)
         else:
             self._hidden_generated_output_keys.add(key)
-        self._load_selected_generated_documents()
+        self._load_selected_generated_documents(preserve_camera=True)
 
     def _parse_gerber_paths(self, paths: list[Path]) -> list[ImportedGerberFile]:
         imports = [self.gerber_parser.parse_file(path) for path in paths]
@@ -3979,7 +3979,9 @@ class MainWindow(QMainWindow):
         self.generated_output_list.blockSignals(False)
         self._load_selected_generated_documents()
 
-    def _load_selected_generated_documents(self) -> None:
+    def _load_selected_generated_documents(
+        self, *, preserve_camera: bool = False
+    ) -> None:
         documents = []
         selected_keys = []
         selected_paths = []
@@ -4011,16 +4013,21 @@ class MainWindow(QMainWindow):
         self._loaded_generated_output_keys = selected_key_state
         self._loaded_generated_output_paths = selected_path_state
         if not documents:
-            self.toolpath_viewer.load_document(None)
+            self.toolpath_viewer.load_document(None, preserve_camera=preserve_camera)
             return
         documents = [
             self._preview_toolpath_document(key, document)
             for key, document in zip(selected_keys, documents)
         ]
         if len(documents) == 1:
-            self.toolpath_viewer.load_document(documents[0])
+            self.toolpath_viewer.load_document(
+                documents[0], preserve_camera=preserve_camera
+            )
             return
-        self.toolpath_viewer.load_document(self._combined_toolpath_document(documents))
+        self.toolpath_viewer.load_document(
+            self._combined_toolpath_document(documents),
+            preserve_camera=preserve_camera,
+        )
 
     def _visible_generated_output_keys_for_preview(self) -> tuple[str, ...]:
         if self.project.mirror_view_side == "back":
