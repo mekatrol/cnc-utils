@@ -10,7 +10,7 @@ from .nc_origin import DEFAULT_NC_ORIGIN, normalize_nc_origin
 
 
 class PcbProject:
-    VERSION = 1
+    VERSION = 2
     STEP_PROJECT = 0
     STEP_STOCK_DEFINITION = 1
     STEP_GERBER_IMPORT = 2
@@ -21,7 +21,9 @@ class PcbProject:
     STEP_DRILLING = 7
     STEP_EDGE_CUTS = 8
     STEP_NC_PREVIEW = 9
-    TOTAL_STEPS = 10
+    STEP_HEIGHT_MAP = 10
+    STEP_HEIGHT_ADJUST_PREVIEW = 11
+    TOTAL_STEPS = 12
     STEP_KEYS = [
         "project",
         "stock_definition",
@@ -33,6 +35,8 @@ class PcbProject:
         "drilling",
         "edge_cuts",
         "nc_preview",
+        "height_map",
+        "height_adjust_preview",
     ]
 
     def __init__(self) -> None:
@@ -69,6 +73,8 @@ class PcbProject:
         self.alignment_holes: list[AlignmentHole] = []
         self.edge_cut_profiles: list[EdgeCutPath] = []
         self.generated_outputs: dict[str, Path] = {}
+        self.height_map_csv_path: Path | None = None
+        self.height_adjusted_outputs: dict[str, Path] = {}
         self.current_step_index = 0
         self.highest_commenced_step = 0
         self.completed_steps: set[int] = {0}
@@ -416,6 +422,19 @@ class PcbProject:
                 key: self._to_relative_path(value, self.project_path.parent)
                 for key, value in self.generated_outputs.items()
             },
+            "height_map": {
+                "csv_path": (
+                    None
+                    if self.height_map_csv_path is None
+                    else self._to_relative_path(
+                        self.height_map_csv_path, self.project_path.parent
+                    )
+                ),
+                "adjusted_outputs": {
+                    key: self._to_relative_path(value, self.project_path.parent)
+                    for key, value in self.height_adjusted_outputs.items()
+                },
+            },
             "wizard": {
                 "current_step": self._step_key_for_index(self.current_step_index),
                 "highest_commenced_step": self._step_key_for_index(
@@ -436,8 +455,9 @@ class PcbProject:
         loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         if not isinstance(loaded, dict):
             raise ValueError("Project file must contain a top-level mapping.")
-        if loaded.get("version") != cls.VERSION:
-            raise ValueError(f"Project file version must be {cls.VERSION}.")
+        version = loaded.get("version")
+        if version not in {1, cls.VERSION}:
+            raise ValueError(f"Project file version must be 1 or {cls.VERSION}.")
         project = cls()
         project.project_path = path.resolve()
         project.gerber_paths = [
@@ -593,6 +613,26 @@ class PcbProject:
                     project.generated_outputs[key] = project._from_relative_path(
                         raw_path, project.project_path.parent
                     )
+        height_map_data = loaded.get("height_map", {})
+        if isinstance(height_map_data, dict):
+            raw_csv_path = height_map_data.get("csv_path")
+            if isinstance(raw_csv_path, str) and raw_csv_path.strip():
+                project.height_map_csv_path = project._from_relative_path(
+                    raw_csv_path, project.project_path.parent
+                )
+            raw_adjusted_outputs = height_map_data.get("adjusted_outputs", {})
+            if isinstance(raw_adjusted_outputs, dict):
+                for key, raw_path in raw_adjusted_outputs.items():
+                    if (
+                        isinstance(key, str)
+                        and isinstance(raw_path, str)
+                        and raw_path.strip()
+                    ):
+                        project.height_adjusted_outputs[key] = (
+                            project._from_relative_path(
+                                raw_path, project.project_path.parent
+                            )
+                        )
         wizard_data = loaded.get("wizard", {})
         project.current_step_index = project._step_index_for_key(
             wizard_data.get("current_step"), 0
@@ -635,6 +675,11 @@ class PcbProject:
             )
         if index <= self.STEP_EDGE_CUTS:
             self.generated_outputs = {}
+            self.height_map_csv_path = None
+            self.height_adjusted_outputs = {}
+        elif index <= self.STEP_NC_PREVIEW:
+            self.height_map_csv_path = None
+            self.height_adjusted_outputs = {}
         self.highest_commenced_step = min(self.highest_commenced_step, index + 1)
         self.current_step_index = min(self.current_step_index, index + 1)
 

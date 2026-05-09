@@ -7,11 +7,12 @@ from collections.abc import Callable
 from dataclasses import fields
 from pathlib import Path
 
-from PySide6.QtCore import QSize, QStandardPaths, Qt, QTimer
+from PySide6.QtCore import QSize, QStandardPaths, QThread, Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QDoubleValidator
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
@@ -34,6 +35,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from serial.tools import list_ports
 
 from .alignment_hole import AlignmentHole
 from .app_config import AppConfig
@@ -43,6 +45,9 @@ from .edge_cut_validator import EdgeCutValidationResult, validate_edge_segments
 from .excellon_file_parser import ExcellonFileParser
 from .gcode_parser import GCodeParser
 from .gerber_file_parser import GerberFileParser
+from .height_map_adjuster import adjust_nc_file
+from .height_map_grbl import HeightMapGrbl
+from .height_map_probe_worker import HeightMapProbeWorker, ProbeParams
 from .imported_drill_file import ImportedDrillFile
 from .imported_gerber_file import ImportedGerberFile
 from .mirror_preview_widget import MirrorPreviewWidget
@@ -145,6 +150,8 @@ class MainWindow(QMainWindow):
         "Drilling",
         "Edge Cuts",
         "NC Preview",
+        "Height Map",
+        "Height Adjust",
     ]
     FILE_ALIGNMENT_LABELS = {
         "top_left": "Top Left",
@@ -157,7 +164,7 @@ class MainWindow(QMainWindow):
         "bottom_center": "Bottom Mid",
         "bottom_right": "Bottom Right",
     }
-    IMPLEMENTED_STEP_COUNT = 10
+    IMPLEMENTED_STEP_COUNT = 12
 
     def __init__(
         self,
@@ -192,8 +199,18 @@ class MainWindow(QMainWindow):
         self.operation_tool_combos: dict[str, tuple[QComboBox, str]] = {}
         self.tool_library_value_labels: list[QLabel] = []
         self._hidden_generated_output_keys: set[str] = set()
+        self._hidden_pre_height_adjust_keys: set[str] = set()
+        self._hidden_post_height_adjust_keys: set[str] = set()
         self._loaded_generated_output_keys: tuple[str, ...] = ()
         self._loaded_generated_output_paths: tuple[str, ...] = ()
+        self._height_map_grbl: HeightMapGrbl | None = None
+        self._height_map_status_timer = QTimer(self)
+        self._height_map_status_timer.setInterval(200)
+        self._height_map_status_timer.timeout.connect(self._poll_height_map_status)
+        self._height_map_thread: QThread | None = None
+        self._height_map_worker: HeightMapProbeWorker | None = None
+        self._height_map_probe_csv_path: Path | None = None
+        self._height_map_probe_cancel_requested = False
 
         self.preview = PcbPreviewWidget(self.theme)
         self.preview.origin_selected.connect(self._set_origin_location)
@@ -358,6 +375,8 @@ class MainWindow(QMainWindow):
         )
         self.page_stack.addWidget(self._build_edge_cuts_page())
         self.page_stack.addWidget(self._build_nc_preview_page())
+        self.page_stack.addWidget(self._build_height_map_page())
+        self.page_stack.addWidget(self._build_height_adjust_preview_page())
         if self.page_stack.layout() is not None:
             self.page_stack.layout().setAlignment(Qt.AlignmentFlag.AlignTop)
 
@@ -1013,6 +1032,200 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.generated_output_list, 1)
         return page
 
+    def _build_height_map_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        heading = QLabel("Step 11: Height Map")
+        heading.setObjectName("pageHeading")
+        body = QLabel(
+            "Generate a stock height-map CSV, then create height-adjusted "
+            "copies of the generated NC files."
+        )
+        body.setWordWrap(True)
+
+        card = QFrame()
+        card.setFrameShape(QFrame.Shape.StyledPanel)
+        card.setObjectName("sidebarPanelCard")
+        self._sidebar_panels.append(card)
+        grid = QGridLayout(card)
+        grid.setContentsMargins(14, 14, 14, 14)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+        grid.setColumnStretch(0, 0)
+        grid.setColumnStretch(1, 1)
+
+        self.height_map_step_x_input = QLineEdit("10")
+        self.height_map_step_x_input.setValidator(
+            QDoubleValidator(0.1, 1_000_000.0, 3, self)
+        )
+        self.height_map_step_y_input = QLineEdit("10")
+        self.height_map_step_y_input.setValidator(
+            QDoubleValidator(0.1, 1_000_000.0, 3, self)
+        )
+        self.height_map_port_combo = QComboBox()
+        self.height_map_port_combo.setSizeAdjustPolicy(
+            QComboBox.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.height_map_port_combo.setMinimumContentsLength(12)
+        self.height_map_port_combo.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
+        self.height_map_refresh_ports_button = QPushButton("Refresh")
+        self.height_map_refresh_ports_button.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        self.height_map_refresh_ports_button.clicked.connect(
+            self._refresh_height_map_ports
+        )
+        self.height_map_baud_input = QLineEdit("115200")
+        self.height_map_retract_z_input = QLineEdit("3")
+        self.height_map_max_probe_travel_input = QLineEdit("5")
+        self.height_map_probe_feed_input = QLineEdit("60")
+        self.height_map_travel_feed_input = QLineEdit("600")
+        self.height_map_settle_input = QLineEdit("0.1")
+        for input_widget in (
+            self.height_map_baud_input,
+            self.height_map_retract_z_input,
+            self.height_map_max_probe_travel_input,
+            self.height_map_probe_feed_input,
+            self.height_map_travel_feed_input,
+            self.height_map_settle_input,
+        ):
+            input_widget.setValidator(QDoubleValidator(0.0, 1_000_000.0, 3, self))
+        self.height_map_unlock_check = QCheckBox("Send $X unlock")
+        self.height_map_unlock_check.setChecked(True)
+        self.height_map_home_check = QCheckBox("Send $H home")
+        self.height_map_connect_button = QPushButton("Connect")
+        self.height_map_connect_button.clicked.connect(self._connect_height_map_grbl)
+        self.height_map_disconnect_button = QPushButton("Disconnect")
+        self.height_map_disconnect_button.clicked.connect(
+            lambda _checked=False: self._disconnect_height_map_grbl()
+        )
+        self.height_map_disconnect_button.setEnabled(False)
+        port_row = QHBoxLayout()
+        port_row.setContentsMargins(0, 0, 0, 0)
+        port_row.setSpacing(6)
+        port_row.addWidget(self.height_map_port_combo, 1)
+        port_row.addWidget(self.height_map_refresh_ports_button)
+        connect_row = QHBoxLayout()
+        connect_row.setContentsMargins(0, 0, 0, 0)
+        connect_row.setSpacing(6)
+        connect_row.addWidget(self.height_map_connect_button)
+        connect_row.addWidget(self.height_map_disconnect_button)
+        self.height_map_state_value = QLabel("State: ?")
+        self.height_map_mpos_value = QLabel("MPos: X=- Y=- Z=-")
+        self.height_map_wco_value = QLabel("WCO: X=- Y=- Z=-")
+        self.height_map_wpos_value = QLabel("WPos: X=- Y=- Z=-")
+        self.height_map_csv_value = QLabel("Not generated yet")
+        self.height_map_csv_value.setWordWrap(True)
+        self.height_adjusted_value = QLabel("Not generated yet")
+        self.height_adjusted_value.setWordWrap(True)
+        self.height_map_generate_button = QPushButton("Generate Height Map")
+        self.height_map_generate_button.clicked.connect(self._generate_height_map)
+        self.height_map_cancel_button = QPushButton("Cancel Height Map")
+        self.height_map_cancel_button.clicked.connect(
+            lambda _checked=False: self._cancel_height_map_probe()
+        )
+        self.height_map_cancel_button.setEnabled(False)
+
+        row = 0
+        grid.addWidget(QLabel("X step"), row, 0)
+        grid.addWidget(self.height_map_step_x_input, row, 1)
+        row += 1
+        grid.addWidget(QLabel("Y step"), row, 0)
+        grid.addWidget(self.height_map_step_y_input, row, 1)
+        row += 1
+        grid.addWidget(QLabel("Port"), row, 0)
+        grid.addLayout(port_row, row, 1)
+        row += 1
+        grid.addWidget(QLabel("Baud"), row, 0)
+        grid.addWidget(self.height_map_baud_input, row, 1)
+        row += 1
+        grid.addLayout(connect_row, row, 0, 1, 2)
+        row += 1
+        grid.addWidget(self.height_map_state_value, row, 0, 1, 2)
+        row += 1
+        grid.addWidget(self.height_map_mpos_value, row, 0, 1, 2)
+        row += 1
+        grid.addWidget(self.height_map_wco_value, row, 0, 1, 2)
+        row += 1
+        grid.addWidget(self.height_map_wpos_value, row, 0, 1, 2)
+        row += 1
+        grid.addWidget(QLabel("Retract Z"), row, 0)
+        grid.addWidget(self.height_map_retract_z_input, row, 1)
+        row += 1
+        grid.addWidget(QLabel("Probe travel"), row, 0)
+        grid.addWidget(self.height_map_max_probe_travel_input, row, 1)
+        row += 1
+        grid.addWidget(QLabel("Probe feed"), row, 0)
+        grid.addWidget(self.height_map_probe_feed_input, row, 1)
+        row += 1
+        grid.addWidget(QLabel("Travel feed"), row, 0)
+        grid.addWidget(self.height_map_travel_feed_input, row, 1)
+        row += 1
+        grid.addWidget(QLabel("Settle"), row, 0)
+        grid.addWidget(self.height_map_settle_input, row, 1)
+        row += 1
+        grid.addWidget(self.height_map_unlock_check, row, 0, 1, 2)
+        row += 1
+        grid.addWidget(self.height_map_home_check, row, 0, 1, 2)
+        row += 1
+        grid.addWidget(QLabel("CSV"), row, 0)
+        grid.addWidget(self.height_map_csv_value, row, 1)
+        row += 1
+        grid.addWidget(QLabel("Adjusted paths"), row, 0)
+        grid.addWidget(self.height_adjusted_value, row, 1)
+        row += 1
+        grid.addWidget(self.height_map_generate_button, row, 0, 1, 2)
+        row += 1
+        grid.addWidget(self.height_map_cancel_button, row, 0, 1, 2)
+
+        layout.addWidget(heading)
+        layout.addWidget(body)
+        layout.addWidget(card)
+        layout.addStretch(1)
+        QTimer.singleShot(0, self._refresh_height_map_ports)
+        return page
+
+    def _build_height_adjust_preview_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        heading = QLabel("Step 12: Height Adjust Preview")
+        heading.setObjectName("pageHeading")
+        body = QLabel(
+            "Select pre-adjusted and post-adjusted NC paths to compare "
+            "them in the 3D toolpath viewer."
+        )
+        body.setWordWrap(True)
+
+        pre_label = QLabel("Pre Height Adjust Paths")
+        pre_label.setObjectName("sectionHeading")
+        self.pre_height_adjust_output_list = QListWidget()
+        self.pre_height_adjust_output_list.itemChanged.connect(
+            self._pre_height_adjust_output_item_changed
+        )
+
+        post_label = QLabel("Post Height Adjust Paths")
+        post_label.setObjectName("sectionHeading")
+        self.post_height_adjust_output_list = QListWidget()
+        self.post_height_adjust_output_list.itemChanged.connect(
+            self._post_height_adjust_output_item_changed
+        )
+
+        layout.addWidget(heading)
+        layout.addWidget(body)
+        layout.addWidget(pre_label)
+        layout.addWidget(self.pre_height_adjust_output_list, 1)
+        layout.addWidget(post_label)
+        layout.addWidget(self.post_height_adjust_output_list, 1)
+        return page
+
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
 
@@ -1353,6 +1566,8 @@ class MainWindow(QMainWindow):
     def _new_project(self) -> None:
         if not self._confirm_discard_or_save_changes():
             return
+        self._cancel_height_map_probe(show_message=False)
+        self._disconnect_height_map_grbl(show_message=False)
         self.project.reset()
         self._apply_default_project_settings()
         self.project.set_current_step(PcbProject.STEP_STOCK_DEFINITION)
@@ -1361,6 +1576,8 @@ class MainWindow(QMainWindow):
         self.tool_library = self._default_tool_library()
         self.generated_documents = {}
         self._hidden_generated_output_keys = set()
+        self._hidden_pre_height_adjust_keys = set()
+        self._hidden_post_height_adjust_keys = set()
         self._loaded_generated_output_keys = ()
         self._loaded_generated_output_paths = ()
         self.has_unsaved_changes = False
@@ -1386,6 +1603,8 @@ class MainWindow(QMainWindow):
     def _close_project(self) -> None:
         if not self._confirm_discard_or_save_changes():
             return
+        self._cancel_height_map_probe(show_message=False)
+        self._disconnect_height_map_grbl(show_message=False)
         self.project.reset()
         self._apply_default_project_settings()
         self.project.set_current_step(0)
@@ -1394,6 +1613,8 @@ class MainWindow(QMainWindow):
         self.tool_library = self._default_tool_library()
         self.generated_documents = {}
         self._hidden_generated_output_keys = set()
+        self._hidden_pre_height_adjust_keys = set()
+        self._hidden_post_height_adjust_keys = set()
         self._loaded_generated_output_keys = ()
         self._loaded_generated_output_paths = ()
         self.has_unsaved_changes = False
@@ -1463,6 +1684,8 @@ class MainWindow(QMainWindow):
         self._remember_recent_project(path)
         self.generated_documents = {}
         self._hidden_generated_output_keys = set()
+        self._hidden_pre_height_adjust_keys = set()
+        self._hidden_post_height_adjust_keys = set()
         self._loaded_generated_output_keys = ()
         self._loaded_generated_output_paths = ()
         self.has_unsaved_changes = False
@@ -2174,6 +2397,353 @@ class MainWindow(QMainWindow):
             return
         self._register_generated_output("edge_cuts", output_path)
 
+    def _list_height_map_ports(self) -> list[tuple[str, str]]:
+        ports = []
+        for port in list_ports.comports():
+            device = port.device
+            description = port.description or ""
+            hardware_id = port.hwid or ""
+            display = f"{device} - {description}".strip()
+            if hardware_id:
+                display = f"{display} ({hardware_id})"
+            ports.append((device, display))
+        return sorted(ports, key=lambda item: item[0].lower())
+
+    def _refresh_height_map_ports(self) -> None:
+        if not hasattr(self, "height_map_port_combo"):
+            return
+        current = self.height_map_port_combo.currentData()
+        ports = self._list_height_map_ports()
+        self.height_map_port_combo.blockSignals(True)
+        self.height_map_port_combo.clear()
+        for device, display in ports:
+            self.height_map_port_combo.addItem(display, device)
+            item_index = self.height_map_port_combo.count() - 1
+            self.height_map_port_combo.setItemData(
+                item_index, display, Qt.ItemDataRole.ToolTipRole
+            )
+        if not ports:
+            self.height_map_port_combo.addItem("(No ports found)", "")
+        if current:
+            index = self.height_map_port_combo.findData(current)
+            if index >= 0:
+                self.height_map_port_combo.setCurrentIndex(index)
+        self.height_map_port_combo.blockSignals(False)
+
+    def _connect_height_map_grbl(self) -> None:
+        if self._height_map_grbl is not None:
+            return
+        port = self._selected_height_map_port()
+        if not port:
+            QMessageBox.warning(self, "Missing port", "Select a serial port.")
+            return
+        try:
+            baud = int(float(self.height_map_baud_input.text().strip()))
+        except ValueError:
+            QMessageBox.warning(self, "Invalid baud", "Baud must be an integer.")
+            return
+        try:
+            self._height_map_grbl = HeightMapGrbl(port, baud)
+            self._height_map_grbl.wake()
+            self._height_map_status_timer.start()
+            self._set_height_map_connected(True)
+            self._poll_height_map_status()
+            self.statusBar().showMessage(f"Connected to {port}", 3000)
+        except Exception as exc:
+            self._height_map_grbl = None
+            QMessageBox.critical(self, "Connect failed", str(exc))
+
+    def _disconnect_height_map_grbl(self, *, show_message: bool = True) -> None:
+        self._height_map_status_timer.stop()
+        if self._height_map_grbl is not None:
+            try:
+                self._height_map_grbl.close()
+            finally:
+                self._height_map_grbl = None
+        self._set_height_map_connected(False)
+        self._reset_height_map_status()
+        if show_message:
+            self.statusBar().showMessage("Disconnected height-map probe", 3000)
+
+    def _poll_height_map_status(self) -> None:
+        if self._height_map_grbl is None:
+            return
+        try:
+            state, mpos, wco, wpos = self._height_map_grbl.status()
+        except Exception:
+            return
+        self.height_map_state_value.setText(state)
+        self.height_map_mpos_value.setText(mpos)
+        self.height_map_wco_value.setText(wco)
+        self.height_map_wpos_value.setText(wpos)
+
+    def _set_height_map_connected(self, connected: bool) -> None:
+        if not hasattr(self, "height_map_connect_button"):
+            return
+        running = self._height_map_thread is not None
+        self.height_map_connect_button.setEnabled(not connected and not running)
+        self.height_map_disconnect_button.setEnabled(connected and not running)
+        self.height_map_refresh_ports_button.setEnabled(not connected and not running)
+        self.height_map_port_combo.setEnabled(not connected and not running)
+        self.height_map_baud_input.setEnabled(not connected and not running)
+
+    def _set_height_map_probe_running(self, running: bool) -> None:
+        if not hasattr(self, "height_map_generate_button"):
+            return
+        self.height_map_generate_button.setEnabled(not running)
+        self.height_map_cancel_button.setEnabled(running)
+        for widget in (
+            self.height_map_step_x_input,
+            self.height_map_step_y_input,
+            self.height_map_retract_z_input,
+            self.height_map_max_probe_travel_input,
+            self.height_map_probe_feed_input,
+            self.height_map_travel_feed_input,
+            self.height_map_settle_input,
+            self.height_map_unlock_check,
+            self.height_map_home_check,
+        ):
+            widget.setEnabled(not running)
+        self._set_height_map_connected(self._height_map_grbl is not None)
+
+    def _reset_height_map_status(self) -> None:
+        if not hasattr(self, "height_map_state_value"):
+            return
+        self.height_map_state_value.setText("State: ?")
+        self.height_map_mpos_value.setText("MPos: X=- Y=- Z=-")
+        self.height_map_wco_value.setText("WCO: X=- Y=- Z=-")
+        self.height_map_wpos_value.setText("WPos: X=- Y=- Z=-")
+
+    def _selected_height_map_port(self) -> str:
+        if not hasattr(self, "height_map_port_combo"):
+            return ""
+        return str(
+            self.height_map_port_combo.currentData()
+            or self.height_map_port_combo.currentText()
+            or ""
+        ).strip()
+
+    def _generate_height_map(self) -> None:
+        if self.project.project_path is None:
+            QMessageBox.information(
+                self, "Height map", "Save the project before generating a height map."
+            )
+            return
+        if not self.project.generated_outputs:
+            QMessageBox.information(
+                self, "Height map", "Generate NC files before making a height map."
+            )
+            return
+        step_x = self._read_positive_float(
+            self.height_map_step_x_input, "Height map X step"
+        )
+        step_y = self._read_positive_float(
+            self.height_map_step_y_input, "Height map Y step"
+        )
+        baud = self._read_positive_float(self.height_map_baud_input, "Height map baud")
+        retract_z = self._read_positive_float(
+            self.height_map_retract_z_input, "Height map retract Z"
+        )
+        probe_travel = self._read_positive_float(
+            self.height_map_max_probe_travel_input, "Height map probe travel"
+        )
+        probe_feed = self._read_positive_float(
+            self.height_map_probe_feed_input, "Height map probe feed"
+        )
+        travel_feed = self._read_positive_float(
+            self.height_map_travel_feed_input, "Height map travel feed"
+        )
+        settle = self._read_non_negative_float(
+            self.height_map_settle_input, "Height map settle"
+        )
+        port = self._selected_height_map_port()
+        if not port:
+            QMessageBox.information(self, "Height map", "Select the GRBL serial port.")
+            return
+        entered_values = (
+            step_x,
+            step_y,
+            baud,
+            retract_z,
+            probe_travel,
+            probe_feed,
+            travel_feed,
+            settle,
+        )
+        if any(value is None for value in entered_values):
+            return
+        csv_path = self.project.project_path.parent / "nc" / "height-map.csv"
+        try:
+            if self._height_map_thread is not None:
+                QMessageBox.information(
+                    self, "Height map", "A height-map probe is already running."
+                )
+                return
+            if self._height_map_grbl is None:
+                QMessageBox.warning(self, "Not connected", "Connect to GRBL first.")
+                return
+            if (
+                self.height_map_state_value.text().strip().lower() == "state: alarm"
+                and not self.height_map_unlock_check.isChecked()
+                and not self.height_map_home_check.isChecked()
+            ):
+                QMessageBox.warning(
+                    self,
+                    "Controller locked",
+                    "GRBL is in Alarm. Enable unlock or home before probing.",
+                )
+                return
+            self._disconnect_height_map_grbl()
+            self._start_height_map_probe(
+                csv_path=csv_path,
+                port=port,
+                baud=int(baud),
+                step_x=step_x,
+                step_y=step_y,
+                retract_z=retract_z,
+                max_probe_travel=probe_travel,
+                probe_feed=probe_feed,
+                travel_feed=travel_feed,
+                settle=settle,
+            )
+        except Exception as exc:
+            logger.exception("Height map generation failed")
+            QMessageBox.critical(self, "Height map generation failed", str(exc))
+            return
+        self.height_map_csv_value.setText("Probe running...")
+        self.height_adjusted_value.setText("Waiting for probe to finish")
+        self.statusBar().showMessage("Height-map probe started", 3000)
+
+    def _start_height_map_probe(
+        self,
+        *,
+        csv_path: Path,
+        port: str,
+        baud: int,
+        step_x: float,
+        step_y: float,
+        retract_z: float,
+        max_probe_travel: float,
+        probe_feed: float,
+        travel_feed: float,
+        settle: float,
+    ) -> None:
+        params = ProbeParams(
+            start_x=0.0,
+            start_y=0.0,
+            width=self.project.stock_width,
+            height=self.project.stock_height,
+            step_distance_x=step_x,
+            step_distance_y=step_y,
+            retract_z=retract_z,
+            max_probe_travel=max_probe_travel,
+            probe_feed=probe_feed,
+            travel_feed=travel_feed,
+            settle_s=settle,
+            unlock=self.height_map_unlock_check.isChecked(),
+            home=self.height_map_home_check.isChecked(),
+            out_csv=str(csv_path),
+        )
+        thread = QThread(self)
+        worker = HeightMapProbeWorker(port, baud, params)
+        worker.moveToThread(thread)
+        worker.telemetry.connect(self._height_map_worker_telemetry)
+        worker.finished_ok.connect(self._height_map_probe_finished_ok)
+        worker.finished_error.connect(self._height_map_probe_finished_error)
+        worker.canceled.connect(self._height_map_probe_canceled)
+        worker.finished_ok.connect(thread.quit)
+        worker.finished_error.connect(thread.quit)
+        worker.canceled.connect(thread.quit)
+        thread.started.connect(worker.run)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._height_map_probe_csv_path = csv_path
+        self._height_map_probe_cancel_requested = False
+        self._height_map_thread = thread
+        self._height_map_worker = worker
+        self._set_height_map_probe_running(True)
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        thread.start()
+
+    def _cancel_height_map_probe(self, *, show_message: bool = True) -> None:
+        worker = self._height_map_worker
+        if worker is None:
+            return
+        self._height_map_probe_cancel_requested = True
+        worker.request_stop()
+        if show_message:
+            self.statusBar().showMessage("Canceling height-map probe", 3000)
+
+    def _height_map_worker_telemetry(self, data: object) -> None:
+        if not isinstance(data, dict):
+            return
+        state = str(data.get("state", "?"))
+        self.height_map_state_value.setText(f"State: {state}")
+        self._set_position_label(self.height_map_mpos_value, "MPos", data.get("mpos"))
+        self._set_position_label(self.height_map_wco_value, "WCO", data.get("wco"))
+        self._set_position_label(self.height_map_wpos_value, "WPos", data.get("wpos"))
+
+    def _set_position_label(self, label: QLabel, title: str, value: object) -> None:
+        if not isinstance(value, tuple) or len(value) != 3:
+            label.setText(f"{title}: X=- Y=- Z=-")
+            return
+        x, y, z = value
+        label.setText(f"{title}: X={x:.3f} Y={y:.3f} Z={z:.3f}")
+
+    def _height_map_probe_finished_ok(self, _message: str) -> None:
+        self._finish_height_map_thread()
+        csv_path = self._height_map_probe_csv_path
+        if csv_path is None:
+            QMessageBox.critical(
+                self, "Height map generation failed", "Missing height-map CSV path."
+            )
+            return
+        try:
+            adjusted_outputs = self._create_height_adjusted_outputs(csv_path)
+        except Exception as exc:
+            logger.exception("Height-map NC adjustment failed")
+            QMessageBox.critical(self, "Height map generation failed", str(exc))
+            return
+        self.project.height_map_csv_path = csv_path.resolve()
+        self.project.height_adjusted_outputs = adjusted_outputs
+        self._hidden_pre_height_adjust_keys = set()
+        self._hidden_post_height_adjust_keys = set()
+        self._loaded_generated_output_keys = ()
+        self._loaded_generated_output_paths = ()
+        self._mark_project_dirty()
+        self._sync_ui()
+        self.statusBar().showMessage("Generated height-map adjusted NC files", 3000)
+
+    def _height_map_probe_finished_error(self, message: str) -> None:
+        self._finish_height_map_thread()
+        QMessageBox.critical(
+            self, "Height map generation failed", message or "Height-map probing failed."
+        )
+        self.height_map_csv_value.setText("Failed")
+        self.height_adjusted_value.setText("Failed")
+
+    def _height_map_probe_canceled(self, _message: str) -> None:
+        self._finish_height_map_thread()
+        self.height_map_csv_value.setText("Canceled")
+        self.height_adjusted_value.setText("Canceled")
+        self.statusBar().showMessage("Height-map probe canceled", 3000)
+
+    def _finish_height_map_thread(self) -> None:
+        self._height_map_worker = None
+        self._height_map_thread = None
+        self._set_height_map_probe_running(False)
+
+    def _create_height_adjusted_outputs(self, csv_path: Path) -> dict[str, Path]:
+        if self.project.project_path is None:
+            raise ValueError("Save the project before generating height-adjusted NC.")
+        adjusted_dir = self.project.project_path.parent / "nc" / "height-adjusted"
+        adjusted_outputs = {}
+        for key, source_path in self.project.generated_outputs.items():
+            output_path = adjusted_dir / f"{source_path.stem}-height-adjusted.nc"
+            adjust_nc_file(source_path, output_path, csv_path)
+            adjusted_outputs[key] = output_path.resolve()
+        return adjusted_outputs
+
     def _generated_output_item_changed(self, item: QListWidgetItem) -> None:
         operation_key = item.data(Qt.ItemDataRole.UserRole)
         if not operation_key:
@@ -2183,6 +2753,28 @@ class MainWindow(QMainWindow):
             self._hidden_generated_output_keys.discard(key)
         else:
             self._hidden_generated_output_keys.add(key)
+        self._load_selected_generated_documents(preserve_camera=True)
+
+    def _pre_height_adjust_output_item_changed(self, item: QListWidgetItem) -> None:
+        operation_key = item.data(Qt.ItemDataRole.UserRole)
+        if not operation_key:
+            return
+        key = str(operation_key)
+        if item.checkState() == Qt.CheckState.Checked:
+            self._hidden_pre_height_adjust_keys.discard(key)
+        else:
+            self._hidden_pre_height_adjust_keys.add(key)
+        self._load_selected_generated_documents(preserve_camera=True)
+
+    def _post_height_adjust_output_item_changed(self, item: QListWidgetItem) -> None:
+        operation_key = item.data(Qt.ItemDataRole.UserRole)
+        if not operation_key:
+            return
+        key = str(operation_key)
+        if item.checkState() == Qt.CheckState.Checked:
+            self._hidden_post_height_adjust_keys.discard(key)
+        else:
+            self._hidden_post_height_adjust_keys.add(key)
         self._load_selected_generated_documents(preserve_camera=True)
 
     def _parse_gerber_paths(self, paths: list[Path]) -> list[ImportedGerberFile]:
@@ -2225,6 +2817,13 @@ class MainWindow(QMainWindow):
             )
         if index == 9:
             return bool(self.project.generated_outputs)
+        if index == 10:
+            return (
+                self.project.height_map_csv_path is not None
+                and bool(self.project.height_adjusted_outputs)
+            )
+        if index == 11:
+            return bool(self.project.height_adjusted_outputs)
         return False
 
     def _validation_message(self, index: int) -> str:
@@ -2259,6 +2858,12 @@ class MainWindow(QMainWindow):
             if not self._edge_cut_validation_is_valid():
                 return self._edge_validation_message()
             return "Generate the edge cut NC file before moving to the next step."
+        if index == 9:
+            return "Generate at least one NC file before moving to the height map step."
+        if index == 10:
+            return (
+                "Generate the height map and height-adjusted NC files before moving on."
+            )
         return "Complete the current wizard step before continuing."
 
     def _sync_ui(self) -> None:
@@ -3192,6 +3797,36 @@ class MainWindow(QMainWindow):
             return set()
         return {self._selected_edge_cut_profile_index}
 
+    def _read_positive_float(
+        self, line_edit: QLineEdit, field_name: str
+    ) -> float | None:
+        try:
+            value = float(line_edit.text().strip())
+        except ValueError:
+            QMessageBox.information(self, field_name, f"{field_name} must be a number.")
+            return None
+        if value <= 0.0:
+            QMessageBox.information(
+                self, field_name, f"{field_name} must be greater than 0."
+            )
+            return None
+        return value
+
+    def _read_non_negative_float(
+        self, line_edit: QLineEdit, field_name: str
+    ) -> float | None:
+        try:
+            value = float(line_edit.text().strip())
+        except ValueError:
+            QMessageBox.information(self, field_name, f"{field_name} must be a number.")
+            return None
+        if value < 0.0:
+            QMessageBox.information(
+                self, field_name, f"{field_name} must be 0 or greater."
+            )
+            return None
+        return value
+
     def _sync_edge_cut_action_buttons(self) -> None:
         if not hasattr(self, "edge_cut_generate_selected_button"):
             return
@@ -3898,7 +4533,11 @@ class MainWindow(QMainWindow):
 
     def _register_generated_output(self, operation_key: str, path: Path) -> None:
         self.project.generated_outputs[operation_key] = path.resolve()
+        self.project.height_map_csv_path = None
+        self.project.height_adjusted_outputs = {}
         self._hidden_generated_output_keys.discard(operation_key)
+        self._hidden_pre_height_adjust_keys = set()
+        self._hidden_post_height_adjust_keys = set()
         self._loaded_generated_output_keys = ()
         self._loaded_generated_output_paths = ()
         self._mark_project_dirty()
@@ -3955,14 +4594,7 @@ class MainWindow(QMainWindow):
 
         self.generated_output_list.blockSignals(True)
         self.generated_output_list.clear()
-        for key, title in (
-            ("front_isolation", "Front Isolation"),
-            ("back_isolation", "Back Isolation"),
-            ("alignment_drill", "Alignment Drill"),
-            ("alignment_mill", "Alignment Mill"),
-            ("drilling", "Drilling"),
-            ("edge_cuts", "Edge Cuts"),
-        ):
+        for key, title in self._output_key_titles():
             path = self.project.generated_outputs.get(key)
             if path is None:
                 continue
@@ -3977,7 +4609,67 @@ class MainWindow(QMainWindow):
             )
             self.generated_output_list.addItem(item)
         self.generated_output_list.blockSignals(False)
+        self._sync_height_map_outputs()
         self._load_selected_generated_documents()
+
+    def _output_key_titles(self) -> tuple[tuple[str, str], ...]:
+        return (
+            ("front_isolation", "Front Isolation"),
+            ("back_isolation", "Back Isolation"),
+            ("alignment_drill", "Alignment Drill"),
+            ("alignment_mill", "Alignment Mill"),
+            ("drilling", "Drilling"),
+            ("edge_cuts", "Edge Cuts"),
+        )
+
+    def _sync_height_map_outputs(self) -> None:
+        if hasattr(self, "height_map_csv_value"):
+            csv_path = self.project.height_map_csv_path
+            self.height_map_csv_value.setText(
+                str(csv_path) if csv_path is not None else "Not generated yet"
+            )
+        if hasattr(self, "height_adjusted_value"):
+            count = len(self.project.height_adjusted_outputs)
+            self.height_adjusted_value.setText(
+                f"{count} adjusted NC files" if count else "Not generated yet"
+            )
+        generated_keys = set(self.project.generated_outputs)
+        adjusted_keys = set(self.project.height_adjusted_outputs)
+        self._hidden_pre_height_adjust_keys.intersection_update(generated_keys)
+        self._hidden_post_height_adjust_keys.intersection_update(adjusted_keys)
+        if not hasattr(self, "pre_height_adjust_output_list"):
+            return
+        self._sync_output_check_list(
+            self.pre_height_adjust_output_list,
+            self.project.generated_outputs,
+            self._hidden_pre_height_adjust_keys,
+        )
+        self._sync_output_check_list(
+            self.post_height_adjust_output_list,
+            self.project.height_adjusted_outputs,
+            self._hidden_post_height_adjust_keys,
+        )
+
+    def _sync_output_check_list(
+        self, list_widget: QListWidget, paths: dict[str, Path], hidden_keys: set[str]
+    ) -> None:
+        list_widget.blockSignals(True)
+        list_widget.clear()
+        for key, title in self._output_key_titles():
+            path = paths.get(key)
+            if path is None:
+                continue
+            item = QListWidgetItem(f"{title}: {path.name}")
+            item.setToolTip(str(path))
+            item.setData(Qt.ItemDataRole.UserRole, key)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                Qt.CheckState.Unchecked
+                if key in hidden_keys
+                else Qt.CheckState.Checked
+            )
+            list_widget.addItem(item)
+        list_widget.blockSignals(False)
 
     def _load_selected_generated_documents(
         self, *, preserve_camera: bool = False
@@ -3985,6 +4677,23 @@ class MainWindow(QMainWindow):
         documents = []
         selected_keys = []
         selected_paths = []
+        if self.project.current_step_index == PcbProject.STEP_HEIGHT_ADJUST_PREVIEW:
+            for key in self._height_adjust_preview_keys():
+                path = self._height_adjust_preview_path(key)
+                if path is None:
+                    continue
+                try:
+                    document = self._generated_document(path)
+                except Exception:
+                    logger.exception("Failed to load NC output: %s", path)
+                    continue
+                selected_keys.append(key)
+                selected_paths.append(str(path.resolve()))
+                documents.append(document)
+            self._load_toolpath_documents(
+                selected_keys, selected_paths, documents, preserve_camera
+            )
+            return
         for key in self._visible_generated_output_keys_for_preview():
             if key in self._hidden_generated_output_keys:
                 continue
@@ -3999,6 +4708,17 @@ class MainWindow(QMainWindow):
             selected_keys.append(key)
             selected_paths.append(str(path.resolve()))
             documents.append(document)
+        self._load_toolpath_documents(
+            selected_keys, selected_paths, documents, preserve_camera
+        )
+
+    def _load_toolpath_documents(
+        self,
+        selected_keys: list[str],
+        selected_paths: list[str],
+        documents: list[ToolpathDocument],
+        preserve_camera: bool,
+    ) -> None:
         selected_key_state = (
             self.project.mirror_view_side,
             self.project.mirror_flip_edge,
@@ -4029,6 +4749,35 @@ class MainWindow(QMainWindow):
             preserve_camera=preserve_camera,
         )
 
+    def _height_adjust_preview_keys(self) -> tuple[str, ...]:
+        keys = []
+        for key in self._nc_preview_output_keys():
+            if key not in self._hidden_pre_height_adjust_keys:
+                keys.append(f"pre:{key}")
+            if key not in self._hidden_post_height_adjust_keys:
+                keys.append(f"post:{key}")
+        return tuple(keys)
+
+    def _height_adjust_preview_path(self, key: str) -> Path | None:
+        if key.startswith("post:"):
+            return self.project.height_adjusted_outputs.get(key.removeprefix("post:"))
+        if key.startswith("pre:"):
+            return self.project.generated_outputs.get(key.removeprefix("pre:"))
+        return None
+
+    def _nc_preview_output_keys(self) -> tuple[str, ...]:
+        if self.project.mirror_view_side == "back":
+            side_key = "back_isolation"
+        else:
+            side_key = "front_isolation"
+        return (
+            side_key,
+            "alignment_drill",
+            "alignment_mill",
+            "drilling",
+            "edge_cuts",
+        )
+
     def _visible_generated_output_keys_for_preview(self) -> tuple[str, ...]:
         if self.project.mirror_view_side == "back":
             side_key = "back_isolation"
@@ -4042,14 +4791,8 @@ class MainWindow(QMainWindow):
             return ("alignment_drill", "alignment_mill")
         if current == PcbProject.STEP_DRILLING:
             return ("drilling",)
-        if current == PcbProject.STEP_NC_PREVIEW:
-            return (
-                side_key,
-                "alignment_drill",
-                "alignment_mill",
-                "drilling",
-                "edge_cuts",
-            )
+        if current in {PcbProject.STEP_NC_PREVIEW, PcbProject.STEP_HEIGHT_MAP}:
+            return self._nc_preview_output_keys()
         return (
             "front_isolation",
             "back_isolation",
@@ -4062,7 +4805,11 @@ class MainWindow(QMainWindow):
     def _preview_toolpath_document(
         self, operation_key: str, document: ToolpathDocument
     ) -> ToolpathDocument:
-        if self.project.mirror_view_side != "back" or operation_key == "back_isolation":
+        normalized_key = operation_key.split(":", maxsplit=1)[-1]
+        if (
+            self.project.mirror_view_side != "back"
+            or normalized_key == "back_isolation"
+        ):
             return document
         bounds = self._preview_mirror_bounds()
         if not self.project.mirror_flip_edge or bounds is None:
@@ -4325,4 +5072,6 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard_or_save_changes():
             event.ignore()
             return
+        self._cancel_height_map_probe(show_message=False)
+        self._disconnect_height_map_grbl(show_message=False)
         super().closeEvent(event)
