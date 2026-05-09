@@ -46,9 +46,11 @@ class PcbPreviewWidget(QWidget):
         self._last_pos = QPointF()
         self._dragging = False
         self._back_copper_path = None
+        self._front_copper_path = None
         self._edges_path = None
         self._mirror_edge = ""
         self._mirror_preview_mode = "side_by_side"
+        self._mirror_view_side = "front"
         self._origin_marker_bounds: tuple[float, float, float, float] | None = None
         self._origin_marker_point: tuple[float, float] | None = None
         self._origin_marker_label = "(0, 0)"
@@ -101,18 +103,24 @@ class PcbPreviewWidget(QWidget):
     def set_mirror_setup(
         self,
         *,
+        front_copper_path: Path | None,
         back_copper_path: Path | None,
         edges_path: Path | None,
         board_bounds: tuple[float, float, float, float] | None,
         mirror_edge: str,
         preview_mode: str,
+        view_side: str,
         fit_view: bool = True,
     ) -> None:
+        self._front_copper_path = front_copper_path
         self._back_copper_path = back_copper_path
         self._edges_path = edges_path
         self._mirror_axis_bounds = board_bounds
         self._mirror_edge = mirror_edge.strip()
         self._mirror_preview_mode = preview_mode.strip() or "side_by_side"
+        self._mirror_view_side = (
+            view_side.strip() if view_side.strip() in {"front", "back"} else "front"
+        )
         self._rebuild_bounds()
         if fit_view:
             self.fit_to_view()
@@ -207,12 +215,8 @@ class PcbPreviewWidget(QWidget):
             if reference_drill_files is None
             else reference_drill_files
         )
-        gerber_bounds = BoardBounds()
         for gerber in bounds_gerbers:
-            gerber_bounds.include_bounds(gerber.bounds)
             self._include_gerber_bounds(gerber)
-        if self._mirror_preview_mode != "overlay":
-            self._include_mirrored_panel_bounds(gerber_bounds)
         for drill in bounds_drills:
             self._bounds.include_bounds(drill.bounds)
         for x, y, diameter in self._alignment_holes:
@@ -422,11 +426,11 @@ class PcbPreviewWidget(QWidget):
         self._draw_origin_selection_bounds(painter)
         self._draw_alignment_selection_grid(painter)
         for index, gerber in enumerate(self._gerber_files):
+            if not self._should_draw_gerber(gerber):
+                continue
             palette = self._theme.gerber_palette()
             color = palette[index % len(palette)]
             self._draw_gerber(painter, gerber, color, mirrored=False)
-            if self._should_duplicate_edges_gerber(gerber):
-                self._draw_gerber(painter, gerber, color, mirrored=True)
 
         painter.setPen(QPen(self._theme.named_color("pcb_preview_drill"), 1.3))
         for drill in self._drill_files:
@@ -698,7 +702,7 @@ class PcbPreviewWidget(QWidget):
         pen.setStyle(Qt.PenStyle.DotLine)
         painter.setPen(pen)
         for path in self._generated_edge_cut_paths:
-            self._draw_outline(painter, path)
+            self._draw_outline(painter, self._transform_edge_polygon(path))
         painter.restore()
 
     def _draw_edge_polygon_annotations(self, painter: QPainter) -> None:
@@ -706,17 +710,18 @@ class PcbPreviewWidget(QWidget):
             return
         painter.save()
         for index, polygon in enumerate(self._validated_edge_polygons):
+            visible_polygon = self._transform_edge_polygon(polygon)
             if index in self._selected_edge_polygon_indices:
                 selection_color = QColor(
                     self._theme.named_color("pcb_preview_selection")
                 )
                 selection_color.setAlpha(255)
                 painter.setPen(QPen(selection_color, 4.0))
-                self._draw_outline(painter, polygon)
+                self._draw_outline(painter, visible_polygon)
             mode = self._edge_polygon_modes.get(index, "none").strip()
             if mode == "none":
                 continue
-            indicator_polygon = self._offset_polygon_for_mode(polygon, mode)
+            indicator_polygon = self._offset_polygon_for_mode(visible_polygon, mode)
             if not indicator_polygon:
                 continue
             indicator_color = QColor(self._theme.named_color("pcb_preview_alignment"))
@@ -840,7 +845,9 @@ class PcbPreviewWidget(QWidget):
         closest_index = None
         closest_distance = None
         for index, polygon in enumerate(self._validated_edge_polygons):
-            distance = self._distance_to_polygon_boundary(world_position, polygon)
+            distance = self._distance_to_polygon_boundary(
+                world_position, self._transform_edge_polygon(polygon)
+            )
             if distance > max_distance:
                 continue
             if closest_distance is None or distance < closest_distance:
@@ -1002,10 +1009,7 @@ class PcbPreviewWidget(QWidget):
             )
 
     def _include_gerber_bounds(self, gerber: ImportedGerberFile) -> None:
-        if self._should_duplicate_edges_gerber(gerber):
-            self._bounds.include_bounds(gerber.bounds)
-            if self._mirror_preview_mode != "overlay":
-                self._include_mirrored_gerber_bounds(gerber)
+        if not self._should_draw_gerber(gerber):
             return
         if self._mirror_preview_mode == "overlay" or not self._should_mirror_gerber(
             gerber
@@ -1052,7 +1056,11 @@ class PcbPreviewWidget(QWidget):
             source_bounds.is_empty
             or self._mirror_axis_bounds is None
             or not self._mirror_edge
-            or (self._back_copper_path is None and self._edges_path is None)
+            or (
+                self._front_copper_path is None
+                and self._back_copper_path is None
+                and self._edges_path is None
+            )
         ):
             return
         corners = [
@@ -1094,8 +1102,6 @@ class PcbPreviewWidget(QWidget):
         mirrored: bool = False,
     ) -> tuple[float, float]:
         if not mirrored:
-            if self._should_duplicate_edges_gerber(gerber):
-                return point
             if not self._should_mirror_gerber(gerber):
                 return point
         elif not self._should_mirror_gerber(gerber):
@@ -1105,21 +1111,34 @@ class PcbPreviewWidget(QWidget):
             return mirrored_point
         return self._overlay_point(mirrored_point)
 
+    def _should_draw_gerber(self, gerber: ImportedGerberFile) -> bool:
+        assigned_paths = {
+            self._front_copper_path,
+            self._back_copper_path,
+            self._edges_path,
+        }
+        if gerber.path not in assigned_paths:
+            return True
+        if gerber.path == self._edges_path:
+            return True
+        if self._mirror_view_side == "back":
+            return gerber.path == self._back_copper_path
+        return gerber.path == self._front_copper_path
+
     def _should_mirror_gerber(self, gerber: ImportedGerberFile) -> bool:
         if (
-            (self._back_copper_path is None and self._edges_path is None)
+            (
+                self._front_copper_path is None
+                and self._back_copper_path is None
+                and self._edges_path is None
+            )
             or not self._mirror_edge
             or self._mirror_axis_bounds is None
         ):
             return False
+        if self._mirror_view_side != "back":
+            return False
         return gerber.path in {self._back_copper_path, self._edges_path}
-
-    def _should_duplicate_edges_gerber(self, gerber: ImportedGerberFile) -> bool:
-        return (
-            self._edges_path is not None
-            and gerber.path == self._edges_path
-            and self._should_mirror_gerber(gerber)
-        )
 
     def _outline_polygons_for(
         self, gerber: ImportedGerberFile
@@ -1142,6 +1161,20 @@ class PcbPreviewWidget(QWidget):
         if self._mirror_edge == "bottom":
             return (x, (2.0 * y_min) - y)
         return point
+
+    def _transform_edge_polygon(
+        self, polygon: list[tuple[float, float]]
+    ) -> list[tuple[float, float]]:
+        return [self._transform_edge_point(point) for point in polygon]
+
+    def _transform_edge_point(self, point: tuple[float, float]) -> tuple[float, float]:
+        if (
+            self._mirror_view_side != "back"
+            or not self._mirror_edge
+            or self._mirror_axis_bounds is None
+        ):
+            return point
+        return self._mirror_point(point)
 
     def _overlay_point(self, point: tuple[float, float]) -> tuple[float, float]:
         x, y = point

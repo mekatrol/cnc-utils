@@ -59,6 +59,7 @@ class PcbProject:
         }
         self.mirror_flip_edge: str = ""
         self.mirror_preview_mode: str = "side_by_side"
+        self.mirror_view_side: str = "front"
         self.file_alignment: str = DEFAULT_NC_ORIGIN
         self.file_alignment_horizontal_offset: float = 0.0
         self.file_alignment_vertical_offset: float = 0.0
@@ -226,6 +227,14 @@ class PcbProject:
         self.mirror_preview_mode = normalized
         return changed
 
+    def set_mirror_view_side(self, side: str) -> bool:
+        normalized = side.strip() or "front"
+        if normalized not in {"front", "back"}:
+            normalized = "front"
+        changed = self.mirror_view_side != normalized
+        self.mirror_view_side = normalized
+        return changed
+
     def set_file_alignment(self, alignment: str) -> bool:
         normalized = normalize_nc_origin(alignment)
         changed = self.file_alignment != normalized
@@ -376,6 +385,7 @@ class PcbProject:
             "mirror": {
                 "flip_edge": self.mirror_flip_edge or None,
                 "preview_mode": self.mirror_preview_mode,
+                "view_side": self.mirror_view_side,
             },
             "alignment": {
                 "file_alignment": self.file_alignment,
@@ -497,6 +507,9 @@ class PcbProject:
             raw_mode = mirror_data.get("preview_mode", "side_by_side")
             if isinstance(raw_mode, str):
                 project.set_mirror_preview_mode(raw_mode)
+            raw_side = mirror_data.get("view_side", "front")
+            if isinstance(raw_side, str):
+                project.set_mirror_view_side(raw_side)
         alignment_settings = loaded.get("alignment", {})
         if isinstance(alignment_settings, dict):
             raw_file_alignment = alignment_settings.get("file_alignment", "")

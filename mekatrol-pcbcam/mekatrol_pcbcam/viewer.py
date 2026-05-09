@@ -45,6 +45,9 @@ class ToolpathViewer(QOpenGLWidget):
         self._span_y = 100.0
         self._span_z = 0.0
         self._stock_bounds: tuple[float, float, float, float] | None = None
+        self._stock_thickness = 0.0
+        self._board_bounds: tuple[float, float, float, float] | None = None
+        self._alignment_holes: list[tuple[float, float, float]] = []
         self._origin_point: tuple[float, float] | None = None
         logger.debug("Toolpath viewer initialized")
 
@@ -91,8 +94,15 @@ class ToolpathViewer(QOpenGLWidget):
         self,
         stock_bounds: tuple[float, float, float, float] | None,
         origin_point: tuple[float, float] | None,
+        *,
+        stock_thickness: float = 0.0,
+        board_bounds: tuple[float, float, float, float] | None = None,
+        alignment_holes: list[tuple[float, float, float]] | None = None,
     ) -> None:
         self._stock_bounds = stock_bounds
+        self._stock_thickness = max(0.0, stock_thickness)
+        self._board_bounds = board_bounds
+        self._alignment_holes = list(alignment_holes or [])
         self._origin_point = origin_point
         self._apply_stock_bounds()
         self.update()
@@ -108,22 +118,38 @@ class ToolpathViewer(QOpenGLWidget):
             self._document_bounds_max.y,
             self._document_bounds_max.z,
         )
-        if self._stock_bounds is None:
-            self._span_x = self._bounds_max.x - self._bounds_min.x
-            self._span_y = self._bounds_max.y - self._bounds_min.y
-            self._span_z = self._bounds_max.z - self._bounds_min.z
-            return
-        x_min, x_max, y_min, y_max = self._stock_bounds
-        self._bounds_min = Point3D(
-            min(self._bounds_min.x, x_min),
-            min(self._bounds_min.y, y_min),
-            self._bounds_min.z,
-        )
-        self._bounds_max = Point3D(
-            max(self._bounds_max.x, x_max),
-            max(self._bounds_max.y, y_max),
-            self._bounds_max.z,
-        )
+        for overlay_bounds in (self._stock_bounds, self._board_bounds):
+            if overlay_bounds is None:
+                continue
+            x_min, x_max, y_min, y_max = overlay_bounds
+            self._bounds_min = Point3D(
+                min(self._bounds_min.x, x_min),
+                min(self._bounds_min.y, y_min),
+                self._bounds_min.z,
+            )
+            self._bounds_max = Point3D(
+                max(self._bounds_max.x, x_max),
+                max(self._bounds_max.y, y_max),
+                max(self._bounds_max.z, 0.0),
+            )
+            if overlay_bounds == self._stock_bounds and self._stock_thickness > 0.0:
+                self._bounds_min = Point3D(
+                    self._bounds_min.x,
+                    self._bounds_min.y,
+                    min(self._bounds_min.z, -self._stock_thickness),
+                )
+        for x_pos, y_pos, diameter in self._alignment_holes:
+            radius = diameter * 0.5
+            self._bounds_min = Point3D(
+                min(self._bounds_min.x, x_pos - radius),
+                min(self._bounds_min.y, y_pos - radius),
+                self._bounds_min.z,
+            )
+            self._bounds_max = Point3D(
+                max(self._bounds_max.x, x_pos + radius),
+                max(self._bounds_max.y, y_pos + radius),
+                self._bounds_max.z,
+            )
         self._span_x = self._bounds_max.x - self._bounds_min.x
         self._span_y = self._bounds_max.y - self._bounds_min.y
         self._span_z = self._bounds_max.z - self._bounds_min.z
@@ -158,7 +184,9 @@ class ToolpathViewer(QOpenGLWidget):
         self._draw_grid(painter)
         self._draw_axes(painter)
         self._draw_stock(painter)
+        self._draw_board_bounds(painter)
         self._draw_toolpath(painter)
+        self._draw_alignment_holes(painter)
         self._draw_overlay(painter)
         painter.end()
 
@@ -278,25 +306,42 @@ class ToolpathViewer(QOpenGLWidget):
         if self._stock_bounds is None:
             return
         x_min, x_max, y_min, y_max = self._stock_bounds
+        z_min = -self._stock_thickness
         painter.save()
-        outline_color = QColor(self._theme.named_color("pcb_preview_outline"))
-        outline_color.setAlpha(220)
+        outline_color = QColor(self._theme.named_color("pcb_preview_selection"))
+        outline_color.setAlpha(190)
         fill_color = QColor(self._theme.named_color("pcb_preview_selection"))
-        fill_color.setAlpha(32)
+        fill_color.setAlpha(18)
         pen = QPen(outline_color, 1.8)
         pen.setStyle(Qt.PenStyle.DashLine)
         painter.setPen(pen)
-        corners_3d = [
+        top_corners = [
             Point3D(x_min, y_min, 0.0),
             Point3D(x_max, y_min, 0.0),
             Point3D(x_max, y_max, 0.0),
             Point3D(x_min, y_max, 0.0),
         ]
+        bottom_corners = [
+            Point3D(x_min, y_min, z_min),
+            Point3D(x_max, y_min, z_min),
+            Point3D(x_max, y_max, z_min),
+            Point3D(x_min, y_max, z_min),
+        ]
         painter.setBrush(fill_color)
-        painter.drawPolygon(QPolygonF([self._project(point) for point in corners_3d]))
-        corners = corners_3d + [corners_3d[0]]
+        painter.drawPolygon(QPolygonF([self._project(point) for point in top_corners]))
+        corners = top_corners + [top_corners[0]]
         for start, end in zip(corners, corners[1:]):
             self._draw_line(painter, start, end)
+        if self._stock_thickness > 0.0:
+            bottom_pen = QPen(outline_color, 1.2)
+            bottom_pen.setStyle(Qt.PenStyle.DotLine)
+            painter.setPen(bottom_pen)
+            bottom = bottom_corners + [bottom_corners[0]]
+            for start, end in zip(bottom, bottom[1:]):
+                self._draw_line(painter, start, end)
+            painter.setPen(pen)
+            for top, bottom_point in zip(top_corners, bottom_corners):
+                self._draw_line(painter, top, bottom_point)
         if self._origin_point is not None:
             origin_x, origin_y = self._origin_point
             marker_radius = max(self._extent * 0.015, 1.5)
@@ -311,6 +356,49 @@ class ToolpathViewer(QOpenGLWidget):
                 painter,
                 Point3D(origin.x, origin.y - marker_radius, 0.0),
                 Point3D(origin.x, origin.y + marker_radius, 0.0),
+            )
+        painter.restore()
+
+    def _draw_board_bounds(self, painter: QPainter) -> None:
+        if self._board_bounds is None:
+            return
+        x_min, x_max, y_min, y_max = self._board_bounds
+        painter.save()
+        outline_color = QColor(self._theme.named_color("pcb_preview_outline"))
+        outline_color.setAlpha(230)
+        fill_color = QColor(self._theme.named_color("pcb_preview_outline"))
+        fill_color.setAlpha(20)
+        painter.setPen(QPen(outline_color, 2.2))
+        painter.setBrush(fill_color)
+        corners_3d = [
+            Point3D(x_min, y_min, 0.0),
+            Point3D(x_max, y_min, 0.0),
+            Point3D(x_max, y_max, 0.0),
+            Point3D(x_min, y_max, 0.0),
+        ]
+        painter.drawPolygon(QPolygonF([self._project(point) for point in corners_3d]))
+        corners = corners_3d + [corners_3d[0]]
+        for start, end in zip(corners, corners[1:]):
+            self._draw_line(painter, start, end)
+        painter.restore()
+
+    def _draw_alignment_holes(self, painter: QPainter) -> None:
+        if not self._alignment_holes:
+            return
+        painter.save()
+        painter.setPen(QPen(self._theme.named_color("pcb_preview_alignment"), 2.0))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for x_pos, y_pos, diameter in self._alignment_holes:
+            center = self._project(Point3D(x_pos, y_pos, 0.0))
+            radius = max(3.0, diameter * 0.5 * self.camera.zoom)
+            painter.drawEllipse(center, radius, radius)
+            painter.drawLine(
+                QPointF(center.x() - radius - 5.0, center.y()),
+                QPointF(center.x() + radius + 5.0, center.y()),
+            )
+            painter.drawLine(
+                QPointF(center.x(), center.y() - radius - 5.0),
+                QPointF(center.x(), center.y() + radius + 5.0),
             )
         painter.restore()
 

@@ -55,6 +55,7 @@ from .nc_origin import (
 from .pcb_preview_widget import PcbPreviewWidget
 from .pcb_project import PcbProject
 from .point_3d import Point3D
+from .segment_3d import Segment3D
 from .theme import AppTheme, load_theme
 from .theme_settings_dialog import ThemeSettingsDialog, discover_theme_options
 from .toolpath_document import ToolpathDocument
@@ -223,9 +224,25 @@ class MainWindow(QMainWindow):
         self.mirror_preview_mode_combo.currentIndexChanged.connect(
             self._mirror_preview_mode_changed
         )
+        self.preview_side_label = QLabel("View Side")
+        self.preview_side_label.setObjectName("previewModeLabel")
+        self.preview_side_group = QButtonGroup(self)
+        self.preview_side_front_radio = QRadioButton("Front")
+        self.preview_side_back_radio = QRadioButton("Back mirror")
+        self.preview_side_group.addButton(self.preview_side_front_radio)
+        self.preview_side_group.addButton(self.preview_side_back_radio)
+        self.preview_side_front_radio.toggled.connect(
+            lambda checked: self._preview_side_changed("front", checked)
+        )
+        self.preview_side_back_radio.toggled.connect(
+            lambda checked: self._preview_side_changed("back", checked)
+        )
         toolbar_layout.addStretch(1)
         toolbar_layout.addWidget(self.preview_mode_label)
         toolbar_layout.addWidget(self.mirror_preview_mode_combo)
+        toolbar_layout.addWidget(self.preview_side_label)
+        toolbar_layout.addWidget(self.preview_side_front_radio)
+        toolbar_layout.addWidget(self.preview_side_back_radio)
         preview_layout.addWidget(self.preview_toolbar)
         preview_layout.addWidget(self.preview_stack, 1)
         self.step_bar = WizardStepBar(self.STEP_TITLES, self.theme)
@@ -1682,6 +1699,15 @@ class MainWindow(QMainWindow):
             self._mark_project_dirty()
         self._sync_ui()
 
+    def _preview_side_changed(self, side: str, checked: bool) -> None:
+        if not checked:
+            return
+        if self.project.set_mirror_view_side(side):
+            self._mark_project_dirty()
+            self._loaded_generated_output_keys = ()
+            self._loaded_generated_output_paths = ()
+        self._sync_ui()
+
     def _file_alignment_offset_changed(self, axis: str, widget: QLineEdit) -> None:
         text = widget.text().strip()
         if not text:
@@ -1909,10 +1935,10 @@ class MainWindow(QMainWindow):
         if tool is None:
             QMessageBox.information(self, "Back isolation", "Select a V-bit first.")
             return
-        bounds = self._stock_bounds()
+        bounds = self._reference_board_bounds()
         if bounds is None:
             QMessageBox.information(
-                self, "Back isolation", "Stock bounds are not available."
+                self, "Back isolation", "Board bounds are not available."
             )
             return
         try:
@@ -2177,31 +2203,33 @@ class MainWindow(QMainWindow):
             fit_view=fit_preview_view,
         )
         self.preview.set_mirror_setup(
+            front_copper_path=(
+                None
+                if current == PcbProject.STEP_STOCK_DEFINITION
+                else self.project.layer_assignments["front_copper"]
+            ),
             back_copper_path=(
                 None
-                if current
-                in {PcbProject.STEP_STOCK_DEFINITION, PcbProject.STEP_EDGE_CUTS}
+                if current == PcbProject.STEP_STOCK_DEFINITION
                 else self.project.layer_assignments["back_copper"]
             ),
             edges_path=(
                 None
-                if current
-                in {PcbProject.STEP_STOCK_DEFINITION, PcbProject.STEP_EDGE_CUTS}
+                if current == PcbProject.STEP_STOCK_DEFINITION
                 else self.project.layer_assignments["edges"]
             ),
             board_bounds=stock_bounds or self._reference_board_bounds(),
             mirror_edge=(
                 ""
-                if current
-                in {PcbProject.STEP_STOCK_DEFINITION, PcbProject.STEP_EDGE_CUTS}
+                if current == PcbProject.STEP_STOCK_DEFINITION
                 else self.project.mirror_flip_edge
             ),
             preview_mode=(
                 "overlay"
-                if current
-                in {PcbProject.STEP_STOCK_DEFINITION, PcbProject.STEP_EDGE_CUTS}
+                if current == PcbProject.STEP_STOCK_DEFINITION
                 else self.project.mirror_preview_mode
             ),
+            view_side=self.project.mirror_view_side,
             fit_view=fit_preview_view,
         )
         self.preview.set_edge_validation(
@@ -2254,18 +2282,31 @@ class MainWindow(QMainWindow):
             hover_diameter=self._current_alignment_hole_diameter(),
         )
         self.toolpath_viewer.set_stock_overlay(
-            stock_bounds if show_stock else None,
-            self._current_origin_point() if show_stock else None,
+            self._toolpath_stock_bounds() if show_stock else None,
+            (0.0, 0.0) if show_stock and self._current_origin_point() else None,
+            stock_thickness=self.project.stock_thickness if show_stock else 0.0,
+            board_bounds=self._toolpath_board_bounds() if show_stock else None,
+            alignment_holes=(self._toolpath_alignment_holes() if show_stock else []),
         )
         showing_toolpath = (
             current >= PcbProject.STEP_FRONT_ISOLATION
             and current != PcbProject.STEP_EDGE_CUTS
         )
         self.preview_stack.setCurrentIndex(1 if showing_toolpath else 0)
-        self.preview_toolbar.setVisible(
-            (not showing_toolpath)
-            and current
-            not in {PcbProject.STEP_STOCK_DEFINITION, PcbProject.STEP_EDGE_CUTS}
+        self.preview_toolbar.setVisible(current != PcbProject.STEP_STOCK_DEFINITION)
+        self.preview_mode_label.setVisible(not showing_toolpath)
+        self.mirror_preview_mode_combo.setVisible(not showing_toolpath)
+        self.preview_side_label.setVisible(
+            current >= PcbProject.STEP_FRONT_ISOLATION
+            or current == PcbProject.STEP_EDGE_CUTS
+        )
+        self.preview_side_front_radio.setVisible(
+            current >= PcbProject.STEP_FRONT_ISOLATION
+            or current == PcbProject.STEP_EDGE_CUTS
+        )
+        self.preview_side_back_radio.setVisible(
+            current >= PcbProject.STEP_FRONT_ISOLATION
+            or current == PcbProject.STEP_EDGE_CUTS
         )
         self._update_window_title()
         if page_changed:
@@ -3225,6 +3266,19 @@ class MainWindow(QMainWindow):
         self.mirror_preview_mode_combo.setCurrentIndex(0 if index < 0 else index)
         self.mirror_preview_mode_combo.setEnabled(requires_mirror)
         self.mirror_preview_mode_combo.blockSignals(False)
+        can_mirror_side = bool(
+            self.project.mirror_flip_edge and self._preview_mirror_bounds() is not None
+        )
+        self.preview_side_front_radio.blockSignals(True)
+        self.preview_side_back_radio.blockSignals(True)
+        self.preview_side_front_radio.setChecked(
+            self.project.mirror_view_side != "back"
+        )
+        self.preview_side_back_radio.setChecked(self.project.mirror_view_side == "back")
+        self.preview_side_front_radio.setEnabled(can_mirror_side)
+        self.preview_side_back_radio.setEnabled(can_mirror_side)
+        self.preview_side_front_radio.blockSignals(False)
+        self.preview_side_back_radio.blockSignals(False)
         self.mirror_preview.set_edge(
             self.project.mirror_flip_edge if requires_mirror else ""
         )
@@ -3447,6 +3501,52 @@ class MainWindow(QMainWindow):
             raise ValueError("NC origin point is not available.")
         return point
 
+    def _toolpath_stock_bounds(self) -> tuple[float, float, float, float] | None:
+        bounds = self._stock_bounds()
+        origin_point = self._current_origin_point()
+        if bounds is None or origin_point is None:
+            return None
+        return self._bounds_relative_to_origin(bounds, origin_point)
+
+    def _toolpath_board_bounds(self) -> tuple[float, float, float, float] | None:
+        bounds = self._reference_board_bounds()
+        origin_point = self._current_origin_point()
+        if bounds is None or origin_point is None:
+            return None
+        return self._bounds_relative_to_origin(bounds, origin_point)
+
+    def _toolpath_preview_bounds(self) -> tuple[float, float, float, float] | None:
+        return self._toolpath_board_bounds() or self._toolpath_stock_bounds()
+
+    def _toolpath_alignment_holes(self) -> list[tuple[float, float, float]]:
+        origin_point = self._current_origin_point()
+        if origin_point is None:
+            return []
+        origin_x, origin_y = origin_point
+        holes = [
+            (x_pos - origin_x, y_pos - origin_y, diameter)
+            for x_pos, y_pos, diameter in self._visible_alignment_hole_positions()
+        ]
+        if self.project.mirror_view_side != "back":
+            return holes
+        bounds = self._preview_mirror_bounds()
+        if not self.project.mirror_flip_edge or bounds is None:
+            return holes
+        mirrored_holes = []
+        for x_pos, y_pos, diameter in holes:
+            point = self._mirror_toolpath_point(Point3D(x_pos, y_pos, 0.0), bounds)
+            mirrored_holes.append((point.x, point.y, diameter))
+        return mirrored_holes
+
+    def _bounds_relative_to_origin(
+        self,
+        bounds: tuple[float, float, float, float],
+        origin_point: tuple[float, float],
+    ) -> tuple[float, float, float, float]:
+        origin_x, origin_y = origin_point
+        x_min, x_max, y_min, y_max = bounds
+        return (x_min - origin_x, x_max - origin_x, y_min - origin_y, y_max - origin_y)
+
     def _file_alignment_point(self) -> tuple[float, float] | None:
         bounds = self._stock_bounds()
         if bounds is None:
@@ -3657,12 +3757,14 @@ class MainWindow(QMainWindow):
         self._loaded_generated_output_keys = ()
         self._loaded_generated_output_paths = ()
         self._mark_project_dirty()
-        self._load_generated_document(path)
+        self._load_generated_document(operation_key, path)
         self._sync_ui()
 
-    def _load_generated_document(self, path: Path) -> None:
+    def _load_generated_document(self, operation_key: str, path: Path) -> None:
         document = self._generated_document(path, force=True)
-        self.toolpath_viewer.load_document(document)
+        self.toolpath_viewer.load_document(
+            self._preview_toolpath_document(operation_key, document)
+        )
 
     def _generated_document(
         self, path: Path, *, force: bool = False
@@ -3719,12 +3821,7 @@ class MainWindow(QMainWindow):
         documents = []
         selected_keys = []
         selected_paths = []
-        for key in (
-            "front_isolation",
-            "back_isolation",
-            "drilling",
-            "edge_cuts",
-        ):
+        for key in self._visible_generated_output_keys_for_preview():
             if key in self._hidden_generated_output_keys:
                 continue
             path = self.project.generated_outputs.get(key)
@@ -3738,7 +3835,11 @@ class MainWindow(QMainWindow):
             selected_keys.append(key)
             selected_paths.append(str(path.resolve()))
             documents.append(document)
-        selected_key_state = tuple(selected_keys)
+        selected_key_state = (
+            self.project.mirror_view_side,
+            self.project.mirror_flip_edge,
+            *selected_keys,
+        )
         selected_path_state = tuple(selected_paths)
         if (
             selected_key_state == self._loaded_generated_output_keys
@@ -3750,18 +3851,73 @@ class MainWindow(QMainWindow):
         if not documents:
             self.toolpath_viewer.load_document(None)
             return
+        documents = [
+            self._preview_toolpath_document(key, document)
+            for key, document in zip(selected_keys, documents)
+        ]
         if len(documents) == 1:
             self.toolpath_viewer.load_document(documents[0])
             return
         self.toolpath_viewer.load_document(self._combined_toolpath_document(documents))
 
-    def _combined_toolpath_document(
-        self, documents: list[ToolpathDocument]
+    def _visible_generated_output_keys_for_preview(self) -> tuple[str, ...]:
+        if self.project.mirror_view_side == "back":
+            side_key = "back_isolation"
+        else:
+            side_key = "front_isolation"
+
+        current = self.project.current_step_index
+        if current in {PcbProject.STEP_FRONT_ISOLATION, PcbProject.STEP_BACK_ISOLATION}:
+            return (side_key,)
+        if current == PcbProject.STEP_DRILLING:
+            return ("drilling",)
+        if current == PcbProject.STEP_NC_PREVIEW:
+            return (side_key, "drilling", "edge_cuts")
+        return ("front_isolation", "back_isolation", "drilling", "edge_cuts")
+
+    def _preview_toolpath_document(
+        self, operation_key: str, document: ToolpathDocument
     ) -> ToolpathDocument:
-        segments = [segment for document in documents for segment in document.segments]
+        if self.project.mirror_view_side != "back" or operation_key == "back_isolation":
+            return document
+        bounds = self._preview_mirror_bounds()
+        if not self.project.mirror_flip_edge or bounds is None:
+            return document
+        segments = [
+            Segment3D(
+                start=self._mirror_toolpath_point(segment.start, bounds),
+                end=self._mirror_toolpath_point(segment.end, bounds),
+                rapid=segment.rapid,
+                line_number=segment.line_number,
+                source=segment.source,
+            )
+            for segment in document.segments
+        ]
+        return self._toolpath_document_from_segments(document.path, segments)
+
+    def _mirror_toolpath_point(
+        self, point: Point3D, bounds: tuple[float, float, float, float]
+    ) -> Point3D:
+        x_min, x_max, y_min, y_max = bounds
+        if self.project.mirror_flip_edge == "left":
+            return Point3D((2.0 * x_min) - point.x, point.y, point.z)
+        if self.project.mirror_flip_edge == "right":
+            return Point3D((2.0 * x_max) - point.x, point.y, point.z)
+        if self.project.mirror_flip_edge == "top":
+            return Point3D(point.x, (2.0 * y_max) - point.y, point.z)
+        if self.project.mirror_flip_edge == "bottom":
+            return Point3D(point.x, (2.0 * y_min) - point.y, point.z)
+        return point
+
+    def _preview_mirror_bounds(self) -> tuple[float, float, float, float] | None:
+        return self._toolpath_board_bounds() or self._toolpath_stock_bounds()
+
+    def _toolpath_document_from_segments(
+        self, path: Path, segments: list[Segment3D]
+    ) -> ToolpathDocument:
         if not segments:
             return ToolpathDocument(
-                path=Path("Selected NC paths"),
+                path=path,
                 segments=[],
                 stats=ToolpathStats(
                     min_point=Point3D(0.0, 0.0, 0.0),
@@ -3790,7 +3946,7 @@ class MainWindow(QMainWindow):
             for segment in segments
         )
         return ToolpathDocument(
-            path=Path("Selected NC paths"),
+            path=path,
             segments=segments,
             stats=ToolpathStats(
                 min_point=min_point,
@@ -3800,6 +3956,16 @@ class MainWindow(QMainWindow):
                 cut_count=sum(1 for segment in segments if not segment.rapid),
                 path_length=path_length,
             ),
+        )
+
+    def _combined_toolpath_document(
+        self, documents: list[ToolpathDocument]
+    ) -> ToolpathDocument:
+        segments = [segment for document in documents for segment in document.segments]
+        if not segments:
+            return self._toolpath_document_from_segments(Path("Selected NC paths"), [])
+        return self._toolpath_document_from_segments(
+            Path("Selected NC paths"), segments
         )
 
     def _scroll_current_step_into_view(self) -> None:
