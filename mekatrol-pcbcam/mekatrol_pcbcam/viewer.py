@@ -389,16 +389,30 @@ class ToolpathViewer(QOpenGLWidget):
         painter.setPen(QPen(self._theme.named_color("pcb_preview_alignment"), 2.0))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         for x_pos, y_pos, diameter in self._alignment_holes:
-            center = self._project(Point3D(x_pos, y_pos, 0.0))
-            radius = max(3.0, diameter * 0.5 * self.camera.zoom)
-            painter.drawEllipse(center, radius, radius)
-            painter.drawLine(
-                QPointF(center.x() - radius - 5.0, center.y()),
-                QPointF(center.x() + radius + 5.0, center.y()),
+            radius = max(0.01, diameter * 0.5)
+            points = []
+            for segment in range(49):
+                angle = (2.0 * math.pi * segment) / 48
+                points.append(
+                    self._project(
+                        Point3D(
+                            x_pos + math.cos(angle) * radius,
+                            y_pos + math.sin(angle) * radius,
+                            0.0,
+                        )
+                    )
+                )
+            painter.drawPolyline(QPolygonF(points))
+            cross_radius = max(radius * 1.4, 0.8)
+            self._draw_line(
+                painter,
+                Point3D(x_pos - cross_radius, y_pos, 0.0),
+                Point3D(x_pos + cross_radius, y_pos, 0.0),
             )
-            painter.drawLine(
-                QPointF(center.x(), center.y() - radius - 5.0),
-                QPointF(center.x(), center.y() + radius + 5.0),
+            self._draw_line(
+                painter,
+                Point3D(x_pos, y_pos - cross_radius, 0.0),
+                Point3D(x_pos, y_pos + cross_radius, 0.0),
             )
         painter.restore()
 

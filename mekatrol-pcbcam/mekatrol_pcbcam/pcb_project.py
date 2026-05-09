@@ -49,6 +49,8 @@ class PcbProject:
         self.operation_tools: dict[str, str] = {
             "front_isolation": "",
             "back_isolation": "",
+            "alignment_drill": "",
+            "alignment_mill": "",
             "drilling_drill": "",
             "drilling_mill": "",
         }
@@ -191,6 +193,8 @@ class PcbProject:
     def _operation_step(self, operation_key: str) -> int:
         if operation_key == "back_isolation":
             return self.STEP_BACK_ISOLATION
+        if operation_key in {"alignment_drill", "alignment_mill"}:
+            return self.STEP_ALIGNMENT_HOLES
         if operation_key in {"drilling", "drilling_drill", "drilling_mill"}:
             return self.STEP_DRILLING
         return self.STEP_FRONT_ISOLATION

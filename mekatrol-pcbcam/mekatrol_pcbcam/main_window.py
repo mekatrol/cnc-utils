@@ -703,6 +703,21 @@ class MainWindow(QMainWindow):
         )
         self.alignment_holes_hint.setWordWrap(True)
         self._apply_muted_text_style(self.alignment_holes_hint)
+        self.alignment_drill_value = QLabel("Alignment drill path: not generated yet")
+        self.alignment_drill_value.setWordWrap(True)
+        self.alignment_mill_value = QLabel("Alignment mill path: not generated yet")
+        self.alignment_mill_value.setWordWrap(True)
+
+        generate_drill_button = QPushButton("Generate Alignment Drill")
+        generate_drill_button.clicked.connect(self._generate_alignment_drill_operations)
+        generate_mill_button = QPushButton("Generate Alignment Mill")
+        generate_mill_button.clicked.connect(self._generate_alignment_mill_operations)
+        generate_both_button = QPushButton("Generate Both")
+        generate_both_button.clicked.connect(self._generate_alignment_hole_operations)
+        generate_row = QHBoxLayout()
+        generate_row.addWidget(generate_drill_button)
+        generate_row.addWidget(generate_mill_button)
+        generate_row.addWidget(generate_both_button)
 
         layout.addWidget(heading)
         layout.addWidget(body)
@@ -711,6 +726,17 @@ class MainWindow(QMainWindow):
         layout.addLayout(button_row)
         layout.addWidget(self.alignment_hole_list, 1)
         layout.addWidget(self.alignment_holes_hint)
+        layout.addWidget(
+            self._build_operation_tool_card(
+                [
+                    ("Alignment drill", "alignment_drill", "drilling"),
+                    ("Alignment mill", "alignment_mill", "milling"),
+                ]
+            )
+        )
+        layout.addLayout(generate_row)
+        layout.addWidget(self.alignment_drill_value)
+        layout.addWidget(self.alignment_mill_value)
         return page
 
     def _build_stock_definition_page(self) -> QWidget:
@@ -1899,6 +1925,85 @@ class MainWindow(QMainWindow):
         if 0 <= row < self.alignment_hole_list.count():
             self.alignment_hole_list.setCurrentRow(row)
 
+    def _generate_alignment_hole_operations(self) -> None:
+        drill_path = self._generate_alignment_drill_operations(sync_ui=False)
+        if drill_path is None:
+            self._sync_ui()
+            return
+        mill_path = self._generate_alignment_mill_operations(sync_ui=False)
+        if mill_path is None:
+            self._register_generated_output("alignment_drill", drill_path)
+            return
+        self.project.generated_outputs["alignment_drill"] = drill_path.resolve()
+        self.project.generated_outputs["alignment_mill"] = mill_path.resolve()
+        self._hidden_generated_output_keys.discard("alignment_drill")
+        self._hidden_generated_output_keys.discard("alignment_mill")
+        self._loaded_generated_output_keys = ()
+        self._loaded_generated_output_paths = ()
+        self._mark_project_dirty()
+        self._load_generated_document("alignment_mill", mill_path)
+        self._sync_ui()
+
+    def _generate_alignment_drill_operations(
+        self, *, sync_ui: bool = True
+    ) -> Path | None:
+        tool = self._operation_tool("alignment_drill", "drilling")
+        if tool is None:
+            QMessageBox.information(self, "Alignment drill", "Select a drill first.")
+            return None
+        holes = self._defined_alignment_hole_positions()
+        if not holes:
+            QMessageBox.information(
+                self,
+                "Alignment drill",
+                "There are no enabled alignment holes to generate.",
+            )
+            return None
+        try:
+            output_path = self._cam_generator().generate_alignment_drill_operations(
+                holes,
+                output_name="alignment-drill.nc",
+                drill_diameter=tool.numeric_parameter("diameter", 0.1),
+                origin_point=self._current_origin_point_required(),
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Alignment drill failed", str(exc))
+            return None
+        if sync_ui:
+            self._register_generated_output("alignment_drill", output_path)
+        return output_path
+
+    def _generate_alignment_mill_operations(
+        self, *, sync_ui: bool = True
+    ) -> Path | None:
+        tool = self._operation_tool("alignment_mill", "milling")
+        if tool is None:
+            QMessageBox.information(
+                self, "Alignment mill", "Select a milling tool first."
+            )
+            return None
+        holes = self._defined_alignment_hole_positions()
+        if not holes:
+            QMessageBox.information(
+                self,
+                "Alignment mill",
+                "There are no enabled alignment holes to generate.",
+            )
+            return None
+        try:
+            output_path = self._cam_generator().generate_alignment_mill_operations(
+                holes,
+                output_name="alignment-mill.nc",
+                mill_diameter=tool.numeric_parameter("diameter", 0.1),
+                origin_point=self._current_origin_point_required(),
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Alignment mill failed", str(exc))
+            return None
+        if sync_ui:
+            self._register_generated_output("alignment_mill", output_path)
+        return output_path
+
     def _generate_front_isolation(self) -> None:
         gerber = self._assigned_gerber("front_copper")
         if gerber is None:
@@ -1968,10 +2073,9 @@ class MainWindow(QMainWindow):
         holes = []
         for drill in self._active_drills():
             holes.extend(drill.holes)
-        holes.extend(self._alignment_hole_positions())
         if not holes:
             QMessageBox.information(
-                self, "Drilling", "There are no drill or alignment holes to generate."
+                self, "Drilling", "There are no drill holes to generate."
             )
             return
         try:
@@ -2286,10 +2390,19 @@ class MainWindow(QMainWindow):
             (0.0, 0.0) if show_stock and self._current_origin_point() else None,
             stock_thickness=self.project.stock_thickness if show_stock else 0.0,
             board_bounds=self._toolpath_board_bounds() if show_stock else None,
-            alignment_holes=(self._toolpath_alignment_holes() if show_stock else []),
+            alignment_holes=(
+                self._toolpath_defined_alignment_holes() if show_stock else []
+            ),
         )
         showing_toolpath = (
-            current >= PcbProject.STEP_FRONT_ISOLATION
+            (
+                current == PcbProject.STEP_ALIGNMENT_HOLES
+                and any(
+                    key in self.project.generated_outputs
+                    for key in ("alignment_drill", "alignment_mill")
+                )
+            )
+            or current >= PcbProject.STEP_FRONT_ISOLATION
             and current != PcbProject.STEP_EDGE_CUTS
         )
         self.preview_stack.setCurrentIndex(1 if showing_toolpath else 0)
@@ -2495,6 +2608,8 @@ class MainWindow(QMainWindow):
         operation_roles = {
             "front_isolation": "v_bits",
             "back_isolation": "v_bits",
+            "alignment_drill": "drilling",
+            "alignment_mill": "milling",
             "drilling_drill": "drilling",
             "drilling_mill": "milling",
         }
@@ -3429,6 +3544,16 @@ class MainWindow(QMainWindow):
                 positions.append(mirrored_position)
         return positions
 
+    def _defined_alignment_hole_positions(self) -> list[tuple[float, float, float]]:
+        reference_bounds = self._stock_bounds()
+        if reference_bounds is None:
+            return []
+        return [
+            self._alignment_hole_position_for_bounds(hole, reference_bounds)
+            for hole in self.project.alignment_holes
+            if hole.enabled
+        ]
+
     def _reference_board_bounds(self) -> tuple[float, float, float, float] | None:
         edge_file = self._assigned_gerber("edges")
         if edge_file is not None and not edge_file.bounds.is_empty:
@@ -3526,6 +3651,26 @@ class MainWindow(QMainWindow):
         holes = [
             (x_pos - origin_x, y_pos - origin_y, diameter)
             for x_pos, y_pos, diameter in self._visible_alignment_hole_positions()
+        ]
+        if self.project.mirror_view_side != "back":
+            return holes
+        bounds = self._preview_mirror_bounds()
+        if not self.project.mirror_flip_edge or bounds is None:
+            return holes
+        mirrored_holes = []
+        for x_pos, y_pos, diameter in holes:
+            point = self._mirror_toolpath_point(Point3D(x_pos, y_pos, 0.0), bounds)
+            mirrored_holes.append((point.x, point.y, diameter))
+        return mirrored_holes
+
+    def _toolpath_defined_alignment_holes(self) -> list[tuple[float, float, float]]:
+        origin_point = self._current_origin_point()
+        if origin_point is None:
+            return []
+        origin_x, origin_y = origin_point
+        holes = [
+            (x_pos - origin_x, y_pos - origin_y, diameter)
+            for x_pos, y_pos, diameter in self._defined_alignment_hole_positions()
         ]
         if self.project.mirror_view_side != "back":
             return holes
@@ -3781,6 +3926,8 @@ class MainWindow(QMainWindow):
         generated_map = {
             "front_isolation": getattr(self, "front_isolation_value", None),
             "back_isolation": getattr(self, "back_isolation_value", None),
+            "alignment_drill": getattr(self, "alignment_drill_value", None),
+            "alignment_mill": getattr(self, "alignment_mill_value", None),
             "drilling": getattr(self, "drilling_value", None),
             "edge_cuts": getattr(self, "edge_cuts_value", None),
         }
@@ -3788,7 +3935,20 @@ class MainWindow(QMainWindow):
             if label is None:
                 continue
             path = self.project.generated_outputs.get(key)
-            label.setText(str(path) if path is not None else "Not generated yet")
+            if key == "alignment_drill":
+                label.setText(
+                    f"Alignment drill path: {path}"
+                    if path is not None
+                    else "Alignment drill path: not generated yet"
+                )
+            elif key == "alignment_mill":
+                label.setText(
+                    f"Alignment mill path: {path}"
+                    if path is not None
+                    else "Alignment mill path: not generated yet"
+                )
+            else:
+                label.setText(str(path) if path is not None else "Not generated yet")
 
         generated_keys = set(self.project.generated_outputs)
         self._hidden_generated_output_keys.intersection_update(generated_keys)
@@ -3798,6 +3958,8 @@ class MainWindow(QMainWindow):
         for key, title in (
             ("front_isolation", "Front Isolation"),
             ("back_isolation", "Back Isolation"),
+            ("alignment_drill", "Alignment Drill"),
+            ("alignment_mill", "Alignment Mill"),
             ("drilling", "Drilling"),
             ("edge_cuts", "Edge Cuts"),
         ):
@@ -3869,11 +4031,26 @@ class MainWindow(QMainWindow):
         current = self.project.current_step_index
         if current in {PcbProject.STEP_FRONT_ISOLATION, PcbProject.STEP_BACK_ISOLATION}:
             return (side_key,)
+        if current == PcbProject.STEP_ALIGNMENT_HOLES:
+            return ("alignment_drill", "alignment_mill")
         if current == PcbProject.STEP_DRILLING:
             return ("drilling",)
         if current == PcbProject.STEP_NC_PREVIEW:
-            return (side_key, "drilling", "edge_cuts")
-        return ("front_isolation", "back_isolation", "drilling", "edge_cuts")
+            return (
+                side_key,
+                "alignment_drill",
+                "alignment_mill",
+                "drilling",
+                "edge_cuts",
+            )
+        return (
+            "front_isolation",
+            "back_isolation",
+            "alignment_drill",
+            "alignment_mill",
+            "drilling",
+            "edge_cuts",
+        )
 
     def _preview_toolpath_document(
         self, operation_key: str, document: ToolpathDocument
@@ -4000,7 +4177,7 @@ class MainWindow(QMainWindow):
         return operation_key in self.project.generated_outputs
 
     def _drilling_optional_or_generated(self) -> bool:
-        if not self._active_drills() and not self._alignment_hole_positions():
+        if not self._active_drills():
             return True
         return "drilling" in self.project.generated_outputs
 

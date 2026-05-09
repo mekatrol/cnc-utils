@@ -130,6 +130,68 @@ class CamGenerator:
             self._write_footer(gcode_file)
         return output_path
 
+    def generate_alignment_drill_operations(
+        self,
+        holes: list[tuple[float, float, float]],
+        *,
+        output_name: str,
+        drill_diameter: float,
+        origin_point: tuple[float, float],
+    ) -> Path:
+        output_path = self.output_directory / output_name
+        final_hole_depth = -(self.board_thickness + self.breakthrough_depth)
+        origin_x, origin_y = origin_point
+        translated_holes = [
+            (x - origin_x, y - origin_y, diameter) for x, y, diameter in holes
+        ]
+        with output_path.open("w", encoding="utf-8") as gcode_file:
+            self._write_header(gcode_file)
+            gcode_file.write(
+                f"(load drill {drill_diameter:.3f} mm for alignment holes, "
+                f"origin {format_origin_point(origin_point)})\nT1 M06\nS12000 M3\n"
+            )
+            for x, y, target_diameter in translated_holes:
+                if target_diameter + 1e-9 < drill_diameter:
+                    raise ValueError(
+                        f"Alignment hole diameter {target_diameter:.3f} mm is smaller than selected drill {drill_diameter:.3f} mm."
+                    )
+                self._write_peck_drill(gcode_file, x, y, final_hole_depth)
+            gcode_file.write("M5\n")
+            self._write_footer(gcode_file)
+        return output_path
+
+    def generate_alignment_mill_operations(
+        self,
+        holes: list[tuple[float, float, float]],
+        *,
+        output_name: str,
+        mill_diameter: float,
+        origin_point: tuple[float, float],
+    ) -> Path:
+        output_path = self.output_directory / output_name
+        final_hole_depth = -(self.board_thickness + self.breakthrough_depth)
+        origin_x, origin_y = origin_point
+        translated_holes = [
+            (x - origin_x, y - origin_y, diameter) for x, y, diameter in holes
+        ]
+        with output_path.open("w", encoding="utf-8") as gcode_file:
+            self._write_header(gcode_file)
+            gcode_file.write(
+                f"(load end mill {mill_diameter:.3f} mm for alignment holes, "
+                f"origin {format_origin_point(origin_point)})\nT1 M06\nS12000 M3\n"
+            )
+            for x, y, target_diameter in translated_holes:
+                if target_diameter + 1e-9 < mill_diameter:
+                    raise ValueError(
+                        f"Alignment hole diameter {target_diameter:.3f} mm is smaller than selected mill {mill_diameter:.3f} mm."
+                    )
+                self._write_hole_milling(
+                    gcode_file, x, y, target_diameter, mill_diameter, final_hole_depth
+                )
+            gcode_file.write("M5\n")
+            self._write_footer(gcode_file)
+        return output_path
+
     def generate_edge_cuts(
         self,
         path_specs: list[dict[str, object]],
@@ -365,6 +427,38 @@ class CamGenerator:
             gcode_file.write(f"G0 Z{self.surface_height:.3f}\n")
             gcode_file.write(f"G1 Z{current_depth:.3f} F{self.plunge_rate:d}\n")
             current_offset = start_offset
+            while current_offset < target_offset:
+                current_offset = min(current_offset + 0.1, target_offset)
+                gcode_file.write(
+                    f"G1 X{x_center + current_offset:.3f} Y{y_center:.3f} F{self.feed_rate:d}\n"
+                )
+                for segment in range(1, self.circle_segment_count + 1):
+                    angle = (2.0 * pi * segment) / self.circle_segment_count
+                    x_pos = x_center + cos(angle) * current_offset
+                    y_pos = y_center + sin(angle) * current_offset
+                    gcode_file.write(f"G1 X{x_pos:.3f} Y{y_pos:.3f}\n")
+            gcode_file.write(f"G0 Z{self.safe_height:.3f}\n")
+
+    def _write_hole_milling(
+        self,
+        gcode_file,
+        x_center: float,
+        y_center: float,
+        target_diameter: float,
+        mill_diameter: float,
+        final_depth: float,
+    ) -> None:
+        target_offset = max(0.0, (target_diameter - mill_diameter) * 0.5)
+        current_depth = 0.0
+        while current_depth > final_depth:
+            current_depth = max(current_depth - 0.4, final_depth)
+            gcode_file.write(f"G0 X{x_center:.3f} Y{y_center:.3f}\n")
+            gcode_file.write(f"G0 Z{self.surface_height:.3f}\n")
+            gcode_file.write(f"G1 Z{current_depth:.3f} F{self.plunge_rate:d}\n")
+            if target_offset <= 0.0:
+                gcode_file.write(f"G0 Z{self.safe_height:.3f}\n")
+                continue
+            current_offset = 0.0
             while current_offset < target_offset:
                 current_offset = min(current_offset + 0.1, target_offset)
                 gcode_file.write(
