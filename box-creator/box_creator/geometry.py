@@ -22,6 +22,9 @@ class Panel:
     origin_y: float
     outline: list[Point]
     relief_points: list[Point] = field(default_factory=list)
+    stock_index: int = 0
+    stock_origin_x: float = 0.0
+    stock_origin_y: float = 0.0
 
     @property
     def bounds(self) -> tuple[float, float, float, float]:

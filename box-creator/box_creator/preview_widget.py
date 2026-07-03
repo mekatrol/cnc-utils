@@ -51,6 +51,7 @@ class PreviewWidget(QWidget):
         bounds = self._layout_bounds()
         scale, offset = self._view_transform(bounds)
         self._draw_grid(painter, scale, offset)
+        self._draw_stock_sheets(painter, scale, offset)
         tab_count = 0
         for panel in self._panels:
             self._draw_flat_panel(painter, panel, scale, offset)
@@ -252,8 +253,10 @@ class PreviewWidget(QWidget):
         return placed_tabs
 
     def _draw_job_summary(self, painter: QPainter) -> None:
+        sheet_count = self._stock_sheet_count()
         summary = (
             f"{len(self._panels)} panels  |  "
+            f"{sheet_count} stock sheet{'' if sheet_count == 1 else 's'}  |  "
             f"{self._settings.bit_diameter:.3f} mm cutter  |  "
             f"final Z {self._settings.final_cut_depth:.3f} mm"
         )
@@ -271,6 +274,30 @@ class PreviewWidget(QWidget):
         painter.drawRect(rect)
         painter.setPen(QPen(QColor("#dfe7ef"), 1.0))
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+
+    def _draw_stock_sheets(
+        self, painter: QPainter, scale: float, offset: QPointF
+    ) -> None:
+        painter.setBrush(QColor(26, 30, 38, 130))
+        painter.setPen(QPen(QColor("#596270"), 1.4))
+        for stock_index in range(self._stock_sheet_count()):
+            origin_x = self._stock_origin_x(stock_index)
+            stock_rect = QRectF(
+                self._map_point(
+                    Point(origin_x, self._settings.stock_height), scale, offset
+                ),
+                self._map_point(
+                    Point(origin_x + self._settings.stock_width, 0.0), scale, offset
+                ),
+            ).normalized()
+            painter.drawRect(stock_rect)
+            painter.setPen(QPen(QColor("#8d97a3"), 1.0))
+            painter.drawText(
+                QRectF(stock_rect.x() + 8.0, stock_rect.y() + 6.0, 140.0, 18.0),
+                Qt.AlignmentFlag.AlignLeft,
+                f"stock {stock_index + 1}",
+            )
+            painter.setPen(QPen(QColor("#596270"), 1.4))
 
     def _draw_assembled(self, painter: QPainter) -> None:
         x_size = self._settings.size_x
@@ -360,12 +387,21 @@ class PreviewWidget(QWidget):
             y += spacing
 
     def _layout_bounds(self) -> tuple[float, float, float, float]:
+        sheet_count = self._stock_sheet_count()
         if not self._panels:
-            return 0.0, 200.0, 0.0, 150.0
+            return 0.0, self._settings.stock_width, 0.0, self._settings.stock_height
         min_x = min(panel.bounds[0] for panel in self._panels)
         max_x = max(panel.bounds[1] for panel in self._panels)
         min_y = min(panel.bounds[2] for panel in self._panels)
         max_y = max(panel.bounds[3] for panel in self._panels)
+        if sheet_count:
+            max_x = max(
+                max_x,
+                self._stock_origin_x(sheet_count - 1) + self._settings.stock_width,
+            )
+            min_x = min(min_x, 0.0)
+            min_y = min(min_y, 0.0)
+            max_y = max(max_y, self._settings.stock_height)
         return min_x, max_x, min_y, max_y
 
     def _expanded_bounds(
@@ -399,6 +435,20 @@ class PreviewWidget(QWidget):
             if panel.name == name:
                 return panel
         return None
+
+    def _stock_sheet_count(self) -> int:
+        if not self._panels:
+            return 1
+        return max(panel.stock_index for panel in self._panels) + 1
+
+    def _stock_origin_x(self, stock_index: int) -> float:
+        if self._panels:
+            for panel in self._panels:
+                if panel.stock_index == stock_index:
+                    return panel.stock_origin_x
+        return stock_index * (
+            self._settings.stock_width + self._settings.layout_gap * 2.0
+        )
 
     def _finger_pitch(self, panel: Panel) -> float:
         outline = (

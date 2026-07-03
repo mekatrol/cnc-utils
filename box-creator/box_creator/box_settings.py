@@ -9,6 +9,8 @@ class BoxSettings:
     size_y: float = 100.0
     size_z: float = 70.0
     material_thickness: float = 6.0
+    stock_width: float = 600.0
+    stock_height: float = 400.0
     bit_diameter: float = 3.175
     finger_width: float = 12.0
     include_tabs: bool = True

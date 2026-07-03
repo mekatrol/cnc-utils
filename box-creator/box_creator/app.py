@@ -104,6 +104,8 @@ class MainWindow(QMainWindow):
         page = self._page("Material and cutter")
         form = self._form(page)
         self._add_number(form, "Material thickness", "material_thickness")
+        self._add_number(form, "Stock X width", "stock_width")
+        self._add_number(form, "Stock Y height", "stock_height")
         self._add_number(form, "Edge cut bit diameter", "bit_diameter")
         self._add_number(form, "Relief bit diameter", "relief_diameter")
         self._add_number(form, "Cut depth step", "cut_depth_step")
@@ -244,7 +246,11 @@ class MainWindow(QMainWindow):
             if self.settings.relief_diameter <= 0.0:
                 self.settings.relief_diameter = self.settings.bit_diameter
             self.panels = self.layout_generator.generate(self.settings)
-            self.statusBar().showMessage(f"{len(self.panels)} panels ready")
+            sheet_count = self._stock_sheet_count()
+            self.statusBar().showMessage(
+                f"{len(self.panels)} panels ready on {sheet_count} stock sheet"
+                f"{'' if sheet_count == 1 else 's'}"
+            )
             self._refresh_preview()
         except ValueError as error:
             self.statusBar().showMessage(str(error))
@@ -259,6 +265,11 @@ class MainWindow(QMainWindow):
                 else "flat"
             )
         self.preview.set_preview(self.panels, self.settings, mode or "flat")
+
+    def _stock_sheet_count(self) -> int:
+        if not self.panels:
+            return 0
+        return max(panel.stock_index for panel in self.panels) + 1
 
     def _browse_output(self) -> None:
         selected, _ = QFileDialog.getSaveFileName(

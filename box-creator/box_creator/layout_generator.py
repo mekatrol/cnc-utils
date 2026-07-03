@@ -47,22 +47,49 @@ class LayoutGenerator:
                 )
             )
 
-        cursor_x = 0.0
-        cursor_y = 0.0
+        self._place_panels_on_stock(panels, settings)
+        return panels
+
+    def _place_panels_on_stock(
+        self, panels: list[Panel], settings: BoxSettings
+    ) -> None:
+        stock_width = settings.stock_width
+        stock_height = settings.stock_height
+        sheet_gap = settings.layout_gap * 2.0
+        margin = max(settings.bit_diameter, settings.relief_diameter) * 0.5
+        cursor_x = margin
+        cursor_y = margin
         row_height = 0.0
-        max_row_width = max(settings.size_x * 2.3, 260.0)
+        stock_index = 0
+        stock_origin_x = 0.0
+        stock_origin_y = 0.0
+
         for panel in panels:
             min_x, max_x, min_y, max_y = panel.bounds
             panel_width = max_x - min_x
             panel_height = max_y - min_y
-            if cursor_x > 0.0 and cursor_x + panel_width > max_row_width:
-                cursor_x = 0.0
+            if (
+                panel_width + margin * 2.0 > stock_width
+                or panel_height + margin * 2.0 > stock_height
+            ):
+                raise ValueError(
+                    f"{panel.name} panel does not fit on "
+                    f"{stock_width:.3f} x {stock_height:.3f} mm stock"
+                )
+            if cursor_x > margin and cursor_x + panel_width + margin > stock_width:
+                cursor_x = margin
                 cursor_y += row_height + settings.layout_gap
                 row_height = 0.0
+            if cursor_y > margin and cursor_y + panel_height + margin > stock_height:
+                stock_index += 1
+                stock_origin_x += stock_width + sheet_gap
+                cursor_x = margin
+                cursor_y = margin
+                row_height = 0.0
             self._move_panel(panel, cursor_x - min_x, cursor_y - min_y)
+            self._assign_stock(panel, stock_index, stock_origin_x, stock_origin_y)
             cursor_x += panel_width + settings.layout_gap
             row_height = max(row_height, panel_height)
-        return panels
 
     def _panel(
         self,
@@ -223,3 +250,15 @@ class LayoutGenerator:
         ]
         panel.origin_x += offset_x
         panel.origin_y += offset_y
+
+    def _assign_stock(
+        self,
+        panel: Panel,
+        stock_index: int,
+        stock_origin_x: float,
+        stock_origin_y: float,
+    ) -> None:
+        self._move_panel(panel, stock_origin_x, stock_origin_y)
+        panel.stock_index = stock_index
+        panel.stock_origin_x = stock_origin_x
+        panel.stock_origin_y = stock_origin_y
