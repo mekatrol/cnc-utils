@@ -12,6 +12,11 @@ Each wizard step drives a contextual preview: box dimensions, cutter and relief
 geometry, finger joints, holding tab placement, final layout, or generated job
 summary.
 
+Projects can be saved and reopened as `.boxcreator.json` files. File dialogs
+remember their last project-open and file-save directories using the same
+Mekatrol application config location pattern as `mekatrol-pcbcam`. The main
+window also remembers its last screen, size, position, and maximized state.
+
 ## Setup
 
 ```bash
