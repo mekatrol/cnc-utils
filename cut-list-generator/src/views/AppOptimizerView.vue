@@ -6,7 +6,10 @@
         <h1>Optimizer</h1>
         <p>Finds the best layout from deterministic strategies; it does not claim a mathematical optimum.</p>
       </div>
-      <button class="primary run" data-testid="run-optimizer" :disabled="errors.length > 0 || results.running" @click="run">{{ results.running ? 'Working…' : 'Run optimizer' }}</button>
+      <div class="run-controls">
+        <label class="panel order-option"><input v-model="settings.settings.allowAdditionalSheets" type="checkbox" data-testid="allow-additional-sheets" /> Use as many sheets as needed</label>
+        <button class="primary run" data-testid="run-optimizer" :disabled="errors.length > 0 || results.running" @click="run">{{ results.running ? 'Working…' : 'Run optimizer' }}</button>
+      </div>
     </div>
     <div v-if="errors.length" class="notice error" role="alert">
       <strong>Check your inputs</strong>
@@ -16,10 +19,10 @@
     </div>
     <template v-if="results.result">
       <div class="metrics">
-        <MetricCard label="Production sets" :value="parts.setCount" /><MetricCard label="Sheets used" :value="results.result.layouts.length" /><MetricCard
-          label="Parts placed"
-          :value="placedCount"
-        /><MetricCard label="Unplaced" :value="results.result.unplacedParts.length" />
+        <MetricCard label="In-stock sheets" :value="results.result.sheetsUsedFromStock" /><MetricCard label="Sheets to order" :value="results.result.sheetsToOrder" /><MetricCard
+          label="Total sheets"
+          :value="results.result.layouts.length"
+        /><MetricCard label="Parts placed" :value="placedCount" />
       </div>
       <div class="panel summary">
         <div>
@@ -88,3 +91,18 @@ const run = (): void => {
 const formatArea = (value: number): string => `${(value / 1_000_000).toFixed(2)} m²`;
 const print = (): void => window.print();
 </script>
+
+<style scoped>
+.run-controls {
+  display: grid;
+  gap: 0.65rem;
+}
+.order-option {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.7rem 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+</style>

@@ -3,7 +3,7 @@ import type { OptimizerSettings, PartDefinition, StockSheetDefinition } from '@/
 import { area, canRotate, intersects, pruneFreeRectangles, splitFreeRectangle } from '@/services/optimizer/geometry';
 import { compareResults, expandParts, optimize } from '@/services/optimizer/optimizer';
 
-const settings: OptimizerSettings = { kerf: 3, edgeMargin: 10, allowRotation: true, strategy: 'best-area-fit', maxIterations: 20 };
+const settings: OptimizerSettings = { kerf: 3, edgeMargin: 10, allowRotation: true, allowAdditionalSheets: false, strategy: 'best-area-fit', maxIterations: 20 };
 const part = (overrides: Partial<PartDefinition> = {}): PartDefinition => ({
   id: 'part',
   name: 'Part',
@@ -113,5 +113,20 @@ describe('optimizer domain', () => {
     expect(materialMismatch.unplacedParts).toHaveLength(1);
     expect(thicknessMismatch.unplacedParts).toHaveLength(1);
     expect(compareResults(fitting, materialMismatch)).toBeLessThan(0);
+  });
+
+  /**
+   * Purpose: Supports production runs whose required stock exceeds current inventory.
+   * Description: Packs three sheet-sized parts with one sheet in stock while additional-sheet ordering is enabled.
+   */
+  it('uses stock first and reports additional sheets to order', () => {
+    const result = optimize([part({ width: 180, height: 100, quantity: 3 })], [sheet({ width: 200, height: 120, quantity: 1 })], { ...settings, allowAdditionalSheets: true });
+
+    // Expected outcome: The optimizer places every part using one on-hand sheet and two orderable sheets.
+    // Acceptance criteria: Stock, order, total, and unplaced counts describe the complete requirement.
+    expect(result.sheetsUsedFromStock).toBe(1);
+    expect(result.sheetsToOrder).toBe(2);
+    expect(result.layouts).toHaveLength(3);
+    expect(result.unplacedParts).toHaveLength(0);
   });
 });

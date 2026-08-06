@@ -11,6 +11,7 @@ interface Candidate {
 interface SheetState {
   definition: StockSheetDefinition;
   free: Rect[];
+  fromStock: boolean;
   id: string;
   placed: PlacedPart[];
 }
@@ -72,9 +73,10 @@ const place = (sheet: SheetState, part: PartInstance, candidate: Candidate, sett
   sheet.placed.push({ instanceId: part.instanceId, partId: part.id, partName: part.name, x: reserved.x, y: reserved.y, width: candidate.width, height: candidate.height, rotated: candidate.rotated });
   sheet.free = pruneFreeRectangles(sheet.free.flatMap((free) => splitFreeRectangle(free, reserved)));
 };
-const createSheet = (definition: StockSheetDefinition, index: number, settings: OptimizerSettings): SheetState => ({
+const createSheet = (definition: StockSheetDefinition, index: number, settings: OptimizerSettings, fromStock = true): SheetState => ({
   definition,
   id: `${definition.id}-${index + 1}`,
+  fromStock,
   placed: [],
   free: [{ x: settings.edgeMargin, y: settings.edgeMargin, width: definition.width - settings.edgeMargin * 2, height: definition.height - settings.edgeMargin * 2 }]
 });
@@ -92,6 +94,7 @@ const runAttempt = (parts: PartInstance[], sheets: StockSheetDefinition[], setti
     .flatMap((sheet) => Array.from({ length: sheet.quantity }, (_, index) => createSheet(sheet, index, settings)))
     .filter((sheet) => sheet.free[0]!.width > 0 && sheet.free[0]!.height > 0);
   const opened: SheetState[] = [];
+  const orderedCounts = new Map<string, number>();
   const unplaced: PartInstance[] = [];
   sortParts(parts, ordering).forEach((part) => {
     const compatible = (sheet: SheetState): boolean => key(sheet.definition.material, sheet.definition.thickness) === key(part.material, part.thickness);
@@ -100,6 +103,20 @@ const runAttempt = (parts: PartInstance[], sheets: StockSheetDefinition[], setti
       const nextIndex = available.findIndex((sheet) => compatible(sheet) && findCandidate(sheet, part, settings, strategy));
       if (nextIndex >= 0) {
         const sheet = available.splice(nextIndex, 1)[0]!;
+        opened.push(sheet);
+        target = { sheet, candidate: findCandidate(sheet, part, settings, strategy) };
+      }
+    }
+    if (!target && settings.allowAdditionalSheets) {
+      const definition = sheets.find((sheet) => {
+        if (key(sheet.material, sheet.thickness) !== key(part.material, part.thickness)) return false;
+        const trial = createSheet(sheet, sheet.quantity, settings, false);
+        return trial.free[0]!.width > 0 && trial.free[0]!.height > 0 && findCandidate(trial, part, settings, strategy) !== undefined;
+      });
+      if (definition) {
+        const orderedCount = orderedCounts.get(definition.id) ?? 0;
+        orderedCounts.set(definition.id, orderedCount + 1);
+        const sheet = createSheet(definition, definition.quantity + orderedCount, settings, false);
         opened.push(sheet);
         target = { sheet, candidate: findCandidate(sheet, part, settings, strategy) };
       }
@@ -123,9 +140,13 @@ const runAttempt = (parts: PartInstance[], sheets: StockSheetDefinition[], setti
   });
   const totalSheetArea = layouts.reduce((total, layout) => total + layout.width * layout.height, 0);
   const totalPartArea = layouts.reduce((total, layout) => total + layout.usedArea, 0);
+  const sheetsUsedFromStock = opened.filter((sheet) => sheet.fromStock).length;
+  const sheetsToOrder = opened.length - sheetsUsedFromStock;
   return {
     layouts,
     unplacedParts: unplaced,
+    sheetsUsedFromStock,
+    sheetsToOrder,
     totalSheetArea,
     totalPartArea,
     totalWasteArea: totalSheetArea - totalPartArea,

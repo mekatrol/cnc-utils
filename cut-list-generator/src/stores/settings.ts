@@ -5,7 +5,7 @@ import { readStored, writeStored } from '@/stores/storage';
 
 const storageKey = 'cutlist-settings-v1';
 export const useSettingsStore = defineStore('settings', () => {
-  const settings = ref<OptimizerSettings>(readStored(storageKey, defaultSettings));
+  const settings = ref<OptimizerSettings>({ ...defaultSettings, ...readStored(storageKey, defaultSettings) });
   const reset = (): void => {
     settings.value = structuredClone(defaultSettings);
   };

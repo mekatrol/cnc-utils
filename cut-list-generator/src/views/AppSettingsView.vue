@@ -16,7 +16,8 @@
           <option value="bottom-left">Bottom left</option>
         </select></label
       ><label>Maximum attempts<input v-model.number="store.settings.maxIterations" type="number" min="1" max="20" /></label
-      ><label class="check"><input v-model="store.settings.allowRotation" type="checkbox" /> Allow rotation globally</label>
+      ><label class="check"><input v-model="store.settings.allowRotation" type="checkbox" /> Allow rotation globally</label
+      ><label class="check"><input v-model="store.settings.allowAdditionalSheets" type="checkbox" /> Use as many additional sheets as needed</label>
       <div class="actions"><button @click="store.reset">Reset settings</button></div>
     </div>
   </section>

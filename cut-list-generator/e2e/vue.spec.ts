@@ -40,4 +40,10 @@ test('navigates the app and optimizes the sample project', async ({ page }) => {
   // Expected outcome: The known fitting sample leaves no parts unplaced.
   // Acceptance criteria: The unplaced-parts alert is absent after optimization.
   await expect(page.getByTestId('unplaced-parts')).toHaveCount(0);
+
+  // Expected outcome: Sheet requirement totals distinguish inventory from purchasing needs.
+  // Acceptance criteria: The result exposes in-stock, sheets-to-order, and total-sheet metrics.
+  await expect(page.getByText('In-stock sheets')).toBeVisible();
+  await expect(page.getByText('Sheets to order')).toBeVisible();
+  await expect(page.getByText('Total sheets')).toBeVisible();
 });

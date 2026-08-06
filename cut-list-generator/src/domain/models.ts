@@ -26,6 +26,7 @@ export interface OptimizerSettings {
   kerf: number;
   edgeMargin: number;
   allowRotation: boolean;
+  allowAdditionalSheets: boolean;
   strategy: PackingStrategy;
   maxIterations: number;
 }
@@ -60,6 +61,8 @@ export interface OptimizationDiagnostics {
 export interface OptimizationResult {
   layouts: SheetLayout[];
   unplacedParts: PartInstance[];
+  sheetsUsedFromStock: number;
+  sheetsToOrder: number;
   totalSheetArea: number;
   totalPartArea: number;
   totalWasteArea: number;
@@ -91,4 +94,4 @@ export const defaultParts: PartDefinition[] = [
   { id: 'back-rail', name: 'Back Rail', width: 800, height: 120, quantity: 2, canRotate: true, grainDirection: 'none', material: 'Plywood', thickness: 18 }
 ];
 export const defaultSheets: StockSheetDefinition[] = [{ id: 'standard-sheet', name: 'Standard 2440 × 1220', width: 2440, height: 1220, quantity: 2, material: 'Plywood', thickness: 18, cost: 90 }];
-export const defaultSettings: OptimizerSettings = { kerf: 3, edgeMargin: 10, allowRotation: true, strategy: 'best-area-fit', maxIterations: 20 };
+export const defaultSettings: OptimizerSettings = { kerf: 3, edgeMargin: 10, allowRotation: true, allowAdditionalSheets: false, strategy: 'best-area-fit', maxIterations: 20 };
