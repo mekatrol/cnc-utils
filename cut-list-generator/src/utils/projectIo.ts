@@ -10,7 +10,9 @@ export const parseProject = (source: string): ProjectData => {
     throw new Error('Project contains invalid parts or sheets.');
   const settings = project.settings;
   if (settings.kerf < 0 || settings.edgeMargin < 0 || settings.maxIterations < 1) throw new Error('Project contains invalid optimizer settings.');
-  return project as ProjectData;
+  const setCount = project.setCount ?? 1;
+  if (!Number.isInteger(setCount) || setCount < 1) throw new Error('Project contains an invalid production set count.');
+  return { ...(project as Omit<ProjectData, 'setCount'>), setCount };
 };
 export const downloadJson = (filename: string, value: unknown): void => {
   const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' }));

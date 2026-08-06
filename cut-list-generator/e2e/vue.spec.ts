@@ -11,6 +11,16 @@ test('navigates the app and optimizes the sample project', async ({ page }) => {
   // Acceptance criteria: The level-one heading describes the application's sheet-saving objective.
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Make every sheet count.');
 
+  await page.getByRole('link', { name: 'Parts', exact: true }).click();
+  await page.getByTestId('set-count').fill('2');
+  await page.getByTestId('set-count').blur();
+
+  // Expected outcome: Production sets multiply the per-assembly sample part quantities.
+  // Acceptance criteria: Two copies of the nine-piece sample cut list report eighteen pieces.
+  await expect(page.getByText('18 pieces')).toBeVisible();
+  await page.getByTestId('set-count').fill('1');
+  await page.getByTestId('set-count').blur();
+
   for (const route of ['Parts', 'Sheets', 'Settings', 'Optimize']) {
     await page.getByRole('link', { name: route, exact: true }).click();
 

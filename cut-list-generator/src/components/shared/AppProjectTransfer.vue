@@ -21,13 +21,14 @@ const parts = usePartsStore();
 const sheets = useSheetsStore();
 const settings = useSettingsStore();
 const message = ref('');
-const exportProject = (): void => downloadJson('plyplan-project.json', { version: 1, parts: parts.parts, sheets: sheets.sheets, settings: settings.settings });
+const exportProject = (): void => downloadJson('plyplan-project.json', { version: 1, setCount: parts.setCount, parts: parts.parts, sheets: sheets.sheets, settings: settings.settings });
 const importProject = async (event: Event): Promise<void> => {
   const file = (event.target as HTMLInputElement).files?.[0];
   if (!file) return;
   try {
     const project = parseProject(await file.text());
     parts.replace(project.parts);
+    parts.setCount = project.setCount;
     sheets.replace(project.sheets);
     settings.replace(project.settings);
     message.value = 'Project imported successfully.';

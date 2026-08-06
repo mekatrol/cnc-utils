@@ -16,10 +16,10 @@
     </div>
     <template v-if="results.result">
       <div class="metrics">
-        <MetricCard label="Sheets used" :value="results.result.layouts.length" /><MetricCard label="Parts placed" :value="placedCount" /><MetricCard
-          label="Unplaced"
-          :value="results.result.unplacedParts.length"
-        /><MetricCard label="Utilization" :value="`${results.result.utilizationPercent.toFixed(1)}%`" />
+        <MetricCard label="Production sets" :value="parts.setCount" /><MetricCard label="Sheets used" :value="results.result.layouts.length" /><MetricCard
+          label="Parts placed"
+          :value="placedCount"
+        /><MetricCard label="Unplaced" :value="results.result.unplacedParts.length" />
       </div>
       <div class="panel summary">
         <div>
@@ -82,7 +82,7 @@ const errors = computed(() => {
 const placedCount = computed(() => results.result?.layouts.reduce((total, layout) => total + layout.placedParts.length, 0) ?? 0);
 const run = (): void => {
   results.running = true;
-  results.setResult(optimize(parts.parts, sheets.sheets, settings.settings));
+  results.setResult(optimize(parts.optimizationParts, sheets.sheets, settings.settings));
   results.running = false;
 };
 const formatArea = (value: number): string => `${(value / 1_000_000).toFixed(2)} m²`;

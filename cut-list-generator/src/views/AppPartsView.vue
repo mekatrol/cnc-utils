@@ -8,6 +8,13 @@
       </div>
       <button class="danger" @click="clear">Clear all</button>
     </div>
+    <div class="panel set-control">
+      <div>
+        <h2>Production sets</h2>
+        <p>Each part quantity is per set. Increase this to make multiple identical cupboards or assemblies.</p>
+      </div>
+      <label for="set-count">Number of sets<input id="set-count" v-model.number="store.setCount" type="number" min="1" step="1" data-testid="set-count" @change="validateSetCount" /></label>
+    </div>
     <PartForm :part="editing" @save="save" @cancel="editing = undefined" />
     <div class="panel table-wrap">
       <table>
@@ -15,7 +22,8 @@
           <tr>
             <th>Part</th>
             <th>Dimensions</th>
-            <th>Qty</th>
+            <th>Qty per set</th>
+            <th>Total</th>
             <th>Material</th>
             <th>Grain</th>
             <th>Actions</th>
@@ -28,6 +36,7 @@
             </td>
             <td>{{ part.width }} × {{ part.height }} × {{ part.thickness }} mm</td>
             <td>{{ part.quantity }}</td>
+            <td>{{ part.quantity * store.setCount }}</td>
             <td>{{ part.material }}</td>
             <td>{{ part.grainDirection }}</td>
             <td class="actions">
@@ -54,4 +63,38 @@ const save = (part: PartDefinition): void => {
 const clear = (): void => {
   if (confirm('Remove every part?')) store.clear();
 };
+const validateSetCount = (): void => {
+  if (!Number.isInteger(store.setCount) || store.setCount < 1) store.setCount = 1;
+};
 </script>
+
+<style scoped>
+.set-control {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.set-control h2,
+.set-control p {
+  margin-bottom: 0.25rem;
+}
+.set-control label {
+  display: grid;
+  gap: 0.35rem;
+  font-weight: 700;
+}
+.set-control input {
+  width: 9rem;
+  padding: 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+@media (max-width: 600px) {
+  .set-control {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+</style>

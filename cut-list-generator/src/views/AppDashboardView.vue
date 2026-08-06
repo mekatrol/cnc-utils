@@ -4,10 +4,10 @@
     <h1>Make every sheet count.</h1>
     <p class="lede">Plan plywood cuts with deterministic, browser-only packing. Your project stays on this device.</p>
     <div class="metrics">
-      <MetricCard label="Parts to cut" :value="parts.totalPartCount" /><MetricCard label="Stock sheets" :value="sheets.availableSheetCount" /><MetricCard
-        label="Part area"
-        :value="formatArea(parts.totalPartArea)"
-      /><MetricCard label="Material groups" :value="parts.materialGroups" />
+      <MetricCard label="Production sets" :value="parts.setCount" /><MetricCard label="Parts to cut" :value="parts.totalPartCount" /><MetricCard
+        label="Stock sheets"
+        :value="sheets.availableSheetCount"
+      /><MetricCard label="Part area" :value="formatArea(parts.totalPartArea)" />
     </div>
     <div class="panel start">
       <div>

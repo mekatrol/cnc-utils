@@ -75,6 +75,7 @@ export interface Rect {
 }
 export interface ProjectData {
   version: number;
+  setCount: number;
   parts: PartDefinition[];
   sheets: StockSheetDefinition[];
   settings: OptimizerSettings;

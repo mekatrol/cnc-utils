@@ -5,10 +5,13 @@ import { validatePart } from '@/domain/validation';
 import { makeId, readStored, writeStored } from '@/stores/storage';
 
 const storageKey = 'cutlist-parts-v1';
+const setCountStorageKey = 'cutlist-set-count-v1';
 export const usePartsStore = defineStore('parts', () => {
   const parts = ref<PartDefinition[]>(readStored(storageKey, defaultParts));
-  const totalPartCount = computed(() => parts.value.reduce((total, part) => total + part.quantity, 0));
-  const totalPartArea = computed(() => parts.value.reduce((total, part) => total + part.width * part.height * part.quantity, 0));
+  const setCount = ref(readStored(setCountStorageKey, 1));
+  const totalPartCount = computed(() => parts.value.reduce((total, part) => total + part.quantity, 0) * setCount.value);
+  const totalPartArea = computed(() => parts.value.reduce((total, part) => total + part.width * part.height * part.quantity, 0) * setCount.value);
+  const optimizationParts = computed(() => parts.value.map((part) => ({ ...part, quantity: part.quantity * setCount.value })));
   const materialGroups = computed(() => new Set(parts.value.map((part) => `${part.material}:${part.thickness}`)).size);
   const add = (part: PartDefinition): boolean => {
     if (Object.keys(validatePart(part)).length) return false;
@@ -34,10 +37,12 @@ export const usePartsStore = defineStore('parts', () => {
   };
   const reset = (): void => {
     parts.value = structuredClone(defaultParts);
+    setCount.value = 1;
   };
   const replace = (value: PartDefinition[]): void => {
     parts.value = structuredClone(value);
   };
   watch(parts, (value) => writeStored(storageKey, value), { deep: true });
-  return { parts, totalPartCount, totalPartArea, materialGroups, add, edit, remove, duplicate, clear, reset, replace };
+  watch(setCount, (value) => writeStored(setCountStorageKey, value));
+  return { parts, setCount, totalPartCount, totalPartArea, optimizationParts, materialGroups, add, edit, remove, duplicate, clear, reset, replace };
 });
