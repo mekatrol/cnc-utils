@@ -1,18 +1,20 @@
 import { mount } from '@vue/test-utils';
+import { createPinia } from 'pinia';
 import { describe, expect, it } from 'vitest';
 
 import App from '@/App.vue';
+import router from '@/router';
 
 describe('App', () => {
   /**
-   * Purpose: Protects the application shell's primary success message.
-   * Description: Mounts the root component and verifies that its rendered text includes the expected heading copy.
+   * Purpose: Protects the application's primary navigation shell.
+   * Description: Mounts the root component with its production plugins and verifies the workshop brand is visible.
    */
   it('renders the application heading', () => {
-    const wrapper = mount(App);
+    const wrapper = mount(App, { global: { plugins: [createPinia(), router] } });
 
-    // Expected outcome: The mounted application identifies that startup succeeded.
-    // Acceptance criteria: The rendered text contains "You did it!" because that is the root component's user-visible success message.
-    expect(wrapper.text()).toContain('You did it!');
+    // Expected outcome: The mounted application identifies the cut-list product.
+    // Acceptance criteria: The rendered text contains "PlyPlan" because that is the application shell's visible brand.
+    expect(wrapper.text()).toContain('PlyPlan');
   });
 });
