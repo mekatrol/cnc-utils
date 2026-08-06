@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import sys
+from time import monotonic
 from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QStandardPaths, Qt
+from PySide6.QtCore import QStandardPaths, Qt, QTimer
 from PySide6.QtGui import QCloseEvent, QDoubleValidator, QIntValidator, QScreen
 from PySide6.QtWidgets import (
     QApplication,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QSlider,
     QStackedWidget,
     QStatusBar,
     QVBoxLayout,
@@ -34,6 +36,7 @@ from .box_settings import BoxSettings
 from .file_locations import FileLocations
 from .gcode_generator import GcodeGenerator
 from .layout_generator import LayoutGenerator
+from .nc_simulator import MotionSegment, parse_nc_program
 from .preview_widget import PreviewWidget
 from .ui_save_state import UiSaveState
 
@@ -65,6 +68,15 @@ class MainWindow(QMainWindow):
         self.inputs: dict[str, QLineEdit] = {}
         self.project_path: Path | None = None
         self.has_unsaved_changes = False
+        self.simulation_segments: list[MotionSegment] = []
+        self.simulation_total_seconds = 0.0
+        self.simulation_elapsed_seconds = 0.0
+        self.simulation_last_tick_seconds: float | None = None
+        self.generated_nc_text = ""
+
+        self.simulation_timer = QTimer(self)
+        self.simulation_timer.setInterval(33)
+        self.simulation_timer.timeout.connect(self._advance_simulation)
 
         root = QWidget()
         root_layout = QVBoxLayout(root)
@@ -199,6 +211,37 @@ class MainWindow(QMainWindow):
         generate = QPushButton("Generate NC")
         generate.clicked.connect(self._generate_nc)
         page.layout().addWidget(generate)
+        save_nc = QPushButton("Save NC")
+        save_nc.clicked.connect(self._save_nc)
+        page.layout().addWidget(save_nc)
+
+        controls = QHBoxLayout()
+        self.run_simulation_button = QPushButton("Run")
+        self.run_simulation_button.clicked.connect(self._run_simulation)
+        self.pause_simulation_button = QPushButton("Pause")
+        self.pause_simulation_button.clicked.connect(self._pause_simulation)
+        self.restart_simulation_button = QPushButton("Restart")
+        self.restart_simulation_button.clicked.connect(self._restart_simulation)
+        controls.addWidget(self.run_simulation_button)
+        controls.addWidget(self.pause_simulation_button)
+        controls.addWidget(self.restart_simulation_button)
+        page.layout().addLayout(controls)
+
+        self.simulation_speed_slider = QSlider(Qt.Orientation.Horizontal)
+        self.simulation_speed_slider.setRange(10, 400)
+        self.simulation_speed_slider.setSingleStep(5)
+        self.simulation_speed_slider.setPageStep(25)
+        self.simulation_speed_slider.setTickInterval(50)
+        self.simulation_speed_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.simulation_speed_slider.setValue(100)
+        self.simulation_speed_slider.valueChanged.connect(
+            self._simulation_speed_changed
+        )
+        self.simulation_speed_label = QLabel(self._simulation_speed_text(100))
+        form.addRow(self.simulation_speed_label, self.simulation_speed_slider)
+        self.simulation_time_label = QLabel("No NC loaded")
+        page.layout().addWidget(self.simulation_time_label)
+        self._set_simulation_controls_enabled(False)
         return page
 
     def _page(self, title: str) -> QWidget:
@@ -226,7 +269,8 @@ class MainWindow(QMainWindow):
         group = QButtonGroup(holder)
         self.box_radio = QRadioButton("Box with lid")
         self.drawer_radio = QRadioButton("Drawer tray")
-        self.box_radio.setChecked(True)
+        self.box_radio.setChecked(self.settings.box_kind == "box")
+        self.drawer_radio.setChecked(self.settings.box_kind == "drawer")
         group.addButton(self.box_radio)
         group.addButton(self.drawer_radio)
         self.box_radio.toggled.connect(self._refresh_model_from_user)
@@ -269,6 +313,7 @@ class MainWindow(QMainWindow):
         self._refresh_model()
 
     def _refresh_model_from_user(self) -> None:
+        self._clear_simulation()
         self._refresh_model()
         self._mark_project_dirty()
 
@@ -306,7 +351,16 @@ class MainWindow(QMainWindow):
                 if hasattr(self, "preview_mode")
                 else "flat"
             )
+        if self.current_step == 5 and self.simulation_segments:
+            mode = "simulate"
         self.preview.set_preview(self.panels, self.settings, mode or "flat")
+        if mode == "simulate":
+            self.preview.set_simulation(
+                self._scaled_simulation_segments(),
+                self.simulation_elapsed_seconds,
+                self.simulation_total_seconds,
+                self.simulation_speed_slider.value(),
+            )
 
     def _stock_sheet_count(self) -> int:
         if not self.panels:
@@ -583,20 +637,151 @@ class MainWindow(QMainWindow):
 
     def _generate_nc(self) -> None:
         self._refresh_model()
-        output_path = self._prompt_output_path()
-        if output_path is None:
-            return
-        previous_output_path = self.output_path.text()
-        self.output_path.setText(str(output_path))
-        if self.output_path.text() != previous_output_path:
-            self._mark_project_dirty()
         try:
-            self.gcode_generator.write(self.panels, self.settings, output_path)
+            self.generated_nc_text = self.gcode_generator.generate(
+                self.panels, self.settings
+            )
+            self._load_simulation_text(self.generated_nc_text)
         except OSError as error:
             QMessageBox.critical(self, "Generate failed", str(error))
             return
-        QMessageBox.information(self, "NC generated", f"Wrote {output_path}")
-        self.statusBar().showMessage(f"Wrote {output_path}")
+
+    def _save_nc(self) -> None:
+        self._refresh_model()
+        if not self.generated_nc_text:
+            self.generated_nc_text = self.gcode_generator.generate(
+                self.panels, self.settings
+            )
+        output_path = Path(self.output_path.text()).expanduser()
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(self.generated_nc_text, encoding="utf-8")
+        except OSError as error:
+            QMessageBox.critical(self, "Save NC failed", str(error))
+            return
+        self._remember_save_path(output_path)
+
+    def _load_simulation_text(self, nc_text: str) -> None:
+        stock_origins = self._simulation_stock_origins()
+        program = parse_nc_program(nc_text, stock_origins)
+        self.simulation_segments = program.segments
+        self.simulation_total_seconds = program.total_seconds
+        self.simulation_elapsed_seconds = 0.0
+        self.simulation_last_tick_seconds = None
+        self._set_simulation_controls_enabled(bool(program.segments))
+        self._set_step(5)
+        self._update_simulation_labels()
+        self._refresh_preview()
+
+    def _simulation_stock_origins(self) -> dict[int, tuple[float, float]]:
+        origins: dict[int, tuple[float, float]] = {}
+        for panel in self.panels:
+            origins.setdefault(
+                panel.stock_index, (panel.stock_origin_x, panel.stock_origin_y)
+            )
+        return origins
+
+    def _run_simulation(self) -> None:
+        if not self.simulation_segments:
+            return
+        if self.simulation_elapsed_seconds >= self.simulation_total_seconds:
+            self.simulation_elapsed_seconds = 0.0
+        self.simulation_last_tick_seconds = monotonic()
+        self.simulation_timer.start()
+        self._update_simulation_labels()
+
+    def _pause_simulation(self) -> None:
+        self.simulation_timer.stop()
+        self.simulation_last_tick_seconds = None
+        self._update_simulation_labels()
+
+    def _restart_simulation(self) -> None:
+        self.simulation_elapsed_seconds = 0.0
+        self.simulation_last_tick_seconds = (
+            monotonic() if self.simulation_timer.isActive() else None
+        )
+        self._update_simulation_labels()
+        self._refresh_preview()
+
+    def _advance_simulation(self) -> None:
+        now = monotonic()
+        if self.simulation_last_tick_seconds is None:
+            self.simulation_last_tick_seconds = now
+            return
+        delta_seconds = now - self.simulation_last_tick_seconds
+        self.simulation_last_tick_seconds = now
+        override = self.simulation_speed_slider.value() / 100.0
+        self.simulation_elapsed_seconds += delta_seconds * override
+        if self.simulation_elapsed_seconds >= self.simulation_total_seconds:
+            self.simulation_elapsed_seconds = self.simulation_total_seconds
+            self.simulation_timer.stop()
+            self.simulation_last_tick_seconds = None
+        self._update_simulation_labels()
+        self._refresh_preview()
+
+    def _simulation_speed_changed(self, value: int) -> None:
+        self.simulation_speed_label.setText(self._simulation_speed_text(value))
+        if self.simulation_timer.isActive():
+            self.simulation_last_tick_seconds = monotonic()
+        self._update_simulation_labels()
+        self._refresh_preview()
+
+    def _simulation_speed_text(self, value: int) -> str:
+        return f"Simulation speed: {value / 100.0:.2f}x  |  feed/spindle {value:d}%"
+
+    def _scaled_simulation_segments(self) -> list[MotionSegment]:
+        percent = self.simulation_speed_slider.value()
+        scale = percent / 100.0
+        return [
+            MotionSegment(
+                start=segment.start,
+                end=segment.end,
+                command=segment.command,
+                feed_rate=segment.feed_rate * scale,
+                spindle_speed=int(segment.spindle_speed * scale),
+                duration_seconds=segment.duration_seconds,
+                stock_index=segment.stock_index,
+            )
+            for segment in self.simulation_segments
+        ]
+
+    def _set_simulation_controls_enabled(self, enabled: bool) -> None:
+        self.run_simulation_button.setEnabled(enabled)
+        self.pause_simulation_button.setEnabled(enabled)
+        self.restart_simulation_button.setEnabled(enabled)
+        self.simulation_speed_slider.setEnabled(enabled)
+
+    def _clear_simulation(self) -> None:
+        if not hasattr(self, "simulation_timer"):
+            return
+        self.simulation_timer.stop()
+        self.simulation_segments = []
+        self.simulation_total_seconds = 0.0
+        self.simulation_elapsed_seconds = 0.0
+        self.simulation_last_tick_seconds = None
+        self.generated_nc_text = ""
+        if hasattr(self, "run_simulation_button"):
+            self._set_simulation_controls_enabled(False)
+            self.simulation_time_label.setText("No NC loaded")
+
+    def _update_simulation_labels(self) -> None:
+        if not self.simulation_segments:
+            self.simulation_time_label.setText("No NC loaded")
+            return
+        state = "running" if self.simulation_timer.isActive() else "paused"
+        self.simulation_time_label.setText(
+            "Simulator "
+            f"{state}: {self._format_duration(self.simulation_elapsed_seconds)} / "
+            f"{self._format_duration(self.simulation_total_seconds)}"
+        )
+
+    def _format_duration(self, seconds: float) -> str:
+        whole_seconds = max(0, int(seconds))
+        minutes, seconds = divmod(whole_seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours:d}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes:d}:{seconds:02d}"
 
     def _apply_style(self) -> None:
         self.setStyleSheet(

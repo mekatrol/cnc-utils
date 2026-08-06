@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QWidget
 
 from .box_settings import BoxSettings
 from .geometry import Panel, Point
+from .nc_simulator import MotionSegment, ToolPosition, position_at_elapsed
 
 
 class PreviewWidget(QWidget):
@@ -17,6 +18,10 @@ class PreviewWidget(QWidget):
         self._panels: list[Panel] = []
         self._settings = BoxSettings()
         self._mode = "flat"
+        self._simulation_segments: list[MotionSegment] = []
+        self._simulation_elapsed_seconds = 0.0
+        self._simulation_total_seconds = 0.0
+        self._simulation_speed_percent = 100
 
     def set_preview(
         self, panels: list[Panel], settings: BoxSettings, mode: str
@@ -24,6 +29,19 @@ class PreviewWidget(QWidget):
         self._panels = panels
         self._settings = settings
         self._mode = mode
+        self.update()
+
+    def set_simulation(
+        self,
+        segments: list[MotionSegment],
+        elapsed_seconds: float,
+        total_seconds: float,
+        speed_percent: int,
+    ) -> None:
+        self._simulation_segments = segments
+        self._simulation_elapsed_seconds = elapsed_seconds
+        self._simulation_total_seconds = total_seconds
+        self._simulation_speed_percent = speed_percent
         self.update()
 
     def paintEvent(self, event: QPaintEvent) -> None:
@@ -40,6 +58,9 @@ class PreviewWidget(QWidget):
             self._draw_joint_preview(painter)
         elif self._mode == "tabs":
             self._draw_flat(painter, show_tabs=True)
+        elif self._mode == "simulate":
+            self._draw_flat(painter, show_tabs=self._settings.include_tabs)
+            self._draw_simulation(painter)
         elif self._mode == "generate":
             self._draw_flat(painter, show_tabs=self._settings.include_tabs)
             self._draw_job_summary(painter)
@@ -235,7 +256,7 @@ class PreviewWidget(QWidget):
             )
             if length < self._settings.tab_width * 2.0:
                 continue
-            tab_count = max(1, int(length // 85.0))
+            tab_count = self._tab_count_for_segment(length, self._settings.tab_width)
             painter.setPen(QPen(QColor("#4ea1ff"), 3.0))
             for index in range(tab_count):
                 center = length * (index + 1) / (tab_count + 1)
@@ -262,6 +283,96 @@ class PreviewWidget(QWidget):
         )
         rect = QRectF(12.0, 12.0, self.width() - 24.0, 26.0)
         painter.setBrush(QColor(17, 21, 28, 210))
+        painter.setPen(QPen(QColor("#596270"), 1.0))
+        painter.drawRect(rect)
+        painter.setPen(QPen(QColor("#dfe7ef"), 1.0))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, summary)
+
+    def _draw_simulation(self, painter: QPainter) -> None:
+        if not self._simulation_segments:
+            self._draw_status_label("generate NC to load simulator", painter)
+            return
+
+        bounds = self._layout_bounds()
+        scale, offset = self._view_transform(bounds)
+        active_index, active_ratio, cutter = position_at_elapsed(
+            self._simulation_segments, self._simulation_elapsed_seconds
+        )
+
+        cutter_width = max(1.0, self._settings.bit_diameter * scale)
+
+        for segment in self._simulation_segments:
+            if segment.command == "G0":
+                continue
+            elif segment.is_cutting_move:
+                pen = QPen(QColor(255, 159, 67, 72), cutter_width)
+            else:
+                pen = QPen(QColor(78, 161, 255, 95), 1.2)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.drawLine(
+                self._map_tool_position(segment.start, scale, offset),
+                self._map_tool_position(segment.end, scale, offset),
+            )
+
+        for index, segment in enumerate(self._simulation_segments[: active_index + 1]):
+            if segment.command == "G0":
+                continue
+            start = segment.start
+            end = segment.end
+            if index == active_index:
+                end = self._interpolate_tool_position(start, end, active_ratio)
+            if segment.is_cutting_move:
+                completed_pen = QPen(QColor(155, 216, 143, 120), cutter_width)
+            else:
+                completed_pen = QPen(QColor("#9bd88f"), 1.8)
+            completed_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            completed_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(completed_pen)
+            painter.drawLine(
+                self._map_tool_position(start, scale, offset),
+                self._map_tool_position(end, scale, offset),
+            )
+
+        centerline_pen = QPen(QColor(255, 255, 255, 120), 1.0)
+        centerline_pen.setStyle(Qt.PenStyle.DotLine)
+        painter.setPen(centerline_pen)
+        for index, segment in enumerate(self._simulation_segments[: active_index + 1]):
+            if segment.command == "G0" or not segment.is_cutting_move:
+                continue
+            start = segment.start
+            end = segment.end
+            if index == active_index:
+                end = self._interpolate_tool_position(start, end, active_ratio)
+            painter.drawLine(
+                self._map_tool_position(start, scale, offset),
+                self._map_tool_position(end, scale, offset),
+            )
+
+        if cutter is not None:
+            center = self._map_tool_position(cutter, scale, offset)
+            cutter_radius = max(3.0, self._settings.bit_diameter * scale * 0.5)
+            painter.setBrush(QColor(255, 255, 255, 220))
+            painter.setPen(QPen(QColor("#11151c"), 1.2))
+            painter.drawEllipse(center, cutter_radius, cutter_radius)
+            painter.setPen(QPen(QColor("#ffffff"), 1.0))
+            painter.drawText(
+                QRectF(center.x() + 8.0, center.y() - 11.0, 130.0, 22.0),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                f"Z {cutter.z:.3f}",
+            )
+
+        active_segment = self._simulation_segments[active_index]
+        elapsed = min(self._simulation_elapsed_seconds, self._simulation_total_seconds)
+        summary = (
+            f"{self._format_duration(elapsed)} / "
+            f"{self._format_duration(self._simulation_total_seconds)}  |  "
+            f"{self._simulation_speed_percent}%  |  "
+            f"F {active_segment.feed_rate:.0f}  S {active_segment.spindle_speed}"
+        )
+        rect = QRectF(12.0, 12.0, self.width() - 24.0, 26.0)
+        painter.setBrush(QColor(17, 21, 28, 220))
         painter.setPen(QPen(QColor("#596270"), 1.0))
         painter.drawRect(rect)
         painter.setPen(QPen(QColor("#dfe7ef"), 1.0))
@@ -430,6 +541,29 @@ class PreviewWidget(QWidget):
     def _map_point(self, point: Point, scale: float, offset: QPointF) -> QPointF:
         return QPointF(offset.x() + point.x * scale, offset.y() - point.y * scale)
 
+    def _map_tool_position(
+        self, position: ToolPosition, scale: float, offset: QPointF
+    ) -> QPointF:
+        return QPointF(offset.x() + position.x * scale, offset.y() - position.y * scale)
+
+    def _interpolate_tool_position(
+        self, start: ToolPosition, end: ToolPosition, ratio: float
+    ) -> ToolPosition:
+        clamped = max(0.0, min(1.0, ratio))
+        return ToolPosition(
+            x=start.x + (end.x - start.x) * clamped,
+            y=start.y + (end.y - start.y) * clamped,
+            z=start.z + (end.z - start.z) * clamped,
+        )
+
+    def _format_duration(self, seconds: float) -> str:
+        whole_seconds = max(0, int(seconds))
+        minutes, seconds = divmod(whole_seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours:d}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes:d}:{seconds:02d}"
+
     def _panel_named(self, name: str) -> Panel | None:
         for panel in self._panels:
             if panel.name == name:
@@ -495,3 +629,8 @@ class PreviewWidget(QWidget):
     ) -> Point:
         angle = atan2(dy, dx)
         return Point(start.x + cos(angle) * distance, start.y + sin(angle) * distance)
+
+    def _tab_count_for_segment(self, length: float, tab_width: float) -> int:
+        if length < tab_width * 4.0:
+            return 1
+        return 2

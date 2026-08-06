@@ -4,7 +4,7 @@ from dataclasses import dataclass
 @dataclass
 class BoxSettings:
     job_name: str = "finger-box"
-    box_kind: str = "box"
+    box_kind: str = "drawer"
     size_x: float = 160.0
     size_y: float = 100.0
     size_z: float = 70.0
@@ -14,7 +14,7 @@ class BoxSettings:
     bit_diameter: float = 3.175
     finger_width: float = 12.0
     include_tabs: bool = True
-    tab_width: float = 8.0
+    tab_width: float = 4.0
     tab_height: float = 1.5
     relief_diameter: float = 3.175
     cut_depth_step: float = 1.5
